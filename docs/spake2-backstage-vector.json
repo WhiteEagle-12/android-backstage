@@ -1,0 +1,10 @@
+{
+  "password": "ABCD-EFGHJK",
+  "aliceName": "backstage agent\u0000", "bobName": "backstage device\u0000",
+  "aliceRandom64": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40",
+  "bobRandom64": "f0efeeedecebeae9e8e7e6e5e4e3e2e1e0dfdedddcdbdad9d8d7d6d5d4d3d2d1d0cfcecdcccbcac9c8c7c6c5c4c3c2c1c0bfbebdbcbbbab9b8b7b6b5b4b3b2b1",
+  "aliceMsg": "5ac3dda9218b3c9d82c0a7e1f1751e54dfadf19e1478191d4803a8e649f31b38",
+  "bobMsg": "4ac3907c392e4428af8f21a5b87e8889ad8e7945bff43846ddc28c0398eb99c5",
+  "key": "9a24a288d4abbf1b2246eb8c7252a232eab77c9bb6915cd82208e8dccca2c21dee83258756682954dd93ac7cada1cfa9ab52dbc4a0c4bb47f2f23254f7301c90",
+  "keysAgree": true
+}

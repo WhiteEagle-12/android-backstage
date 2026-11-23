@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "name": "Launch and inspect one app",
+  "steps": [
+    {"tool": "android.qa_launch", "arguments": {"query": "${app}", "waitMs": 4000}, "saveAs": "launch", "assert": [{"path": "alive", "equals": true}, {"path": "crashed", "equals": false}]},
+    {"tool": "android.ui_tree", "arguments": {"display": "${launch.display}"}, "assert": [{"path": "ok", "equals": true}]}
+  ]
+}

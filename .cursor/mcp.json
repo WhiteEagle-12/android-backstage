@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "android-phone": {
+      "command": "node",
+      "args": ["cli/backstage.mjs", "mcp", "--device", "phone"]
+    }
+  }
+}

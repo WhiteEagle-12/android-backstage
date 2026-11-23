@@ -1,0 +1,1 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"><application><activity android:name="com.deviceagent.app.EvidenceTestActivity" android:exported="true" android:permission="android.permission.DUMP" /><activity android:name="com.deviceagent.app.SemanticTestActivity" android:exported="true" android:permission="android.permission.DUMP" /></application></manifest>

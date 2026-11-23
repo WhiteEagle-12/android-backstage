@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+  <application android:theme="@android:style/Theme.Material.Light.NoActionBar" android:label="Backstage controls test" android:allowBackup="false" android:supportsRtl="true">
+    <activity android:name=".ControlFixture" android:exported="true" android:resizeableActivity="true">
+      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+    </activity>
+    <activity android:name=".ParityFixture" android:exported="true" android:permission="android.permission.DUMP" android:resizeableActivity="true">
+      <intent-filter><action android:name="android.intent.action.SEND"/><action android:name="android.intent.action.SEND_MULTIPLE"/><category android:name="android.intent.category.DEFAULT"/><data android:mimeType="*/*"/></intent-filter>
+    </activity>
+    <receiver android:name=".ParityFixture$NotificationAction" android:exported="false"/>
+    <activity android:name=".WindowFixture" android:exported="true" android:permission="android.permission.DUMP" android:resizeableActivity="true"/>
+  </application>
+</manifest>

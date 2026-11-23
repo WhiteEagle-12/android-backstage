@@ -1,0 +1,33 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import {Readable} from 'node:stream';
+import {createArtifacts} from '../artifacts.mjs';
+
+test('artifact cleanup restores capacity, preserves other owners, and cannot race a transfer',async t=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'artifact-delete-'));
+ const store=createArtifacts({directory:dir});t.after(()=>{store.close();fs.rmSync(dir,{recursive:true,force:true});});
+ const data=Buffer.from('file bytes'),sha256=crypto.createHash('sha256').update(data).digest('hex');
+ const begin=grantId=>store.begin({grantId,name:'file',size:data.length,sha256});
+ const rows=Array.from({length:6},()=>begin('owner'));
+ assert.throws(()=>begin('owner'),{code:'busy'});
+ assert.throws(()=>store.remove(rows[0].artifactId,'other'),{code:'unknown_artifact'});
+ assert.equal(store.status(rows[0].artifactId,'owner').offset,0);
+ assert.equal(store.remove(rows[0].artifactId,'owner').deleted,true);
+ assert.equal(store.remove(rows[0].artifactId,'owner').deleted,false);
+ assert.equal(fs.existsSync(path.join(dir,rows[0].artifactId+'.bin')),false);
+ const next=begin('owner');
+ await store.append(next.artifactId,{grantId:'owner'},0,Readable.from([data]));
+ let release;const gate=new Promise(resolve=>{release=resolve;});
+ const transfer=store.use(next.artifactId,'owner',async row=>{await gate;return fs.readFileSync(row.path);});
+ assert.throws(()=>store.remove(next.artifactId,'owner'),{code:'busy'});
+ await assert.rejects(store.use(next.artifactId,'owner',async()=>{}),{code:'busy'});
+ release();assert.deepEqual(await transfer,data);
+ assert.equal(store.remove(next.artifactId,'owner').deleted,true);
+ const failed=begin('owner');await store.append(failed.artifactId,{grantId:'owner'},0,Readable.from([data]));
+ await assert.rejects(store.use(failed.artifactId,'owner',async()=>{throw new Error('transfer failed');}));
+ assert.equal(store.remove(failed.artifactId,'owner').deleted,true);
+});

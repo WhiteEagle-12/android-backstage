@@ -1,0 +1,28 @@
+{
+  "name": "android-backstage",
+  "version": "0.3.1",
+  "description": "Use your Android apps and run phone tasks through a connection you approve in Backstage.",
+  "author": {
+    "name": "Eagle Eye ML",
+    "email": "support@android-backstage.com"
+  },
+  "homepage": "https://android-backstage.com/",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Android Backstage",
+    "shortDescription": "Use your Android phone from your assistant.",
+    "developerName": "Eagle Eye ML",
+    "category": "Productivity",
+    "capabilities": [
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Connect my Android phone.",
+      "What model is my connected phone?"
+    ],
+    "longDescription": "Connect your phone once, then use it from your assistants. Sign into Backstage to approve each assistant. Remove one assistant from Your assistants or pause all access in the phone app.",
+    "logo": "./assets/logo.png",
+    "composerIcon": "./assets/logo.png"
+  }
+}

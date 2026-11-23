@@ -1,0 +1,33 @@
+.gradle/
+build/
+.idea/
+local.properties
+*.iml
+.cxx/
+captures/
+app/app/build/
+*.apk
+!dist/
+!dist/*.apk
+*.ap_
+*.dex
+.DS_Store
+node_modules/
+agent-tools/
+
+
+# Real relay creds + link keys — never commit; use config/backstage.json.example
+config/backstage.json
+
+# Local signing material and relay/runtime secrets
+app/keystore/*.jks
+relay/data/
+deploy/.env
+*.lock/
+*.receipts.jsonl
+
+# Downloaded build tools
+.toolchains/
+
+# Work connector dependencies
+gateway/node_modules/

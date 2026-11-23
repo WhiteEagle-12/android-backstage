@@ -1,0 +1,59 @@
+[
+  [
+    "android.media",
+    "BACKGROUND. List active media sessions or send play, pause, next, previous, or seek to a selected session. Select by package or sessionId when several sessions exist. Controls may produce sound. seek requires positionMs. Success means the session accepted the command; inspect status to check playback.",
+    {
+      "action": {
+        "type": "string",
+        "enum": [
+          "status",
+          "play",
+          "pause",
+          "next",
+          "previous",
+          "seek"
+        ]
+      },
+      "package": {
+        "type": "string",
+        "minLength": 1,
+        "optional": true
+      },
+      "sessionId": {
+        "type": "string",
+        "minLength": 1,
+        "optional": true
+      },
+      "positionMs": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991,
+        "optional": true
+      }
+    }
+  ],
+  [
+    "android.location",
+    "Request location in the background. maxAgeMs defaults to 10000, accuracyMeters to 100, and timeoutMs to 20000 (maximum 20000; zero reads cache only). Returns age, accuracy, provider and cached/fresh source. A failed outcome means the fix misses the limits; never treat it as current.",
+    {
+      "maxAgeMs": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 3600000,
+        "optional": true
+      },
+      "accuracyMeters": {
+        "type": "number",
+        "minimum": 1,
+        "maximum": 100000,
+        "optional": true
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 20000,
+        "optional": true
+      }
+    }
+  ]
+]

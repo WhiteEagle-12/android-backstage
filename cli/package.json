@@ -1,0 +1,13 @@
+{
+  "name": "android-backstage",
+  "version": "2.0.0",
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Android Backstage CLI: SPAKE2 pairing, zero-knowledge E2EE envelopes, stdio MCP.",
+  "bin": {
+    "android-backstage": "./backstage.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  }
+}

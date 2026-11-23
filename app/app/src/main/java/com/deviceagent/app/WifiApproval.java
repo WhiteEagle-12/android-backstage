@@ -1,0 +1,59 @@
+package com.deviceagent.app;
+
+import android.content.Context;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
+import com.deviceagent.tools.Json;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+/**
+ * Whether turning Wireless debugging on here would make Android ask the owner.
+ * Android trusts individual access points (BSSIDs). The shell daemon publishes the
+ * trusted list to wifi-trust.json and approves each access point of the owner's
+ * networks as the phone reaches it; the app only turns Wireless debugging on by
+ * itself where Android already trusts the current access point.
+ */
+final class WifiApproval {
+    private WifiApproval() {}
+
+    /** Null when Wireless debugging can turn on silently; otherwise why not, for the owner. */
+    static String blockedReason(Context context) {
+        String bssid = currentBssid(context);
+        if (bssid == null) return "It reconnects by itself on an approved Wi-Fi network.";
+        if (trusted(context).contains(bssid)) return null;
+        return "This Wi-Fi access point is not approved for Wireless debugging yet.";
+    }
+
+    @SuppressWarnings("deprecation")
+    static String currentBssid(Context context) {
+        try {
+            WifiManager wifi = context.getApplicationContext().getSystemService(WifiManager.class);
+            WifiInfo info = wifi == null ? null : wifi.getConnectionInfo();
+            if (info == null || info.getNetworkId() == -1) return null;
+            String bssid = info.getBSSID();
+            if (bssid == null || !bssid.matches("(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}") || "02:00:00:00:00:00".equals(bssid)) return null;
+            return bssid.toLowerCase(Locale.ROOT);
+        } catch (RuntimeException e) {
+            return null;
+        }
+    }
+
+    static Set<String> trusted(Context context) {
+        Set<String> out = new HashSet<>();
+        try {
+            File dir = context.getExternalFilesDir(null);
+            File file = dir == null ? null : new File(dir, "wifi-trust.json");
+            if (file == null || !file.isFile()) return out;
+            Object list = Json.object(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)).get("trustedBssids");
+            if (list instanceof List<?> rows) for (Object row : rows) if (row instanceof String b) out.add(b.toLowerCase(Locale.ROOT));
+        } catch (Exception ignored) {
+        }
+        return out;
+    }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "android-backstage",
+  "version": "0.3.1",
+  "description": "Use your connected Android phone through native remote tools.",
+  "homepage": "https://android-backstage.com/",
+  "author": {
+    "name": "Eagle Eye ML",
+    "email": "support@android-backstage.com"
+  }
+}

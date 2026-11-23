@@ -1,0 +1,11 @@
+{
+  "name": "backstage-relay",
+  "version": "1.1.0-alpha1",
+  "private": true,
+  "type": "module",
+  "description": "Android Backstage relay: blind envelope forwarder, pairing sessions, file store.",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  }
+}

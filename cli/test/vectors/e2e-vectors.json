@@ -1,0 +1,22 @@
+{
+  "linkKey": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+  "callKey": "21efc722ff2bb0106c0e9796af1e06e327245b5d0d6f63eab9f365a6c5f005a7",
+  "resultKey": "e9ed33aca0d0d31f55dd3942e505fa10e2254c4000c75c4af2d99f8b11756e32",
+  "linkKeyFromAll5aSpakeK": "5dd4457f703527e5f428d036fd4d98f82cbf925bd600483e9f0c4bf41416c820",
+  "envelope": {
+    "v": "1",
+    "from": "agt_0123456789abcdef",
+    "n": "1700000000000",
+    "ct": "CAZsDYg6CyrC2pMYafsbFThEJpuSaWATaLxDskdAIT6D4U7XMgq7jeD87_ZizG-UdKHVD4aCWcDt6X8MK7ZDwsdCALh8l5w9oxPkOZpoS3uPOKIx2U1T4UnR0NekapQYKA"
+  },
+  "envelopePlaintext": "{\"id\":\"t1\",\"name\":\"android.shell\",\"arguments\":{\"command\":\"id\"},\"timeoutMs\":12000}",
+  "from": "agt_0123456789abcdef",
+  "n": "1700000000000",
+  "file": {
+    "fileKey": "1111111111111111111111111111111111111111111111111111111111111111",
+    "plaintext": "hello backstage",
+    "sha256": "9d1b4ee3c2b846e7bd8a56338fb7a3d17dc0ca1ccf48d500be6a6c069cbf997e",
+    "chunkSize": 1048576,
+    "blobHex": "4253463100100000000000000000000f0000001facaf720b8e8ffff86271ce71ba95bfbf28e50a613858200cc24796f93a7fd0"
+  }
+}

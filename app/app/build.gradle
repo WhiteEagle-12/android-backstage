@@ -1,0 +1,59 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "com.deviceagent.app"
+    compileSdk 35
+    defaultConfig {
+        applicationId providers.gradleProperty("backstageApplicationId").getOrElse("com.androidbackstage.app")
+        minSdk 30
+        targetSdk 35
+        testInstrumentationRunner "com.deviceagent.app.SetupUiCheck"
+        versionCode 237
+        versionName "2.0.0-dev.37"
+    }
+    signingConfigs {
+        development {
+            storeFile file("../keystore/development.jks")
+            storePassword "android"
+            keyAlias "development"
+            keyPassword "android"
+        }
+        production {
+            if (System.getenv("BACKSTAGE_KEYSTORE")) {
+                storeFile file(System.getenv("BACKSTAGE_KEYSTORE"))
+                storePassword System.getenv("BACKSTAGE_STORE_PASSWORD")
+                keyAlias System.getenv("BACKSTAGE_KEY_ALIAS")
+                keyPassword System.getenv("BACKSTAGE_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        debug { debuggable true; signingConfig signingConfigs.development }
+        release { minifyEnabled false; signingConfig signingConfigs.production }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    lint {
+        checkReleaseBuilds true
+        abortOnError true
+    }
+}
+
+dependencies {
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.mockito:mockito-core:5.14.2"
+    implementation "androidx.credentials:credentials:1.6.0"
+    implementation "androidx.credentials:credentials-play-services-auth:1.6.0"
+}
+
+tasks.configureEach {
+    if (name == "preReleaseBuild") doFirst {
+        def required = ["BACKSTAGE_KEYSTORE", "BACKSTAGE_STORE_PASSWORD", "BACKSTAGE_KEY_ALIAS", "BACKSTAGE_KEY_PASSWORD"]
+        if (required.any { !System.getenv(it) }) throw new GradleException("Production signing credentials are required. Use assembleDebug for local development.")
+        if (!file(System.getenv("BACKSTAGE_KEYSTORE")).isFile()) throw new GradleException("Production keystore does not exist")
+    }
+}

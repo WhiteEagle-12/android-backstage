@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "android-backstage": {
+      "type": "http",
+      "url": "https://relay.android-backstage.com/work/mcp"
+    }
+  }
+}
