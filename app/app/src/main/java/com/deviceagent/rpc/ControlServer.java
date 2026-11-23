@@ -299,22 +299,6 @@ public final class ControlServer {
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "item", added)), session, false);
                 return;
             }
-            // The app's one-tap update: install a published APK verified by its checksum.
-            if ("POST".equals(req.method) && "/update".equals(req.path)) {
-                Map<String, Object> body = parseObject(req.body);
-                String url = Json.string(body, "url"), sha256 = Json.string(body, "sha256");
-                if (url == null || !url.startsWith("https://") || sha256 == null || !sha256.matches("[a-f0-9]{64}")) {
-                    writeJson(sock, 400, "{\"error\":\"url and sha256 are required\"}", session, false); return;
-                }
-                writeJson(sock, 202, "{\"ok\":true,\"updating\":true}", session, false);
-                Thread t = new Thread(() -> {
-                    try { tools.selfUpdate(null, url, null, sha256); }
-                    catch (RuntimeException e) { DaemonLog.print("app update failed: " + e.getMessage()); }
-                }, "backstage-app-update");
-                t.setDaemon(false); t.start();
-                return;
-            }
-
             if ("POST".equals(req.method) && "/shutdown".equals(req.path)) {
                 writeJson(sock, 200, "{\"ok\":true}", session, false);
                 try {

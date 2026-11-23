@@ -235,13 +235,19 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
       save();
       return true;
     },
-    /** Email a six-digit code. Used to sign in, create an account, or add an email to one (linkOwner). */
+    /** Email a six-digit code for existing accounts (sign-in) or adding an email to a signed-in account (linkOwner). */
     async startEmail(value, {linkOwner = null} = {}) {
       prune();
       const email = normalEmail(value);
       if (!email) throw new Error('Enter a valid email address.');
       if (!mailer?.configured()) throw new Error('Email sign-in is not set up on this server. Use a passkey.');
-      if (linkOwner) { const taken = ownerByEmail(email); if (taken && taken !== linkOwner) throw new Error('That email already belongs to another account.'); }
+      if (linkOwner) {
+        const taken = ownerByEmail(email);
+        if (taken && taken !== linkOwner) throw new Error('That email already belongs to another account.');
+      } else if (!ownerByEmail(email)) {
+        // Never create accounts via one-time email codes and never reveal whether an email exists.
+        return { sent: true, expiresIn: 600 };
+      }
       const scope = linkOwner ? 'link:' + linkOwner : 'signin';
       const subject = linkOwner ? '{code} — confirm your Android Backstage email' : '{code} is your Android Backstage code';
       const body = linkOwner
@@ -249,7 +255,7 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
         : 'Your Android Backstage sign-in code is {code}.\n\nIt expires in 10 minutes. If you did not ask for it, ignore this email.';
       return await sendOtp(email, scope, subject, body, { linkOwner: linkOwner || null });
     },
-    /** Check an emailed code. Returns the account, creating one for a new address. */
+    /** Check an emailed code for an existing account (or link-email confirmation). Never creates new accounts. */
     verifyEmail(value, code, { expectedLinkOwner = null } = {}) {
       prune();
       const email = normalEmail(value);
@@ -263,9 +269,9 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
         if (taken && taken !== expectedOwner) throw new Error('That email already belongs to another account.');
         state.owners[expectedOwner].email = email; save(); return expectedOwner;
       }
-      let ownerId = ownerByEmail(email);
-      if (!ownerId) { ownerId = 'owner_' + random(); state.owners[ownerId] = {createdAt: now(), email}; }
-      save(); return ownerId;
+      const ownerId = ownerByEmail(email);
+      if (!ownerId) throw new Error('No account found for that email. Create an account instead.');
+      return ownerId;
     },
     /** Permanently delete an owner, all passkeys, sessions, pending challenges, and email codes. */
     deleteOwner(ownerId, req = null, res = null) {

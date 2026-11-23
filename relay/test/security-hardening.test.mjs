@@ -185,3 +185,38 @@ test("relay zeroRetention mode keeps jobs and dashboard strictly in memory and p
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("allowPublicPair=false blocks anonymous /v1/pair/connect while allowing authenticated accounts and admin", async () => {
+  await withRelay({ allowPublicPair: false, adminToken: "adm_secret_123" }, async ({ url, apiKey }) => {
+    const anon = await httpJson(`${url}/v1/pair/connect`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: { name: "phone" },
+    });
+    assert.equal(anon.status, 403);
+    assert.equal(anon.body.error, "account_required");
+
+    const badKey = await httpJson(`${url}/v1/pair/connect`, {
+      method: "POST",
+      headers: { authorization: "Bearer bsk_invalid", "content-type": "application/json" },
+      body: { name: "phone" },
+    });
+    assert.equal(badKey.status, 403);
+
+    const withAccount = await httpJson(`${url}/v1/pair/connect`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+      body: { name: "phone-acct" },
+    });
+    assert.equal(withAccount.status, 200);
+    assert.ok(withAccount.body.sessionId);
+
+    const withAdmin = await httpJson(`${url}/v1/pair/connect`, {
+      method: "POST",
+      headers: { authorization: "Bearer adm_secret_123", "content-type": "application/json" },
+      body: { name: "phone-admin" },
+    });
+    assert.equal(withAdmin.status, 200);
+    assert.ok(withAdmin.body.sessionId);
+  });
+});

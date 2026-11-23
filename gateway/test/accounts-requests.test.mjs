@@ -12,28 +12,32 @@ const proof=()=>{const verifier=crypto.randomBytes(32).toString('base64url');ret
 const tmp=t=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'backstage-accounts-'));t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));return dir;};
 function mailbox(){const sent=[];return {sent,mailer:{configured:()=>true,send:async(to,subject,text)=>{sent.push({to,subject,code:/(\d{6})/.exec(text)[1]});}}};}
 
-test('an emailed code signs in, creates an account for a new address, and is single use',async t=>{
+test('sign-up creates a verified account, and email codes sign in existing accounts only',async t=>{
   const dir=tmp(t),box=mailbox(),owners=createOwners({stateFile:path.join(dir,'owners.json'),origin:new URL(base).origin,mailer:box.mailer});
-  await owners.startEmail('Gavin@Example.com');assert.equal(box.sent[0].to,'gavin@example.com');
-  assert.throws(()=>owners.verifyEmail('gavin@example.com','000000'===box.sent[0].code?'111111':'000000'),/not right/);
-  const id=owners.verifyEmail('gavin@example.com',box.sent[0].code);assert.ok(id.startsWith('owner_'));
-  assert.throws(()=>owners.verifyEmail('gavin@example.com',box.sent[0].code),/expired/);
+  // Unknown address does not create an account or send an email via sign-in OTP
+  await owners.startEmail('nobody@example.com');assert.equal(box.sent.length,0);
+  // Explicit sign-up creates the account with password + verified email
+  await owners.startSignUp('Gavin@Example.com','correct-password-1');assert.equal(box.sent[0].to,'gavin@example.com');
+  assert.throws(()=>owners.verifySignUp('gavin@example.com','000000'===box.sent[0].code?'111111':'000000'),/not right/);
+  const id=owners.verifySignUp('gavin@example.com',box.sent[0].code);assert.ok(id.startsWith('owner_'));
+  assert.throws(()=>owners.verifySignUp('gavin@example.com',box.sent[0].code),/expired/);
+  // Existing account can still sign in with a single-use email code
   await owners.startEmail('gavin@example.com');assert.equal(owners.verifyEmail('gavin@example.com',box.sent[1].code),id,'the same address signs in to the same account');
   assert.equal(owners.methods(id).email,'gavin@example.com');
   await assert.rejects(owners.startEmail('not-an-email'),/valid email/);
 });
 test('wrong codes are limited and new addresses cannot take another account email',async t=>{
   const dir=tmp(t),box=mailbox(),owners=createOwners({stateFile:path.join(dir,'owners.json'),origin:new URL(base).origin,mailer:box.mailer});
-  await owners.startEmail('a@example.com');const a=owners.verifyEmail('a@example.com',box.sent[0].code);
-  await owners.startEmail('b@example.com');const b=owners.verifyEmail('b@example.com',box.sent[1].code);
+  await owners.startSignUp('a@example.com','password-a-123');const a=owners.verifySignUp('a@example.com',box.sent[0].code);
+  await owners.startSignUp('b@example.com','password-b-123');const b=owners.verifySignUp('b@example.com',box.sent[1].code);
   await assert.rejects(owners.startEmail('a@example.com',{linkOwner:b}),/another account/);
-  await owners.startEmail('c@example.com');for(let i=0;i<5;i++)assert.throws(()=>owners.verifyEmail('c@example.com','999999'===box.sent[2].code?'888888':'999999'));
-  assert.throws(()=>owners.verifyEmail('c@example.com',box.sent[2].code),/Too many|expired/,'the code stops working after five wrong tries');
+  await owners.startSignUp('c@example.com','password-c-123');for(let i=0;i<5;i++)assert.throws(()=>owners.verifySignUp('c@example.com','999999'===box.sent[2].code?'888888':'999999'));
+  assert.throws(()=>owners.verifySignUp('c@example.com',box.sent[2].code),/Too many|expired/,'the code stops working after five wrong tries');
   assert.notEqual(a,b);
 });
 test('recovery codes sign in once each and an account keeps at least one way in',async t=>{
   const dir=tmp(t),box=mailbox(),owners=createOwners({stateFile:path.join(dir,'owners.json'),origin:new URL(base).origin,mailer:box.mailer});
-  await owners.startEmail('r@example.com');const id=owners.verifyEmail('r@example.com',box.sent[0].code);
+  await owners.startSignUp('r@example.com','password-r-123');const id=owners.verifySignUp('r@example.com',box.sent[0].code);
   const codes=owners.newRecoveryCodes(id);assert.equal(codes.length,10);assert.match(codes[0],/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/);
   assert.equal(owners.verifyRecovery(codes[3].toLowerCase()),id);assert.throws(()=>owners.verifyRecovery(codes[3]),/already used|not valid/);
   assert.equal(owners.methods(id).recoveryCodesLeft,9);

@@ -14,11 +14,10 @@ import java.util.Set;
 /**
  * Agents ask for access from the computer; this phone shows each request as a
  * notification with Allow and Deny, so connecting needs one tap and no copied
- * code. It also offers app updates the server publishes.
+ * code.
  */
 public final class AgentRequests {
     private static final String ACTION = "com.deviceagent.app.AGENT_REQUEST";
-    private static final long UPDATE_EVERY_MS = 6L * 3600_000L;
     private static Thread watcher;
     private static volatile boolean running;
 
@@ -39,13 +38,12 @@ public final class AgentRequests {
     private static void loop(Context app) {
         android.util.Log.i("BackstageRequests", "watching for agent requests");
         AccountClient client = null; String server = null;
-        Set<String> shown = new HashSet<>(); long nextUpdateCheck = 0; long backoff = 5_000;
+        Set<String> shown = new HashSet<>(); long backoff = 5_000;
         while (running) {
             try {
                 AgentConfig config = AgentConfig.load(app);
                 if (!config.hasAssistant() || !SetupRules.sameServer(config.relayUrl, SetupRules.DEFAULT_RELAY)) { Thread.sleep(60_000); continue; }
                 if (client == null || !config.relayUrl.equals(server)) { client = new AccountClient(config.relayUrl); server = config.relayUrl; }
-                if (System.currentTimeMillis() >= nextUpdateCheck) { nextUpdateCheck = System.currentTimeMillis() + UPDATE_EVERY_MS; offerUpdate(app, client); }
                 client.signIn(config.links);
                 List<AccountClient.Request> pending = client.requests(true);
                 Set<String> now = new HashSet<>();
@@ -113,40 +111,6 @@ public final class AgentRequests {
         } catch (Exception e) {
             return AccountClient.explain(e);
         }
-    }
-
-    /** Remember a newer published app and say so once. Also called when the app screen loads the account. */
-    static void offerUpdate(Context app, AccountClient client) {
-        AccountClient.Update update = client.latestApp();
-        if (update == null || update.versionCode <= installedVersion(app)) return;
-        android.content.SharedPreferences prefs = app.getSharedPreferences("backstage-update", Context.MODE_PRIVATE);
-        boolean announced = prefs.getInt("announced", 0) == update.versionCode;
-        prefs.edit().putInt("versionCode", update.versionCode).putString("versionName", update.versionName)
-                .putString("url", update.url).putString("sha256", update.sha256).putInt("announced", update.versionCode).apply();
-        if (announced) return;
-        InvitationNotifier.ensureChannel(app);
-        NotificationManager nm = app.getSystemService(NotificationManager.class);
-        if (nm == null) return;
-        PendingIntent open = PendingIntent.getActivity(app, 7, new Intent(app, AgentActivity.class),
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        nm.notify(7, new Notification.Builder(app, InvitationNotifier.CHANNEL).setSmallIcon(R.drawable.ic_notification)
-                .setContentTitle("Backstage update ready").setContentText("Version " + update.versionName + ". Open Backstage to update.")
-                .setContentIntent(open).setAutoCancel(true).build());
-    }
-
-    static long installedVersion(Context app) {
-        try { return app.getPackageManager().getPackageInfo(app.getPackageName(), 0).getLongVersionCode(); }
-        catch (Exception e) { return Long.MAX_VALUE; }
-    }
-
-    /** A published update newer than this app, or null. */
-    static AccountClient.Update pendingUpdate(Context app) {
-        android.content.SharedPreferences p = app.getSharedPreferences("backstage-update", Context.MODE_PRIVATE);
-        int code = p.getInt("versionCode", 0);
-        if (code <= installedVersion(app)) return null;
-        AccountClient.Update u = new AccountClient.Update();
-        u.versionCode = code; u.versionName = p.getString("versionName", ""); u.url = p.getString("url", ""); u.sha256 = p.getString("sha256", "");
-        return u;
     }
 
     /** Notification buttons. Works while the app is closed. */

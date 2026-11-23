@@ -51,13 +51,6 @@ final class LiveTab extends TabPage {
             a.setup.phoneAccessSteps(card, false);
         });
         if (needsPairing) a.setup.updateHint();
-        AccountClient.Update update = AgentRequests.pendingUpdate(a);
-        if (update != null) put("update", "update|" + update.versionCode, box -> {
-            LinearLayout card = k.card(box);
-            k.title(card, AppCopy.UPDATE_TITLE);
-            k.body(card, AppCopy.APP_NAME + " " + update.versionName);
-            k.button(card, AppCopy.UPDATE_ACTION, UiKit.PRIMARY, guard(() -> a.updateNow(update)));
-        });
         if (!a.isIgnoringBatteryOptimizations()) put("battery", "battery", box -> {
             LinearLayout card = k.card(box);
             k.title(card, AppCopy.BATTERY_TITLE); k.body(card, AppCopy.BATTERY_BODY);

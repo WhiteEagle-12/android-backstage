@@ -41,12 +41,6 @@ public final class AppCopy {
     public static final String ACTION_OPEN_WIRELESS = "Open Wireless debugging";
 
     // Live tab — health & recovery cards (shown only when action is needed)
-    public static final String UPDATE_TITLE = "Update available";
-    public static final String UPDATE_ACTION = "Update now";
-    public static final String UPDATE_IN_PROGRESS = "Updating Backstage…";
-    public static final String UPDATE_RESTARTING = "Updating. Reopen Backstage in about a minute.";
-    public static final String UPDATE_FAILED = "Could not start update. Make sure Backstage is connected and try again.";
-
     public static final String BATTERY_TITLE = "Battery restriction active";
     public static final String BATTERY_BODY = "Allow unrestricted battery so Backstage stays connected.";
     public static final String BATTERY_ACTION = "Allow";

@@ -88,7 +88,6 @@ public final class AgentActivity extends Activity {
     /** Bumped whenever the account, its requests or an offered update change. */
     int accountVersion;
     private volatile long accountLoadedAt;
-    private int shownUpdate;
     private final AtomicBoolean accountLoading = new AtomicBoolean();
 
     static final class Session {
@@ -488,12 +487,6 @@ public final class AgentActivity extends Activity {
             state.done(message);
         }, "backstage-decide").start();
     }
-    void updateNow(AccountClient.Update update) {
-        Session state = session; state.busy = true; state.message = AppCopy.UPDATE_IN_PROGRESS; renderNow();
-        daemon.post("/update", Json.mapOf("url", update.url, "sha256", update.sha256),
-                (r, e) -> { state.done(e == null ? AppCopy.UPDATE_RESTARTING : AppCopy.UPDATE_FAILED); renderNow(); });
-    }
-
     void refreshAccount(boolean force) {
         if (!accountServer()) return;
         if (!force && account != null && System.currentTimeMillis() - accountLoadedAt < 20000) return;
@@ -502,7 +495,7 @@ public final class AgentActivity extends Activity {
         final AccountClient client = accountClient; final List<DaemonConfig.Link> links = new java.util.ArrayList<>(config.links);
         new Thread(() -> {
             AccountClient.Account loaded = null; String error = ""; List<AccountClient.Request> waiting = null;
-            try { client.signIn(links); loaded = client.account(); waiting = client.requests(false); AgentRequests.offerUpdate(getApplicationContext(), client); }
+            try { client.signIn(links); loaded = client.account(); waiting = client.requests(false); }
             catch (Exception e) { error = account == null ? AccountClient.explain(e) : ""; }
             final AccountClient.Account result = loaded; final String message = error; final List<AccountClient.Request> pendingRequests = waiting;
             ui.post(() -> {
@@ -510,9 +503,7 @@ public final class AgentActivity extends Activity {
                 boolean requestsChanged = pendingRequests != null && !sameRequests(requests, pendingRequests);
                 boolean newRequest = requestsChanged && requests.isEmpty() && !pendingRequests.isEmpty();
                 if (pendingRequests != null) requests = pendingRequests;
-                AccountClient.Update offered = AgentRequests.pendingUpdate(getApplicationContext());
-                boolean updateChanged = (offered == null ? 0 : offered.versionCode) != shownUpdate; shownUpdate = offered == null ? 0 : offered.versionCode;
-                boolean changed = updateChanged || requestsChanged || (result != null && (account == null || !sameAccount(account, result))) || !message.equals(accountError);
+                boolean changed = requestsChanged || (result != null && (account == null || !sameAccount(account, result))) || !message.equals(accountError);
                 if (result != null) { account = result; accountLoadedAt = System.currentTimeMillis(); accountError = ""; rememberAccountName(); }
                 else if (!message.isEmpty()) accountError = message;
                 if (changed) accountVersion++;

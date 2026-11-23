@@ -51,12 +51,12 @@ test("owners supports expectedLinkOwner verification and full deleteOwner wipe",
       send: async (to, subject) => { codes.push({ to, code: subject.slice(0, 6) }); },
     };
     const owners = createOwners({ stateFile: path.join(dir, "owners.json"), origin: "https://relay.android-backstage.com", mailer });
-    await owners.startEmail("alice@example.com");
-    const aliceId = owners.verifyEmail("alice@example.com", codes[0].code);
+    await owners.startSignUp("alice@example.com", "alice-password-1");
+    const aliceId = owners.verifySignUp("alice@example.com", codes[0].code);
     assert.equal(owners.exists(aliceId), true);
 
-    // Unlinked sign-in code cannot satisfy expectedLinkOwner on account-email verification
-    await owners.startEmail("bob@example.com");
+    // Sign-up code for Bob cannot satisfy expectedLinkOwner on Alice's account-email verification
+    await owners.startSignUp("bob@example.com", "bob-password-1");
     assert.throws(
       () => owners.verifyEmail("bob@example.com", codes[1].code, { expectedLinkOwner: aliceId }),
       /expired/,
@@ -171,13 +171,13 @@ test("POST /work/account/delete requires Origin + confirmation and wipes owner, 
     server = await new Promise((resolve) => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
     base = `http://127.0.0.1:${server.address().port}`;
 
-    // Sign in via email OTP
-    await fetch(`${base}/work/email/start`, {
+    // Create account and sign in via signup OTP
+    await fetch(`${base}/work/signup/start`, {
       method: "POST",
       headers: { "content-type": "application/json", origin: "http://127.0.0.1" },
-      body: JSON.stringify({ email: "del@example.com" }),
+      body: JSON.stringify({ email: "del@example.com", password: "delete-me-password" }),
     });
-    const verifyRes = await fetch(`${base}/work/email/verify`, {
+    const verifyRes = await fetch(`${base}/work/signup/verify`, {
       method: "POST",
       headers: { "content-type": "application/json", origin: "http://127.0.0.1" },
       body: JSON.stringify({ email: "del@example.com", code: codes[0] }),

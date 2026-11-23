@@ -33,7 +33,6 @@ public final class AccountClient {
     /** An agent asking for access, approved from a notification or the app. */
     public static final class Request { public String id = "", names = "", check = ""; public long expiresAt; }
     public static final class Methods { public String email = ""; public boolean emailAvailable, hasPassword; public int recoveryLeft; public final List<String[]> passkeys = new ArrayList<>(); }
-    public static final class Update { public int versionCode; public String versionName = "", url = "", sha256 = ""; }
 
     private static String str(Map<String, Object> m, String key) { String v = Json.string(m, key); return v == null || "null".equals(v) ? "" : v; }
     private final String base; // e.g. https://relay.android-backstage.com/work
@@ -165,15 +164,6 @@ public final class AccountClient {
         if (codes instanceof List) for (Object c : (List<?>) codes) out.add(String.valueOf(c)); return out;
     }
     public void removePasskey(String id) throws IOException { post("/phone/passkeys/remove", Json.mapOf("id", id)); }
-
-    /** The newest published app, or null. Needs no sign-in. */
-    public Update latestApp() {
-        try {
-            Map<String, Object> m = Json.object(SimpleHttp.getOnce(base + "/app/latest", 15000, null)); Update u = new Update();
-            u.versionCode = Json.integer(m, "versionCode", 0); u.versionName = str(m, "versionName"); u.url = str(m, "url"); u.sha256 = str(m, "sha256");
-            return u.versionCode > 0 && u.url.startsWith("https://") && u.sha256.matches("[a-f0-9]{64}") ? u : null;
-        } catch (Exception e) { return null; }
-    }
 
     /** A short human message for an API failure. */
     public static String explain(Exception e) {

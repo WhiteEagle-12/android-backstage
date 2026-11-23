@@ -267,6 +267,7 @@ export async function createRelay(opts = {}) {
   const maxFileBytes = opts.maxFileBytes ?? maxFileMb * 1024 * 1024;
   const pairPollMs = Math.min(PAIR_POLL_MAX, opts.pairPollMs ?? PAIR_POLL_MAX);
   const enableLearn = opts.enableLearn ?? (process.env.RELAY_ENABLE_LEARN === "1");
+  const allowPublicPair = opts.allowPublicPair ?? (process.env.RELAY_ALLOW_PUBLIC_PAIR !== "0");
   const filesDir = opts.filesDir ?? (process.env.RELAY_FILES_DIR ? path.resolve(process.env.RELAY_FILES_DIR) : null);
   const r2 = opts.r2 !== undefined ? opts.r2 : createR2FromEnv();
   const webhookLookup = opts.webhookLookup;
@@ -851,6 +852,23 @@ export async function createRelay(opts = {}) {
       }
 
       if (url.pathname === "/v1/pair/connect" && req.method === "POST") {
+        if (!allowPublicPair) {
+          const token = bearerToken(req);
+          const hasAccount = Boolean(token && store.accountByKey(token));
+          let hasAdmin = false;
+          if (adminToken && token) {
+            const given = crypto.createHash("sha256").update(token, "utf8").digest();
+            const expected = crypto.createHash("sha256").update(String(adminToken), "utf8").digest();
+            hasAdmin = crypto.timingSafeEqual(given, expected);
+          }
+          if (!hasAccount && !hasAdmin) {
+            json(res, 403, {
+              error: "account_required",
+              message: "Sign in at android-backstage.com to use the hosted relay, or self-host your own relay from GitHub.",
+            });
+            return;
+          }
+        }
         const body = parseJsonBody(await readBody(req));
         const name = String(body.name || 'phone').trim();
         if (!name || name.length > 80) throw new HttpError(400, "invalid connection name");
