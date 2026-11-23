@@ -15,7 +15,8 @@ test('ultra-lean discovery stays typed and under ~2k tokens while strict validat
   assert.equal(get('sequence').properties.steps.items.type,'object');
  }
  const localBytes=mcpTools().reduce((n,t)=>n+JSON.stringify(t).length,0);
- assert.ok(localBytes<8000,`mcpTools() grew to ${localBytes} B (~${Math.round(localBytes/4)} tok)`);
+ assert.ok(localBytes<10500,`mcpTools() grew to ${localBytes} B (~${Math.round(localBytes/4)} tok)`);
+ for(const tool of [...advertised,...mcpTools()]){assert.equal(typeof tool.annotations?.readOnlyHint,'boolean',tool.name);}
  assert.equal(compareClientTools({tools:advertised}).nestedChecked,true);
  const broken=structuredClone(advertised);
  broken.find(t=>t.name==='android_sequence').inputSchema.properties.steps.items={};

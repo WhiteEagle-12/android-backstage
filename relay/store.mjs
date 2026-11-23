@@ -106,7 +106,7 @@ export function createStore(dataDir, { log = console } = {}) {
       /* best-effort on platforms that ignore mode */
     }
     firstApiKey = apiKey;
-    log.log(`Android Backstage first API key (shown once):\n${apiKey}\nWrote ${keyPath}`);
+    log.log(`Android Backstage first API key wrote to ${keyPath} (mode 0600)`);
   }
 
   function sweepSessions() {

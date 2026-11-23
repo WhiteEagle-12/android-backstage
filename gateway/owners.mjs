@@ -22,16 +22,37 @@ const recoveryShape = value => String(value || '').toUpperCase().replace(/[^A-Z0
 // session tokens and hashed one-time codes are stored here. An account can sign
 // in with an emailed code, a passkey, or a recovery code; any one is enough.
 // Phone link secrets live in the connection store.
-export function createOwners({stateFile, origin, androidOrigins = [], mailer = null, now = Date.now}) {
+export function createOwners({stateFile, origin, androidOrigins = [], mailer = null, dailyEmailCap = Number(process.env.BACKSTAGE_DAILY_EMAIL_CAP || 5000), now = Date.now}) {
   const rpID = new URL(origin).hostname;
-  const state = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : {owners:{}, credentials:{}, sessions:{}, challenges:{}};
-  state.emailCodes ||= {};
+  const loaded = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : {owners:{}, credentials:{}, sessions:{}};
+  const state = {owners: loaded.owners || {}, credentials: loaded.credentials || {}, sessions: loaded.sessions || {}};
+  // Ephemeral codes & WebAuthn challenges stay strictly in RAM (zero-retention + avoids fsync stalls).
+  const challenges = new Map();
+  const emailCodes = new Map();
+  const emailRates = new Map();
+  let emailDay = { day: '', count: 0 };
   const save = () => writePrivateJson(stateFile, state);
+  if (loaded.challenges || loaded.emailCodes) save();
   function prune() {
-    for (const table of ['sessions','challenges','emailCodes']) for (const [key,row] of Object.entries(state[table])) if (row.expires <= now()) delete state[table][key];
+    const t = now();
+    for (const [key, row] of Object.entries(state.sessions)) if (row.expires <= t) delete state.sessions[key];
+    for (const [key, row] of challenges) if (row.expires <= t) challenges.delete(key);
+    for (const [key, row] of emailCodes) if (row.expires <= t) emailCodes.delete(key);
+    for (const [key, list] of emailRates) {
+      const recent = list.filter(at => at > t - 900000);
+      if (recent.length) emailRates.set(key, recent); else emailRates.delete(key);
+    }
   }
+  const evictIfFull = (map, max) => {
+    while (map.size >= max) {
+      const oldest = map.keys().next().value;
+      if (oldest === undefined) break;
+      map.delete(oldest);
+    }
+  };
   const ownerByEmail = email => Object.keys(state.owners).find(id => state.owners[id].email === email) || null;
   const equalHash = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  const emailCodeKey = (email, linkOwner) => hash((linkOwner ? 'link:' + linkOwner : 'signin') + ':' + email);
   function issue(res, ownerId) {
     const token = random();
     state.sessions[hash(token)] = {ownerId, expires: now() + 30*86400000}; save();
@@ -59,28 +80,43 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
       if (!email) throw new Error('Enter a valid email address.');
       if (!mailer?.configured()) throw new Error('Email sign-in is not set up on this server. Use a passkey.');
       if (linkOwner) { const taken = ownerByEmail(email); if (taken && taken !== linkOwner) throw new Error('That email already belongs to another account.'); }
-      const key = hash('email:' + email), previous = state.emailCodes[key];
-      const recent = (previous?.sent || []).filter(at => at > now() - 900000);
-      if (recent.length >= 5 || Object.keys(state.emailCodes).length >= 1000) throw new Error('Too many codes were sent. Wait a few minutes.');
+      const t = now();
+      const rateKey = hash('rate:' + email);
+      const recent = (emailRates.get(rateKey) || []).filter(at => at > t - 900000);
+      if (recent.length >= 5) throw new Error('Too many codes were sent. Wait a few minutes.');
+      const day = new Date(t).toISOString().slice(0, 10);
+      if (emailDay.day !== day) emailDay = { day, count: 0 };
+      if (emailDay.count >= dailyEmailCap) throw new Error('Email sign-in is temporarily busy. Try a passkey or wait a bit.');
       const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
-      state.emailCodes[key] = {codeHash: hash(email + ':' + code), expires: now() + 600000, attempts: 0, sent: [...recent, now()], linkOwner};
-      save();
-      await mailer.send(email, `${code} is your Android Backstage code`, `Your Android Backstage code is ${code}.\n\nIt expires in 10 minutes. If you did not ask for it, ignore this email.`);
+      const subject = linkOwner ? `${code} — confirm your Android Backstage email` : `${code} is your Android Backstage code`;
+      const body = linkOwner
+        ? `Your Android Backstage email confirmation code is ${code}.\n\nEnter this code only if you asked to link this email to your existing account. It expires in 10 minutes.`
+        : `Your Android Backstage sign-in code is ${code}.\n\nIt expires in 10 minutes. If you did not ask for it, ignore this email.`;
+      await mailer.send(email, subject, body);
+      evictIfFull(emailRates, 5000);
+      emailRates.set(rateKey, [...recent, t]);
+      emailDay.count++;
+      evictIfFull(emailCodes, 2000);
+      const key = emailCodeKey(email, linkOwner);
+      emailCodes.set(key, {codeHash: hash((linkOwner || 'signin') + ':' + email + ':' + code), expires: t + 600000, attempts: 0, linkOwner: linkOwner || null});
       return {sent: true, expiresIn: 600};
     },
     /** Check an emailed code. Returns the account, creating one for a new address. */
     verifyEmail(value, code, { expectedLinkOwner = null } = {}) {
       prune();
-      const email = normalEmail(value), key = email && hash('email:' + email), row = key && state.emailCodes[key];
-      if (!row) throw new Error('That code expired. Ask for a new one.');
-      if (expectedLinkOwner && row.linkOwner !== expectedLinkOwner) throw new Error('That code expired. Ask for a new one.');
-      if (++row.attempts > 5) { delete state.emailCodes[key]; save(); throw new Error('Too many wrong codes. Ask for a new one.'); }
-      if (!equalHash(hash(email + ':' + String(code || '').replace(/\D/g, '')), row.codeHash)) { save(); throw new Error('That code is not right. Check the email and try again.'); }
-      delete state.emailCodes[key];
-      if (row.linkOwner) {
+      const email = normalEmail(value);
+      const expectedOwner = expectedLinkOwner || null;
+      const key = email && emailCodeKey(email, expectedOwner);
+      const row = key && emailCodes.get(key);
+      if (!row || (row.linkOwner || null) !== expectedOwner) throw new Error('That code expired. Ask for a new one.');
+      if (++row.attempts > 5) { emailCodes.delete(key); throw new Error('Too many wrong codes. Ask for a new one.'); }
+      if (!equalHash(hash((expectedOwner || 'signin') + ':' + email + ':' + String(code || '').replace(/\D/g, '')), row.codeHash)) { throw new Error('That code is not right. Check the email and try again.'); }
+      emailCodes.delete(key);
+      if (expectedOwner) {
+        if (!Object.hasOwn(state.owners, expectedOwner)) throw new Error('Unknown account.');
         const taken = ownerByEmail(email);
-        if (taken && taken !== row.linkOwner) { save(); throw new Error('That email already belongs to another account.'); }
-        state.owners[row.linkOwner].email = email; save(); return row.linkOwner;
+        if (taken && taken !== expectedOwner) throw new Error('That email already belongs to another account.');
+        state.owners[expectedOwner].email = email; save(); return expectedOwner;
       }
       let ownerId = ownerByEmail(email);
       if (!ownerId) { ownerId = 'owner_' + random(); state.owners[ownerId] = {createdAt: now(), email}; }
@@ -89,11 +125,16 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
     /** Permanently delete an owner, all passkeys, sessions, pending challenges, and email codes. */
     deleteOwner(ownerId, req = null, res = null) {
       if (!Object.hasOwn(state.owners, ownerId)) return false;
+      const ownerEmail = state.owners[ownerId]?.email || null;
       delete state.owners[ownerId];
       for (const [id, cred] of Object.entries(state.credentials)) if (cred.ownerId === ownerId) delete state.credentials[id];
       for (const [id, sess] of Object.entries(state.sessions)) if (sess.ownerId === ownerId) delete state.sessions[id];
-      for (const [id, ch] of Object.entries(state.challenges)) if (ch.ownerId === ownerId || ch.existingOwner === ownerId) delete state.challenges[id];
-      for (const [id, ec] of Object.entries(state.emailCodes)) if (ec.linkOwner === ownerId) delete state.emailCodes[id];
+      for (const [id, ch] of challenges) if (ch.ownerId === ownerId || ch.existingOwner === ownerId) challenges.delete(id);
+      for (const [id, ec] of emailCodes) if (ec.linkOwner === ownerId) emailCodes.delete(id);
+      if (ownerEmail) {
+        emailCodes.delete(emailCodeKey(ownerEmail, null));
+        emailRates.delete(hash('rate:' + ownerEmail));
+      }
       save();
       if (res) setCookie(res, sessionCookie, '', 0);
       return true;
@@ -134,7 +175,7 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
     signOut(req, res) { delete state.sessions[hash(cookieValue(req,sessionCookie))]; save(); setCookie(res,sessionCookie,'',0); },
     async options(req, res, mode, native = false) {
       prune();
-      if (!['register','authenticate'].includes(mode) || Object.keys(state.challenges).length >= 1000) throw new Error('Cannot start sign-in. Try again shortly.');
+      if (!['register','authenticate'].includes(mode)) throw new Error('Cannot start sign-in. Try again shortly.');
       const existingOwner = native ? null : owner(req);
       if (native && !androidOrigins.length) throw new Error('Phone sign-in is not available on this server.');
       const ownerId = mode === 'register' ? existingOwner || 'owner_' + random() : null;
@@ -144,12 +185,13 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
         excludeCredentials:Object.values(state.credentials).filter(c=>c.ownerId===ownerId).map(c=>({id:c.id,transports:c.transports}))
       }) : await webauthn.generateAuthenticationOptions({rpID,userVerification:'required'});
       const token = random();
-      state.challenges[hash(token)] = {mode,ownerId,existingOwner,native,challenge:options.challenge,expires:now()+300000};
-      save(); setCookie(res,challengeCookie,token,300); return options;
+      evictIfFull(challenges, 2000);
+      challenges.set(hash(token), {mode,ownerId,existingOwner,native,challenge:options.challenge,expires:now()+300000});
+      setCookie(res,challengeCookie,token,300); return options;
     },
     async verify(req, res, response, native = false) {
-      const key = hash(cookieValue(req,challengeCookie)), pending = state.challenges[key];
-      delete state.challenges[key]; save(); setCookie(res,challengeCookie,'',0);
+      const key = hash(cookieValue(req,challengeCookie)), pending = challenges.get(key);
+      challenges.delete(key); setCookie(res,challengeCookie,'',0);
       if (!pending || !!pending.native !== native || pending.expires <= now()) throw new Error('Sign-in expired. Try again.');
       let ownerId;
       if (pending.mode === 'register') {

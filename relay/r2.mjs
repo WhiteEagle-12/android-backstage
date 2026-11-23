@@ -105,16 +105,105 @@ export function createR2Store({
     }
   }
 
-  async function uploadFile(localPath, { ttlSec = 900, contentType = "application/octet-stream" } = {}) {
-    const id = crypto.randomBytes(32).toString("hex");
-    const key = `${cleanPrefix}${id}`;
-    const body = fs.readFileSync(localPath);
-    await putBuffer(key, body, contentType);
-    const url = presignGet(key, ttlSec);
-    return { id, url, expiresAt: now().getTime() + ttlSec * 1000 };
+  const pendingDeletes = new Map();
+
+  async function deleteObject(key) {
+    const timer = pendingDeletes.get(key);
+    if (timer) { clearTimeout(timer); pendingDeletes.delete(key); }
+    const { amzDate, dateStamp } = amzTimestamps(now());
+    const scope = `${dateStamp}/${region}/s3/aws4_request`;
+    const pathname = objectPath(key);
+    const payloadHash = sha256Hex("");
+    const headers = {
+      host: base.host,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": amzDate,
+    };
+    const signedKeys = Object.keys(headers).sort();
+    const canonicalHeaders = signedKeys.map((k) => `${k}:${headers[k]}\n`).join("");
+    const signedHeaders = signedKeys.join(";");
+    const canonicalRequest = ["DELETE", pathname, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+    const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest)].join("\n");
+    const sig = crypto.createHmac("sha256", signingKey(secretAccessKey, dateStamp, region, "s3")).update(stringToSign, "utf8").digest("hex");
+    const authHeader = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${sig}`;
+    const res = await fetchImpl(`${base.origin}${pathname}`, {
+      method: "DELETE",
+      headers: {
+        "x-amz-content-sha256": payloadHash,
+        "x-amz-date": amzDate,
+        authorization: authHeader,
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    return res.ok || res.status === 404;
   }
 
-  return { presignGet, putBuffer, uploadFile };
+  async function putStream(key, localPath, contentType = "application/octet-stream") {
+    const stat = fs.statSync(localPath);
+    const { amzDate, dateStamp } = amzTimestamps(now());
+    const scope = `${dateStamp}/${region}/s3/aws4_request`;
+    const pathname = objectPath(key);
+    // Stream directly from disk without buffering large APKs/MP4s into RAM on small VMs.
+    const payloadHash = "UNSIGNED-PAYLOAD";
+    const headers = {
+      host: base.host,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": amzDate,
+    };
+    const signedKeys = Object.keys(headers).sort();
+    const canonicalHeaders = signedKeys.map((k) => `${k}:${headers[k]}\n`).join("");
+    const signedHeaders = signedKeys.join(";");
+    const canonicalRequest = ["PUT", pathname, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+    const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, sha256Hex(canonicalRequest)].join("\n");
+    const sig = crypto.createHmac("sha256", signingKey(secretAccessKey, dateStamp, region, "s3")).update(stringToSign, "utf8").digest("hex");
+    const authHeader = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${sig}`;
+    const stream = fs.createReadStream(localPath);
+    stream.on("error", () => {});
+    try {
+      const res = await fetchImpl(`${base.origin}${pathname}`, {
+        method: "PUT",
+        headers: {
+          "content-type": contentType,
+          "content-length": String(stat.size),
+          "x-amz-content-sha256": payloadHash,
+          "x-amz-date": amzDate,
+          authorization: authHeader,
+        },
+        body: stream,
+        duplex: "half",
+        signal: AbortSignal.timeout(120_000),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw Object.assign(new Error(`R2 upload failed (HTTP ${res.status}): ${text.slice(0, 160)}`), { status: 502 });
+      }
+    } finally {
+      if (!stream.destroyed) stream.destroy();
+    }
+  }
+
+  async function uploadFile(localPath, { ttlSec = 300, contentType = "application/octet-stream" } = {}) {
+    const clampedTtl = Math.max(60, Math.min(900, Math.round(ttlSec)));
+    const id = crypto.randomBytes(32).toString("hex");
+    const key = `${cleanPrefix}${id}`;
+    await putStream(key, localPath, contentType);
+    const url = presignGet(key, clampedTtl);
+    // Actively delete the R2 object shortly after the presigned URL expires (24h bucket lifecycle is only a backstop).
+    const deleteTimer = setTimeout(() => {
+      pendingDeletes.delete(key);
+      deleteObject(key).catch(() => {});
+    }, (clampedTtl + 30) * 1000);
+    deleteTimer.unref?.();
+    pendingDeletes.set(key, deleteTimer);
+    return { id, key, url, expiresAt: now().getTime() + clampedTtl * 1000 };
+  }
+
+  function close() {
+    for (const timer of pendingDeletes.values()) clearTimeout(timer);
+    pendingDeletes.clear();
+  }
+
+  return { presignGet, putBuffer, putStream, deleteObject, uploadFile, close };
 }
 
 export function createR2FromEnv(env = process.env) {

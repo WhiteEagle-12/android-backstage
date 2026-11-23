@@ -142,6 +142,12 @@ public final class AppCopy {
     public static final String ACTION_USB_COMMAND = "USB startup command";
     public static final String ACTION_COPY_LOCAL_TOKEN = "Copy local token";
     public static final String ACTION_CHANGE_PORT = "Local port";
+    public static final String ACTION_STAY_ONLINE_OFF_WIFI = "Stay online off Wi-Fi";
+    public static final String STATE_ON = "On";
+    public static final String STATE_OFF = "Off";
+    public static final String ACTION_TURN_ON = "Turn on";
+    public static final String ACTION_TURN_OFF = "Turn off";
+    public static final String OFF_WIFI_BODY = "Android stops the background helper when you leave Wi-Fi unless USB debugging stays on.\n\nIf you turn this on, Backstage enables USB debugging while connected and turns it back off when you pause access.";
     public static final String TOKEN_COPIED = "Local token copied.";
 
     // Sign-in & setup

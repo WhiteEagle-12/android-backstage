@@ -303,6 +303,7 @@ export function createFiles({
     saveUpload,
     publishLocal,
     serveDownload,
+    removeEntry,
     fileUrl,
     sweep,
     publishedCount,

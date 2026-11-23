@@ -92,7 +92,8 @@ public final class SimpleHttp {
                 conn.setConnectTimeout(Math.min(8000, Math.max(1000, timeoutMs)));
                 conn.setReadTimeout(timeoutMs);
                 conn.setUseCaches(false);
-                conn.setInstanceFollowRedirects(followRedirects);
+                boolean allowRedirects = followRedirects && (bearerToken == null || bearerToken.isBlank());
+                conn.setInstanceFollowRedirects(allowRedirects);
                 conn.setRequestProperty("Accept", "application/json");
                 conn.setRequestProperty("Connection", "close");
                 if (bearerToken != null && !bearerToken.isBlank()) {

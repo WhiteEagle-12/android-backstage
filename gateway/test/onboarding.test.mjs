@@ -44,7 +44,7 @@ test('phone-minted 144-bit invitation approves in one step, binds one account, c
   const f=fixture(t),p=proof();const invite=f.auth.invites.create('owner_a','phone_a');
   const claim=f.auth.invites.claim({code:invite.code,clientName:'Test agent',challenge:p.challenge});
   assert.equal(claim.approved,true);
-  assert.equal(f.grants.length,1);assert.deepEqual(f.grants[0].access,'all');
+  assert.equal(f.grants.length,1);assert.deepEqual(f.grants[0].access,['phone_a']);
   assert.throws(()=>f.auth.invites.claim({code:invite.code,clientName:'Other',challenge:p.challenge}));
   assert.throws(()=>f.auth.invites.status(invite.code,'owner_b'));
   assert.throws(()=>f.auth.invites.poll(claim.ticket,'wrong'));

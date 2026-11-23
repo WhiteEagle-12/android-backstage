@@ -30,7 +30,7 @@ const front = http.createServer((req,res)=>{
     res.writeHead(reply.statusCode,out);reply.pipe(res);
   });
   upstream.setTimeout(660000,()=>upstream.destroy());
-  upstream.on('error',()=>{if(!res.headersSent)res.writeHead(502,{'content-type':'application/json'});res.end('{"error":"service_unavailable"}');});
+  upstream.on('error',()=>{if(!res.headersSent){res.writeHead(502,{'content-type':'application/json'});res.end('{"error":"service_unavailable"}');}else if(!res.writableEnded){res.end();}});
   req.on('aborted',()=>upstream.destroy());res.on('close',()=>upstream.destroy());req.pipe(upstream);
 });
 front.listen(publicPort,process.env.HOST || '127.0.0.1',()=>console.log('Backstage HTTPS services ready on loopback'));

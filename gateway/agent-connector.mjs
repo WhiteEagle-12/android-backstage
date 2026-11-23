@@ -103,10 +103,7 @@ export function install(host,account,{home=os.homedir(),exec=execFileSync,node=p
   if(host==='cursor')addJsonServer(path.join(home,'.cursor','mcp.json'),'mcpServers',name,{command:node,args});
   else if(host==='gemini')addJsonServer(path.join(home,'.gemini','settings.json'),'mcpServers',name,{command:node,args});
   else if(host==='antigravity'){
-    // The Antigravity app reads ~/.gemini/antigravity; T3 Code keeps a private profile per provider instance.
     const files=[path.join(home,'.gemini','antigravity','mcp_config.json')];
-    const t3=path.join(home,'.t3','userdata','providers','antigravity');
-    if(fs.existsSync(t3))for(const id of fs.readdirSync(t3))if(fs.existsSync(path.join(t3,id,'config')))files.push(path.join(t3,id,'config','mcp_config.json'));
     for(const file of files)addJsonServer(file,'mcpServers',name,{command:node,args});
   }
   else if(host==='opencode'){const dir=path.join(home,'.config','opencode');const file=['opencode.jsonc','opencode.json'].map(f=>path.join(dir,f)).find(f=>fs.existsSync(f))||path.join(dir,'opencode.json');addOpenCodeServer(file,name,[node,...args]);}
@@ -134,7 +131,7 @@ export function detectHosts({home=os.homedir(),has=command=>{try{if(process.plat
     ['grok','Grok',exists('.grok/bin/grok')||has('grok')],
     ['opencode','OpenCode',has('opencode')||exists('.config/opencode')],
     ['gemini','Gemini CLI',has('gemini')],
-    ['antigravity','Antigravity',exists('.gemini/antigravity')||exists('.t3/userdata/providers/antigravity')],
+    ['antigravity','Antigravity',exists('.gemini/antigravity')],
   ].filter(([, , found])=>found).map(([host,name])=>({host,name}));
 }
 /** The saved account with a current access token, refreshing it under the account lock when needed. */

@@ -56,17 +56,29 @@ public final class WifiTrustHostTest {
         check(scans.get(1).ssid.isEmpty(), "hidden SSID is empty");
         check(scans.get(6).rssi == -60 && scans.get(6).ssid.equals("HomeMesh_6e"), "RSSI without per-chain detail");
 
-        check(WifiTrustRules.eligible("HomeMesh", saved, Set.of()), "saved secured");
+        check(!WifiTrustRules.eligible("HomeMesh", saved, Set.of()), "saved secured requires explicit owner approval");
+        check(WifiTrustRules.eligible("HomeMesh", saved, Set.of("HomeMesh")), "owner-approved secured network eligible");
         check(!WifiTrustRules.eligible("CoffeeShop Public", saved, Set.of()), "open excluded");
+        check(!WifiTrustRules.eligible("CoffeeShop Public", saved, Set.of("CoffeeShop Public")), "open excluded even if learned");
         check(!WifiTrustRules.eligible("HomeMesh_legacy", saved, Set.of()), "unsaved excluded");
         check(WifiTrustRules.eligible("HomeMesh_legacy", saved, Set.of("HomeMesh_legacy")), "approved by the owner once");
         check(!WifiTrustRules.eligible(null, saved, Set.of()) && !WifiTrustRules.eligible("", saved, Set.of()), "no SSID");
 
-        List<String> pick = WifiTrustRules.neighborsToTrust(scans, saved, Set.of(), trusted, "02:00:5e:10:6f:41", 40);
-        // 02:00:5e:10:6f:41 is current (approved last), 7e:41 too weak, 99:91 not seen for over an hour,
-        // 0b:90 already trusted, open/unsaved/hidden never; strongest first.
+        Set<String> learned = Set.of("HomeMesh", "HomeMesh_6e", "CampusNet");
+        List<String> pick = WifiTrustRules.neighborsToTrust(scans, saved, learned, trusted, "02:00:5e:10:6f:41", 40);
+        // 02:00:5e:10:6f:41 is current, 7e:41 too weak, 99:91 not seen for over an hour,
+        // 0b:90 already trusted, open/unsaved/hidden/unapproved never; strongest first.
         check(pick.equals(List.of("02:00:5e:20:0b:94", "02:00:5e:10:7d:51", "02:00:5e:10:62:91")), "neighbors to approve: " + pick);
-        check(WifiTrustRules.neighborsToTrust(scans, saved, Set.of(), trusted, null, 1).size() == 1, "limit respected");
-        System.out.println("PASS WifiTrust: per-access-point approval policy");
+        check(WifiTrustRules.neighborsToTrust(scans, saved, Set.of(), trusted, "02:00:5e:10:6f:41", 40).isEmpty(), "no neighbors without explicit approval");
+        check(WifiTrustRules.neighborsToTrust(scans, saved, learned, trusted, null, 1).size() == 1, "limit respected");
+
+        String token = "test-local-token-32-bytes";
+        String mac = WifiTrustRules.signTrustedBssids(trusted, token);
+        check(!mac.isEmpty(), "HMAC generated");
+        check(WifiTrustRules.verifyTrustedBssids(Set.of("02:00:5E:10:73:91", "02:00:5e:00:00:0e", "02:00:5e:20:0b:90"), token, mac), "HMAC order & case insensitive");
+        check(!WifiTrustRules.verifyTrustedBssids(Set.of("02:00:5e:00:00:0e", "aa:bb:cc:dd:ee:ff"), token, mac), "tampered BSSID rejected");
+        check(!WifiTrustRules.verifyTrustedBssids(trusted, "wrong-token", mac), "wrong token rejected");
+        check(!WifiTrustRules.verifyTrustedBssids(trusted, token, ""), "missing MAC rejected");
+        System.out.println("PASS WifiTrust: owner-approved Wi-Fi policy + HMAC verification");
     }
 }

@@ -106,7 +106,7 @@ public final class Main {
             release();
         }, "backstage-shutdown"));
 
-        wifiTrust = new com.deviceagent.shell.WifiTrust(config.packageName);
+        wifiTrust = new com.deviceagent.shell.WifiTrust(config.packageName, config.localToken);
         java.util.function.Supplier<java.util.Map<String, Object>> liveStatus = () -> {
             java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
             out.put("network", com.deviceagent.shell.NetworkWatch.signature());
@@ -183,6 +183,11 @@ public final class Main {
             if (parent != null) Files.createDirectories(parent);
             Files.write(marker, "stopped\n".getBytes(StandardCharsets.UTF_8));
         } catch (Exception ignored) {
+        }
+        try {
+            if (daemon != null) daemon.restoreUsbDebuggingIfOwned();
+        } catch (Throwable t) {
+            DaemonLog.print("restoreUsbDebuggingIfOwned failed", t);
         }
         release();
         System.exit(0);

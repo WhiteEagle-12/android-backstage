@@ -33,7 +33,7 @@ export function shredFile(filePath, shred = true) {
   fs.rmSync(filePath, { force: true });
 }
 
-export function createArtifacts({directory,maxBytes=256*1024*1024,zeroRetention=false,ttlMs=zeroRetention?5*60000:45*60000,quotaBytes=1024*1024*1024,maxGrantBytes=256*1024*1024,now=Date.now}) {
+export function createArtifacts({directory,zeroRetention=false,maxBytes=zeroRetention?128*1024*1024:256*1024*1024,ttlMs=zeroRetention?5*60000:45*60000,quotaBytes=zeroRetention?160*1024*1024:1024*1024*1024,maxGrantBytes=zeroRetention?128*1024*1024:256*1024*1024,now=Date.now}) {
   fs.mkdirSync(directory,{recursive:true,mode:0o700});
   const meta=id=>path.join(directory,id+'.json'),blob=id=>path.join(directory,id+'.bin');
   const busy=new Set();
@@ -42,7 +42,29 @@ export function createArtifacts({directory,maxBytes=256*1024*1024,zeroRetention=
   const read=id=>{if(!valid(id))return null;try {return JSON.parse(fs.readFileSync(meta(id),'utf8'));} catch {return null;}};
   const save=row=>writePrivateJson(meta(row.id),row);
   const all=()=>fs.readdirSync(directory).filter(n=>n.endsWith('.json')).map(n=>read(n.slice(0,-5))).filter(Boolean);
-  function sweep() {for(const row of all())if(row.expiresAt<=now()&&!busy.has(row.id))purge(row.id);}
+  function sweep() {
+    const t=now();
+    const liveIds=new Set();
+    for(const row of all()){
+      if(row.expiresAt<=t&&!busy.has(row.id))purge(row.id);
+      else liveIds.add(row.id);
+    }
+    // Also shred orphaned .bin files (e.g. aborted single-use downloads or interrupted pulls).
+    try {
+      for(const name of fs.readdirSync(directory)){
+        if(!name.endsWith('.bin'))continue;
+        const full=path.join(directory,name);
+        if(name.startsWith('art_')){
+          const id=name.slice(0,-4);
+          if(!liveIds.has(id)&&!busy.has(id)){
+            try{if(t-fs.statSync(full).mtimeMs>30000)shredFile(full,zeroRetention);}catch{}
+          }
+        } else if(name.startsWith('backstage-pull-')){
+          try{if(t-fs.statSync(full).mtimeMs>ttlMs)shredFile(full,zeroRetention);}catch{}
+        }
+      }
+    } catch {}
+  }
   function checkGrantQuota(rows,grantId,size) {
     const mine=rows.filter(r=>r.grantId===grantId);
     if(mine.length>=6)throw new ConnectionError('busy','Six uploads are still stored. Delete one you no longer need with android_artifact_delete, or wait for it to expire.');

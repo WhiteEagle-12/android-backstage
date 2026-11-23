@@ -128,12 +128,18 @@ final class SetupFlow {
 
     /** The Wireless debugging steps; also shown on the Live tab while a linked phone is unpaired. */
     void phoneAccessSteps(LinearLayout card, boolean showOpen) {
-        step(card, "1", AppCopy.ACTION_OPEN_WIRELESS, AppCopy.STEP_WIRELESS_BODY);
         boolean notifications = a.areNotificationsEnabled();
-        step(card, "2", AppCopy.STEP_CODE_TITLE, notifications ? AppCopy.STEP_CODE_NOTIFY : AppCopy.STEP_CODE_MANUAL);
-        if (showOpen) k.button(card, a.smartAccessLabel(), UiKit.PRIMARY, guard(a::openAccessSettingsSmart));
-        if (!notifications) k.button(card, AppCopy.ACTION_ALLOW_NOTIFICATIONS, UiKit.SECONDARY, a::openNotificationSettings);
-        if (notifications && a.livePairPort() > 0) k.button(card, AppCopy.ACTION_SHOW_PAIRING, UiKit.SECONDARY, a::showPairingNow);
+        if (!notifications) {
+            step(card, "1", AppCopy.ACTION_ALLOW_NOTIFICATIONS, AppCopy.STEP_CODE_NOTIFY);
+            k.button(card, AppCopy.ACTION_ALLOW_NOTIFICATIONS, UiKit.PRIMARY, a::openNotificationSettings);
+            step(card, "2", AppCopy.ACTION_OPEN_WIRELESS, AppCopy.STEP_WIRELESS_BODY);
+            if (showOpen) k.button(card, a.smartAccessLabel(), UiKit.SECONDARY, guard(a::openAccessSettingsSmart));
+        } else {
+            step(card, "1", AppCopy.ACTION_OPEN_WIRELESS, AppCopy.STEP_WIRELESS_BODY);
+            step(card, "2", AppCopy.STEP_CODE_TITLE, AppCopy.STEP_CODE_NOTIFY);
+            if (showOpen) k.button(card, a.smartAccessLabel(), UiKit.PRIMARY, guard(a::openAccessSettingsSmart));
+            if (a.livePairPort() > 0) k.button(card, AppCopy.ACTION_SHOW_PAIRING, UiKit.SECONDARY, a::showPairingNow);
+        }
         pairingHint = k.body(card, AppCopy.PAIRING_WAITING); pairingHint.setPadding(0, k.dp(12), 0, 0);
         k.button(card, AppCopy.ACTION_ENTER_PAIR_CODE, UiKit.SECONDARY, guard(a::manualPairDialog));
     }

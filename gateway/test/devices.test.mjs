@@ -98,7 +98,9 @@ test('one agent uses two named devices; nothing is substituted when a device is 
   const unknown=await h.call(token,'android_packages',{device:'watch',package:'com.example'});assert.equal(unknown.structuredContent.code,'unknown_device');
   assert.equal(phoneA.received.length+phoneB.received.length,3,'no phone received the misdirected calls');
   // Offline: a device that stopped polling is reported, never swapped.
-  await withRelayOffline(ctx,phoneB,async()=>{const off=await h.call(token,'android_shell',{device:'tablet',command:'echo hi'});assert.equal(off.structuredContent.code,'device_offline');assert.match(off.structuredContent.error,/tablet/);});
+  await withRelayOffline(ctx,phoneB,async()=>{const off=await h.call(token,'android_packages',{device:'tablet',package:'com.example'});assert.equal(off.structuredContent.code,'device_offline');assert.match(off.structuredContent.error,/tablet/);});
+  // Raw shell is disabled on hosted MCP by default.
+  const shellBlocked=await h.call(token,'android_shell',{device:'phone',command:'echo hi'});assert.equal(shellBlocked.isError,true);assert.equal(shellBlocked.structuredContent.code,'tool_disabled');
   // A rename keeps the ID and the link; the assistant keeps working.
   const rename=await h.post('/work/account/devices/rename',{deviceId:tablet.id,name:'Tab S7'});assert.equal(rename.status,200);
   const renamed=await h.call(token,'android_packages',{device:'tab s7',package:'com.example'},phoneB,()=>({ok:true,value:'SM-T870'}));assert.equal(renamed.structuredContent.value,'SM-T870');
@@ -265,7 +267,7 @@ test('a build travels privately: upload with integrity check, encrypted staging,
   assert.equal(dl.status,200);assert.equal(dl.headers.get('x-content-sha256'),bigSha);
   assert.ok(Buffer.from(await dl.arrayBuffer()).equals(big));
   // A phone that paused access answers with a distinct code.
-  const paused=await h.call(token,'android_shell',{device:'phone',command:'echo hi'},phone,()=>{throw new Error('Agent paused or task permit expired');});
+  const paused=await h.call(token,'android_packages',{device:'phone',package:'com.example'},phone,()=>{throw new Error('Agent paused or task permit expired');});
   assert.equal(paused.structuredContent.code,'device_paused');
 }),{timeout:120000});
 
@@ -359,9 +361,9 @@ test('write calls auto-generate unique requestId when omitted while preserving e
   const seen=[];
   const postMcp=(name,args)=>h.post('/work/mcp',{jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}},{Authorization:'Bearer '+token,Accept:'application/json, text/event-stream'});
   // Two write calls without requestId both succeed with distinct auto_* IDs (no request_id_conflict).
-  for(const cmd of ['echo one','echo two']){
-    const req=postMcp('android_shell',{device:'phone',command:cmd});
-    await phone.serve(call=>{seen.push(call.arguments.requestId);return {outcome:'succeeded',stdout:cmd};});
+  for(const pkg of ['com.example.one','com.example.two']){
+    const req=postMcp('android_task',{device:'phone',operation:'begin',package:pkg});
+    await phone.serve(call=>{seen.push(call.arguments.requestId);return {outcome:'succeeded',sessionId:'sess_'+pkg};});
     const res=(await (await req).json()).result;
     assert.ok(!res.isError,JSON.stringify(res.structuredContent));
   }
@@ -376,9 +378,9 @@ test('write calls auto-generate unique requestId when omitted while preserving e
   assert.ok(!(await (await readReq).json()).result.isError);
   assert.equal(readArgs.requestId,undefined);
   // Explicit duplicate requestId with different arguments still returns request_id_conflict.
-  const first=postMcp('android_shell',{device:'phone',command:'echo a',requestId:'explicit-1'});
-  await phone.serve(()=>({outcome:'succeeded',stdout:'a'}));
+  const first=postMcp('android_task',{device:'phone',operation:'begin',package:'com.example.a',requestId:'explicit-1'});
+  await phone.serve(()=>({outcome:'succeeded',sessionId:'sess_a'}));
   assert.ok(!(await (await first).json()).result.isError);
-  const conflict=(await (await postMcp('android_shell',{device:'phone',command:'echo b',requestId:'explicit-1'})).json()).result;
+  const conflict=(await (await postMcp('android_task',{device:'phone',operation:'begin',package:'com.example.b',requestId:'explicit-1'})).json()).result;
   assert.equal(conflict.structuredContent.code,'request_id_conflict');
 }));

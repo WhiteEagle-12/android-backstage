@@ -1438,23 +1438,14 @@ public final class AgentActivity extends Activity {
             renderNow();
             return;
         }
-        if (request == 4212 && LocationProvider.granted(this, android.Manifest.permission.ACCESS_COARSE_LOCATION)) backgroundLocationAccess();
         if (request == 4212 || request == 4213) renderNow();
     }
     void locationAccess() {
         if (LocationProvider.allowed(this)) { openAppSettings(); return; }
-        if (LocationProvider.granted(this, android.Manifest.permission.ACCESS_COARSE_LOCATION)) { backgroundLocationAccess(); return; }
         if (getPreferences(MODE_PRIVATE).getBoolean("locationAsked", false) && !shouldShowRequestPermissionRationale(android.Manifest.permission.ACCESS_COARSE_LOCATION)) { openAppSettings(); return; }
         new AlertDialog.Builder(this).setTitle(AppCopy.ACTION_ALLOW_LOCATION)
                 .setMessage(AppCopy.LOCATION_BODY)
                 .setPositiveButton(AppCopy.ACTION_CONTINUE, (d, w) -> { getPreferences(MODE_PRIVATE).edit().putBoolean("locationAsked", true).apply(); requestPermissions(new String[]{android.Manifest.permission.ACCESS_COARSE_LOCATION, android.Manifest.permission.ACCESS_FINE_LOCATION}, 4212); })
-                .setNegativeButton(AppCopy.CANCEL, null).show();
-    }
-    private void backgroundLocationAccess() {
-        if (LocationProvider.allowed(this)) return;
-        new AlertDialog.Builder(this).setTitle(AppCopy.LOCATION_BACKGROUND_TITLE)
-                .setMessage(String.format(AppCopy.LOCATION_BACKGROUND_FMT, getPackageManager().getBackgroundPermissionOptionLabel()))
-                .setPositiveButton(AppCopy.AUTOSTART_ACTION, (d, w) -> openAppSettings())
                 .setNegativeButton(AppCopy.CANCEL, null).show();
     }
     private void openAppSettings() { startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:" + getPackageName()))); }

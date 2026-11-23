@@ -21,9 +21,9 @@ export function requireAccount(req, store) {
   if (account) return account;
   const connection = store.connectionByKey(token);
   const path = new URL(req.url, 'http://localhost').pathname;
-  const allowed = (req.method === 'GET' && ['/v1/me','/v1/devices','/v1/events','/v1/events/stream'].includes(path)) ||
-    (req.method === 'POST' && ['/v1/call','/v1/jobs','/v1/files','/v1/uploads'].includes(path)) ||
-    (req.method === 'DELETE' && path === '/v1/connection') ||
+  const allowed = (req.method === 'GET' && ['/v1/me','/v1/devices','/v1/events','/v1/events/stream','/v1/events/webhooks'].includes(path)) ||
+    (req.method === 'POST' && ['/v1/call','/v1/jobs','/v1/files','/v1/uploads','/v1/events/webhooks'].includes(path)) ||
+    (req.method === 'DELETE' && ['/v1/connection','/v1/events/webhooks'].includes(path)) ||
     (/^\/v1\/jobs\/[a-zA-Z0-9_-]+$/.test(path) && ['GET','DELETE'].includes(req.method)) ||
     (/^\/v1\/uploads\/[a-f0-9]{32}(?:\/complete)?$/.test(path) && ['GET','PUT','POST'].includes(req.method));
   if (!connection || !allowed) throw new HttpError(401, "unauthorized");

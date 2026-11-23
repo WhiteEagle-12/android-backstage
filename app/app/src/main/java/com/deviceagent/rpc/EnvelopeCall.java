@@ -56,6 +56,18 @@ public final class EnvelopeCall {
     private static boolean isReadOnlyCall(String name, Map<String, Object> args) {
         if (args.containsKey("requestId")) return false;
         if (READ_ONLY_TOOLS.contains(name)) return true;
+        if ("android.task".equals(name)) {
+            Object op = args.get("operation");
+            return "list".equals(op) || "inspect".equals(op);
+        }
+        if ("android.file".equals(name)) return "pull".equals(args.get("operation"));
+        if ("android.device".equals(name)) {
+            Object op = args.get("operation");
+            if ("location".equals(op)) return true;
+            if ("clipboard".equals(op)) return !args.containsKey("text");
+            if ("media".equals(op) || "control".equals(op) || "audio".equals(op)) return "status".equals(args.get("action"));
+            return false;
+        }
         if ("android.clipboard".equals(name)) return !args.containsKey("text");
         if ("android.notification".equals(name)) return "list".equals(args.get("operation"));
         if ("android.device_control".equals(name)) return "status".equals(args.get("operation"));

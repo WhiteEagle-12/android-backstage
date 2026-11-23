@@ -26,23 +26,29 @@ export const validDeviceName=name=>typeof name==='string'&&/^[A-Za-z0-9][A-Za-z0
  * A device ID is stable for the life of the record. Reconnecting a phone replaces
  * the link file behind the same ID, so assistant access and names survive.
  */
-export function createConnections({directory,relayUrl,relayInternalUrl=null,directRoutes=null,vault=null,begin=beginConnection,call=encryptedCall,fetchImpl=fetch,now=Date.now,log=()=>{}}) {
+export function createConnections({directory,relayUrl,relayInternalUrl=null,relayInternalToken=null,directRoutes=null,vault=null,begin=beginConnection,call=encryptedCall,fetchImpl=fetch,now=Date.now,log=()=>{}}) {
   fs.mkdirSync(directory,{recursive:true,mode:0o700});
   const phones=path.join(directory,'phones');
   fs.mkdirSync(phones,{recursive:true,mode:0o700});
   const devicesFile=path.join(directory,'devices.json');
   const readJson=(file,fallback)=>{try {return JSON.parse(fs.readFileSync(file,'utf8'));} catch(e) {if(e.code==='ENOENT')return fallback;throw e;}};
   let devices=readJson(devicesFile,{});
+  const agentIndex=new Map();
   const saveDevices=()=>writePrivateJson(devicesFile,devices);
   const phoneFile=id=>{if(!DEVICE_ID.test(id||''))throw new ConnectionError('unknown_device','Unknown device.');return path.join(phones,id+'.json');};
-  const writePhoneFile=(id,data)=>writePrivateJson(phoneFile(id),vault?vault.sealPhoneConfig(data,id):data);
+  const writePhoneFile=(id,data)=>{
+    if(data?.agentId)agentIndex.set(data.agentId,id);
+    return writePrivateJson(phoneFile(id),vault?vault.sealPhoneConfig(data,id):data);
+  };
   const readPhoneFile=id=>{
     const file=phoneFile(id),raw=readJson(file,null);
+    if(raw?.agentId)agentIndex.set(raw.agentId,id);
     if(!raw||!vault)return raw;
     const {config,migrated}=vault.openPhoneConfig(raw,id);
     if(migrated)writePrivateJson(file,vault.sealPhoneConfig(config,id));
     return config;
   };
+  const dropAgentIndex=deviceId=>{for(const [k,v] of agentIndex)if(v===deviceId)agentIndex.delete(k);};
   const readLinkConfig=target=>target?.legacy?readJson(target.filePath,null):readPhoneFile(target.id);
   const linkIoHooks=target=>(!vault||target?.legacy)?{}:{readConfig:()=>readPhoneFile(target.id)||{},writeConfig:(_p,data)=>writePhoneFile(target.id,data)};
   const grantFile=id=>{if(!GRANT_ID.test(id||''))throw new ConnectionError('access_revoked','This assistant connection is not valid.');return path.join(directory,id+'.json');};
@@ -59,7 +65,7 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
   // Grants written by the single-phone gateway name their phone directly.
   for(const name of fs.readdirSync(directory))if(/^grant_[a-f0-9]{32}\.json$/.test(name)){const row=readJson(path.join(directory,name),null);if(row?.phoneId)adopt(row.ownerId,row.phoneId);}
   if(adopted)saveDevices();
-  if(vault)for(const id of Object.keys(devices))try{readPhoneFile(id);}catch{}
+  for(const id of Object.keys(devices))try{readPhoneFile(id);}catch{}
 
   const readGrant=id=>{const file=grantFile(id);if(!fs.existsSync(file)||fs.existsSync(file+'.revoked'))return null;const row=readJson(file,null);if(!row)return null;
     // Older grants named one phone and had no access list. They keep working with every device of that owner.
@@ -204,8 +210,19 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
     /** The device whose link carries this agent identity, with the shared link key. The phone proves possession of that key to manage its owner's account. */
     deviceByAgent(agentId) {
       if(!/^agt_[A-Za-z0-9_-]{8,64}$/.test(agentId||''))return null;
+      const indexed=agentIndex.get(agentId);
+      if(indexed&&devices[indexed]){
+        const config=readPhoneFile(indexed);
+        if(config?.agentId===agentId){
+          const linkKey=config?.links?.[config.device]?.linkKey;
+          if(!linkKey||!devices[indexed].ownerId)return null;
+          return {device:publicDevice(indexed,devices[indexed]),ownerId:devices[indexed].ownerId,linkKey};
+        }
+        agentIndex.delete(agentId);
+      }
       for(const [id,row] of Object.entries(devices)){
         const raw=readJson(phoneFile(id),null);
+        if(raw?.agentId)agentIndex.set(raw.agentId,id);
         if(raw?.agentId!==agentId)continue;
         const config=readPhoneFile(id);
         const linkKey=config?.links?.[config.device]?.linkKey;
@@ -221,29 +238,37 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
       if(nameTaken(ownerId,name,deviceId))throw new ConnectionError('invalid_request','Another device already uses that name.');
       markLink(deviceId,{name:name.trim()});return publicDevice(deviceId,devices[deviceId]);
     },
-    remove(ownerId,deviceId) {
+    async remove(ownerId,deviceId) {
       const device=findOwned(ownerId,deviceId);if(!device||device.id!==deviceId)throw new ConnectionError('unknown_device','Device not found.');
       let config=null;try{config=readPhoneFile(deviceId);}catch{}
+      dropAgentIndex(deviceId);
       delete devices[deviceId];probeCache.delete(deviceId);lanCache.delete(deviceId);routes.delete(deviceId);saveDevices();fs.rmSync(phoneFile(deviceId),{force:true});
       for(const id of grantIds()){const row=readGrant(id);if(row&&Array.isArray(row.access)&&row.access.includes(deviceId)){row.access=row.access.filter(x=>x!==deviceId);writeGrant(id,row);}}
       if(config?.relayUrl&&config?.apiKey&&String(config.apiKey).startsWith('bsc_')){
-        void fetchImpl(relayBase(config)+'/v1/connection',{method:'DELETE',headers:{Authorization:'Bearer '+config.apiKey},signal:AbortSignal.timeout(5000)}).catch(()=>{});
+        try{await fetchImpl(relayBase(config)+'/v1/connection',{method:'DELETE',headers:{Authorization:'Bearer '+config.apiKey},signal:AbortSignal.timeout(5000)});}catch{}
       }
     },
     /** Revoke all grants and delete all devices/links for an owner (account deletion). */
-    removeAllForOwner(ownerId) {
+    async removeAllForOwner(ownerId) {
       if(!OWNER_ID.test(ownerId||''))return {grantIds:[],deviceIds:[]};
       const ownedGrants=grantIds().filter(id=>readGrant(id)?.ownerId===ownerId);
-      for(const id of ownedGrants){this.revoke(id);work.delete(id);}
+      for(const id of ownedGrants){
+        fs.rmSync(grantFile(id),{force:true});
+        fs.rmSync(grantFile(id)+'.revoked',{force:true});
+        work.delete(id);
+      }
       const ownedDevices=ownerDevices(ownerId).map(d=>d.id);
+      const revokes=[];
       for(const deviceId of ownedDevices){
         let config=null;try{config=readPhoneFile(deviceId);}catch{}
+        dropAgentIndex(deviceId);
         delete devices[deviceId];probeCache.delete(deviceId);lanCache.delete(deviceId);routes.delete(deviceId);fs.rmSync(phoneFile(deviceId),{force:true});
         if(config?.relayUrl&&config?.apiKey&&String(config.apiKey).startsWith('bsc_')){
-          void fetchImpl(relayBase(config)+'/v1/connection',{method:'DELETE',headers:{Authorization:'Bearer '+config.apiKey},signal:AbortSignal.timeout(5000)}).catch(()=>{});
+          revokes.push(fetchImpl(relayBase(config)+'/v1/connection',{method:'DELETE',headers:{Authorization:'Bearer '+config.apiKey},signal:AbortSignal.timeout(5000)}).catch(()=>{}));
         }
       }
       if(ownedDevices.length)saveDevices();
+      if(revokes.length)await Promise.all(revokes);
       return {grantIds:ownedGrants,deviceIds:ownedDevices};
     },
     async status(grantId,ref) {
@@ -292,7 +317,8 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
       if(deviceId&&(!ownerId||!devices[deviceId]||devices[deviceId].ownerId!==ownerId))throw new ConnectionError('unknown_device','Device not found.');
       if(ownerId&&!deviceId&&ownerDevices(ownerId).length>=10)throw new ConnectionError('busy','This account already has ten devices. Remove one first.');
       const label=deviceId?devices[deviceId].name:uniqueName(ownerId,name);
-      const pairing=await begin({relayUrl,clientName:ownerId?'Android Backstage':clientName,name:label});
+      const extraHeaders=relayInternalToken&&ownerId?{'x-backstage-internal-key':relayInternalToken,'x-backstage-owner':ownerId}:null;
+      const pairing=await begin({relayUrl,transportRelayUrl:relayInternalUrl||null,extraHeaders,clientName:ownerId?'Android Backstage':clientName,name:label});
       const id='grant_'+crypto.randomBytes(16).toString('hex');
       let saved=false,resultId=id;
       return {clientName,code:pairing.code,link:pairing.link,expiresAt:pairing.expiresAt,cancel:pairing.cancel,deviceName:label,

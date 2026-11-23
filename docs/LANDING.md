@@ -49,9 +49,7 @@ installed.
 display. You keep scrolling. Audio still plays from the phone, so "play this
 song" works without you seeing anything.
 
-**Can the relay (or you) see my commands?** No. Linking runs a
-password-authenticated key exchange between your agent and your phone; the
-relay never has the key. It sees device names, timing, and sizes; nothing else.
+**Can the relay (or you) see my commands?** With the Local E2EE Bridge or CLI, no: your own computer holds the link key from SPAKE2 pairing, and the relay forwards opaque AES-256-GCM ciphertext only (seeing device names, timing, and sizes). With the hosted MCP server (`relay.android-backstage.com/work/mcp`) used by cloud assistants like ChatGPT and Claude, the hosted gateway holds the sealed link key and terminates the envelope on your behalf with zero data retention (no persistent tool history; temporary files live in RAM/short-lived storage). See `docs/PRIVACY-BOUNDARY.md`.
 
 **What Android version?** 11 or newer.
 

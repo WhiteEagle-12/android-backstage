@@ -17,30 +17,30 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Keeps Wireless debugging on, without Android's "Allow wireless debugging on this
- * network?" dialog, on every access point of the owner's networks.
+ * Keeps Wireless debugging on without re-prompting on multi-AP access points of
+ * password-protected networks the owner has already approved once.
  *
- * Android turns Wireless debugging off whenever the phone moves to another access
- * point and asks again for each one it has not trusted. While this daemon runs it
- * holds MANAGE_DEBUGGING, so on each such change it approves the new access point
- * (and nearby ones of the same networks) the way the dialog's "Always allow" button
- * would. The app relaunches the daemon over Wireless debugging; it reads the trusted
- * list published here so it never turns Wireless debugging on where Android would ask.
+ * Security boundary:
+ * - Only SSIDs explicitly approved by the owner (learned when Wireless debugging is
+ *   already active and trusted on that network) are eligible. Arbitrary saved Wi-Fi
+ *   networks (hotels, offices, cafes) and open/OWE networks are never auto-approved.
+ * - Only the currently connected, WPA-authenticated BSSID is approved; nearby scan
+ *   results are never pre-approved by SSID name (prevents evil-twin BSSID pre-trust).
+ * - Published wifi-trust.json is authenticated with HMAC-SHA256 using localToken so
+ *   apps with external storage access cannot forge trusted BSSIDs.
  */
 public final class WifiTrust {
     private static final long TICK_MS = 3_000L;
     private static final long SAVED_REFRESH_MS = 10 * 60_000L;
-    private static final long PRIME_DELAY_MS = 60_000L;
 
     private final String packageName;
+    private final String localToken;
     private final Path stateFile = Paths.get(Starter.DIR, "wifi-trust.json");
     private final Set<String> learned = new LinkedHashSet<>();
     private Map<String, Boolean> saved = new LinkedHashMap<>();
     private Set<String> trusted = new LinkedHashSet<>();
     private long savedAt;
     private long trustedAt;
-    private long startedAt;
-    private boolean primed;
     private String attemptBssid;
     private long attemptAt;
     private int failures;
@@ -52,12 +52,16 @@ public final class WifiTrust {
     private Thread thread;
 
     public WifiTrust(String packageName) {
+        this(packageName, "");
+    }
+
+    public WifiTrust(String packageName, String localToken) {
         this.packageName = packageName == null || packageName.isBlank() ? com.deviceagent.app.BuildInfo.DEFAULT_PACKAGE : packageName;
+        this.localToken = localToken == null ? "" : localToken;
     }
 
     public synchronized void start() {
         if (thread != null) return;
-        startedAt = System.currentTimeMillis();
         loadLearned();
         thread = new Thread(this::run, "backstage-wifi-trust");
         thread.setDaemon(true);
@@ -99,18 +103,22 @@ public final class WifiTrust {
         if (!wifi.connected() || nowPort == -2) return;
         boolean eligible = WifiTrustRules.eligible(wifi.ssid, saved, learned);
         if (nowPort > 0) {
-            // On and trusted: the owner approved this network at least once.
-            if (trusted.contains(wifi.bssid) && wifi.ssid != null && learned.add(wifi.ssid)) {
+            // On and trusted: the owner explicitly approved this secured network at least once.
+            if (trusted.contains(wifi.bssid)
+                    && wifi.ssid != null
+                    && !wifi.ssid.isEmpty()
+                    && !Boolean.FALSE.equals(saved.get(wifi.ssid))
+                    && learned.add(wifi.ssid)) {
                 saveLearned();
-                Lifeline.event("learned trusted network \"" + wifi.ssid + "\"");
+                Lifeline.event("learned owner-approved network \"" + wifi.ssid + "\"");
+                publish();
             }
-            if (!primed && eligible && now - startedAt > PRIME_DELAY_MS) prime(wifi);
             return;
         }
         if (!eligible) {
             if (!wifi.bssid.equals(skippedBssid)) {
                 skippedBssid = wifi.bssid;
-                Lifeline.event("not approving Wireless debugging on \"" + wifi.ssid + "\": not a saved password-protected network");
+                Lifeline.event("not approving Wireless debugging on \"" + wifi.ssid + "\": network not owner-approved");
                 publish();
             }
             return;
@@ -119,41 +127,12 @@ public final class WifiTrust {
         approve(wifi, "Wireless debugging was off");
     }
 
-    /**
-     * Once per daemon start: approve nearby access points of the owner's networks in
-     * advance. Android only accepts approvals while Wireless debugging is off, so this
-     * briefly turns it off; USB debugging keeps adbd (and this daemon) running.
-     */
-    private void prime(SystemBinders.Wifi wifi) {
-        primed = true;
-        List<String> pending = WifiTrustRules.neighborsToTrust(scan(), saved, learned, trusted, wifi.bssid, 40);
-        if (pending.isEmpty()) {
-            Lifeline.event("advance approval: every nearby access point of the owner's networks is already trusted");
-            return;
-        }
-        if (!"1".equals(text(LocalShell.run("settings get global adb_enabled", null, 4_000L)))) {
-            Lifeline.event("skipping advance approval: USB debugging is off, so turning Wireless debugging off could stop adbd");
-            return;
-        }
-        LocalShell.run("settings put global adb_wifi_enabled 0", null, 4_000L);
-        for (int i = 0; i < 20 && SystemBinders.adbWirelessPort() > 0; i++) sleepQuietly(250L);
-        approve(SystemBinders.wifi(), "advance approval of " + pending.size() + " nearby access points");
-    }
-
     private void approve(SystemBinders.Wifi wifi, String reason) {
         if (!wifi.connected()) return;
         attemptBssid = wifi.bssid;
         attemptAt = System.currentTimeMillis();
-        List<String> neighbors = WifiTrustRules.neighborsToTrust(scan(), saved, learned, trusted, wifi.bssid, 40);
-        int added = 0;
-        for (String bssid : neighbors) {
-            if (SystemBinders.allowWirelessDebugging(bssid)) {
-                trusted.add(bssid);
-                added++;
-            }
-        }
-        // Android appends to its trust list on every approval, even for a known access point.
-        // Where it already trusts this one, switching the setting on is silent and adds nothing.
+        // Approve only the currently connected, authenticated BSSID (never pre-approve
+        // unauthenticated neighbor BSSIDs from scan results).
         boolean known = trusted.contains(wifi.bssid);
         boolean asked = known
                 ? LocalShell.run("settings put global adb_wifi_enabled 1", null, 4_000L).getInt("exit", -1) == 0
@@ -163,16 +142,12 @@ public final class WifiTrust {
         if (asked) trusted.add(wifi.bssid);
         boolean on = nowPort > 0;
         failures = on ? 0 : failures + 1;
-        approvedCount += added + (asked && !known ? 1 : 0);
-        lastAction = (on ? (known ? "re-enabled on trusted " : "approved ") : "could not approve ") + wifi + " (" + reason + "; " + added + " nearby access points approved in advance)";
+        approvedCount += (asked && !known ? 1 : 0);
+        lastAction = (on ? (known ? "re-enabled on trusted " : "approved ") : "could not approve ") + wifi + " (" + reason + ")";
         Lifeline.event(lastAction + (on ? ", port " + nowPort : ", attempt " + failures));
         port = nowPort;
         trustedAt = System.currentTimeMillis() - SAVED_REFRESH_MS + 3_000L;
         publish();
-    }
-
-    private List<WifiTrustRules.Scan> scan() {
-        return WifiTrustRules.scanResults(text(LocalShell.run("cmd wifi list-scan-results", null, 6_000L)));
     }
 
     private void refreshSaved() {
@@ -194,12 +169,14 @@ public final class WifiTrust {
             Path dir = Paths.get("/storage/emulated/0/Android/data", packageName, "files");
             if (!Files.isDirectory(dir)) return;
             List<String> eligible = new ArrayList<>();
-            for (Map.Entry<String, Boolean> row : saved.entrySet()) if (Boolean.TRUE.equals(row.getValue())) eligible.add(row.getKey());
-            for (String ssid : learned) if (!eligible.contains(ssid)) eligible.add(ssid);
+            for (String ssid : learned) {
+                if (!Boolean.FALSE.equals(saved.get(ssid)) && !eligible.contains(ssid)) eligible.add(ssid);
+            }
             Map<String, Object> out = new LinkedHashMap<>();
             out.put("updatedAt", System.currentTimeMillis());
             out.put("trustedBssids", new ArrayList<>(trusted));
             out.put("eligibleSsids", eligible);
+            out.put("mac", WifiTrustRules.signTrustedBssids(trusted, localToken));
             Path tmp = dir.resolve("wifi-trust.json.tmp");
             Files.write(tmp, Json.stringify(out).getBytes(StandardCharsets.UTF_8));
             tmp.toFile().setReadable(true, false);

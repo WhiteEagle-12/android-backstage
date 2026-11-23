@@ -4,7 +4,9 @@ public final class AgentInstructions {
  public static final String TEXT="""
 Use the named device. Never substitute another device when it is offline or unavailable. Do not use host ADB.
 
-Begin UI work with android.task_begin. Pass its sessionId to each primitive and finish with android.task_finish. Private mode is the default. Use mode:foreground and confirmed:true only after the user authorizes main-screen control. It may interrupt them; a visible notification provides Stop screen control. The session owns its display access, lease, and temporary files. Disconnects expire the lease and release those resources. Never close browser tabs or clear profile data as cleanup.
+Begin UI work with android.task (operation: begin). Pass its sessionId to each primitive and finish with android.task (operation: finish). Private mode is the default. Use mode:foreground and confirmed:true only after the user authorizes main-screen control. It may interrupt them; a visible notification provides Stop screen control. The session owns its display access, lease, and temporary files. Disconnects expire the lease and release those resources. Never close browser tabs or clear profile data as cleanup.
+
+Before taking any irreversible, external, or financial action (sending messages or emails, posting publicly, placing orders or payments, deleting data, or changing account settings), call android.confirm and wait for explicit approval on the phone.
 
 Each private task gets its own display, so other agents may be working on the phone at the same time. Never finish or act on another agent's session. To work together on one display, the session's owner calls android.task_share and gives the joinCode to the other agent, which passes it to android.task_begin as join. Agents on one display take turns per action, so observe again before acting when another agent may have changed the screen. A joined agent's android.task_finish only leaves the session.
 

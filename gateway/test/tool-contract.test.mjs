@@ -63,9 +63,10 @@ test('validation errors provide field paths and valid examples without echoing r
  for(const preset of ['__proto__','constructor','unknown'])assert.ok(gesture(exampleArguments('android_gesture',{preset})));
 });
 test('consolidated tool surface preserves capabilities and removes redundant entry points',()=>{
- const names=new Set(catalogue.map(t=>t.name));assert.equal(names.size,catalogue.length);assert.equal(catalogue.length,23);assert.ok(names.has('android_artifact'));
+ const names=new Set(catalogue.map(t=>t.name));assert.equal(names.size,catalogue.length);assert.equal(catalogue.length,22);assert.ok(names.has('android_artifact'));assert.ok(!names.has('android_shell'));
  for(const name of ['inspect','ui_tree','browser','open_inspect','vd_open','launch','settings','screenshot','vd_screenshot','tap_text','long_press','swipe','drag','pinch','multi_touch','vd_start','vd_stop','reserve','release','vd_wake','vd_status','task_status','install_url','qa_launch','crashes','status','getprop','dumpsys','ls','battery','device_summary','read_batch','grant','stop','uninstall','broadcast','instrument','self_update','help','apps','package_info','task_begin','task_inspect','task_finish','task_share','task_list','handoff','record','pull','push','fetch','scroll_until','clipboard','media','location','device_control','audio','artifact_begin','artifact_status','artifact_delete'])assert.ok(!names.has('android_'+name),name);
- for(const name of ['task','observe','open','tap','type','key','gesture','scroll','wait','sequence','confirm','notification','personal','devices','shell','file','install','packages','logs','events','device','job_status','artifact'])assert.ok(names.has('android_'+name),name);
+ for(const name of ['task','observe','open','tap','type','key','gesture','scroll','wait','sequence','confirm','notification','personal','devices','file','install','packages','logs','events','device','job_status','artifact'])assert.ok(names.has('android_'+name),name);
+ for(const tool of catalogue){assert.equal(typeof tool.annotations?.readOnlyHint,'boolean',tool.name);assert.equal(typeof tool.annotations?.destructiveHint,'boolean',tool.name);}
  assert.ok(!mcpTools({strict:true}).some(t=>t.name==='android.maintenance'));assert.ok(mcpTools({developer:true}).some(t=>t.name==='android.maintenance'));
  for(const text of [SERVER_INSTRUCTIONS,...catalogue.map(t=>t.description)])for(const [name] of text.matchAll(/\bandroid_[a-z_]+\b/g))assert.ok(names.has(name),name);
 });

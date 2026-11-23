@@ -3,16 +3,23 @@ import {Spake2, ALICE_NAME, BOB_NAME, randomCodeChars} from './spake2.mjs';
 import {linkKey, confirmA, confirmB, b64url, unb64url, timingSafeEqualBuf} from './crypto.mjs';
 
 // Pairing secrets and link keys stay in this process, never in relay URLs.
-export async function beginConnection({relayUrl, name='phone', clientName='Assistant', fetchImpl=fetch}) {
+export async function beginConnection({relayUrl, transportRelayUrl=null, extraHeaders=null, name='phone', clientName='Assistant', fetchImpl=fetch}) {
   const origin = new URL(relayUrl);
   if (origin.username || origin.password || origin.search || origin.hash || origin.pathname !== '/' ||
       (origin.protocol !== 'https:' && !(origin.protocol === 'http:' && ['127.0.0.1','localhost','[::1]'].includes(origin.hostname))))
     throw new Error('Use an HTTPS relay address.');
   relayUrl = origin.origin;
+  let fetchBase = relayUrl;
+  if (transportRelayUrl) {
+    const t = new URL(transportRelayUrl);
+    if (t.username || t.password || t.search || t.hash || t.pathname !== '/' || !['http:','https:'].includes(t.protocol))
+      throw new Error('Invalid internal relay address.');
+    fetchBase = t.origin;
+  }
   let token;
   const request = async (route, method='GET', body) => {
-    const response = await fetchImpl(relayUrl+route, {method, redirect:'error', signal:AbortSignal.timeout(30000),
-      headers:{'Content-Type':'application/json', ...(token ? {Authorization:'Bearer '+token} : {})},
+    const response = await fetchImpl(fetchBase+route, {method, redirect:'error', signal:AbortSignal.timeout(30000),
+      headers:{'Content-Type':'application/json', ...(extraHeaders || {}), ...(token ? {Authorization:'Bearer '+token} : {})},
       ...(body ? {body:JSON.stringify(body)} : {})});
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not connect. Try again.');

@@ -27,7 +27,7 @@ describe("bootstrap", () => {
       assert.equal(health.status, 200);
       assert.equal(health.body.ok, true);
       assert.equal(health.body.service, "backstage-relay");
-      assert.equal(health.body.version, "1.1.0-alpha1");
+      assert.equal(health.body.version, "2.0.0");
       assert.equal(health.body.devicesOnline, 0);
       const me = await httpJson(`${url}/v1/me`, { headers: apiHeaders(apiKey) });
       assert.equal(me.body.accountId, "default");

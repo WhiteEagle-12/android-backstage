@@ -9,7 +9,7 @@ import {advertisedSchema} from './advertised-schema.mjs';
 import {resultText} from './result-preview.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-export const VERSION = "2.0.0-dev.7";
+export const VERSION = "2.0.0";
 export const INSTRUCTIONS = fs.readFileSync(path.join(__dirname, "instructions.txt"), "utf8").trim();
 
 // Leave time for a mobile network to deliver both the request and its receipt.
@@ -30,8 +30,20 @@ export function budgetMs(name) {
 export const CONTRACT = JSON.parse(fs.readFileSync(path.join(__dirname, "tool-contract.json"), "utf8"));
 export const TOOLS = CONTRACT.map(t=>[t.name,t.description,t.inputSchema.properties]);
 export function toolSchema(args) { return {type:'object',properties:args,additionalProperties:false}; }
+const DESTRUCTIVE_TOOLS = new Set(['android.shell', 'android.install', 'android.file', 'android.developer', 'android.maintenance', 'android.device', 'android.open', 'android.tap', 'android.type', 'android.key', 'android.gesture', 'android.sequence', 'android.notification']);
+const OPEN_WORLD_TOOLS = new Set(['android.open', 'android.file', 'android.install', 'android.events', 'android.shell']);
+export function toolAnnotations(name, readOnly = false) {
+  const dotName = String(name || '').replace(/^android_/, 'android.');
+  const ro = Boolean(readOnly) || ['android.observe', 'android.wait', 'android.packages', 'android.logs', 'android.devices', 'android.job_status', 'android.personal'].includes(dotName);
+  return {
+    readOnlyHint: ro,
+    destructiveHint: ro ? false : DESTRUCTIVE_TOOLS.has(dotName),
+    idempotentHint: ro || ['android.wait', 'android.devices', 'android.job_status'].includes(dotName),
+    openWorldHint: OPEN_WORLD_TOOLS.has(dotName),
+  };
+}
 export function mcpTools({developer=false,strict=false}={}) {
-  return CONTRACT.filter(t=>developer||!t.surface).map(({name,description,inputSchema})=>({name,description,inputSchema:strict?inputSchema:advertisedSchema(inputSchema,inputSchema,{toolName:name})}));
+  return CONTRACT.filter(t=>developer||!t.surface).map(({name,description,inputSchema,readOnly})=>({name,description,inputSchema:strict?inputSchema:advertisedSchema(inputSchema,inputSchema,{toolName:name}),annotations:toolAnnotations(name,readOnly)}));
 }
 
 export function asToolResult(payload, isError = false) {

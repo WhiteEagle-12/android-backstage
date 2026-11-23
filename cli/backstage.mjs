@@ -140,7 +140,7 @@ function saveFileConfig(filePath, data, cfg = null) {
 function resolveConfig(flags) {
   const filePath = configPath(flags);
   const file = loadFileConfig(filePath);
-  const fallbackRelay = IN_REPO ? "" : DEFAULT_PUBLIC_RELAY;
+  const fallbackRelay = DEFAULT_PUBLIC_RELAY;
   return {
     filePath,
     file,
@@ -200,12 +200,17 @@ async function readJson(res) {
   }
 }
 
-async function api(cfg, pathname, { method = "GET", body, headers = {}, timeoutMs = 30_000, rawBody } = {}) {
+function effectiveApiKey(cfg, deviceName = cfg.device) {
+  return (deviceName && cfg.links?.[deviceName]?.apiKey) || cfg.apiKey || "";
+}
+
+async function api(cfg, pathname, { method = "GET", body, headers = {}, timeoutMs = 30_000, rawBody, apiKey = null } = {}) {
   if (!cfg.relayUrl) usage("missing relay URL (set --relay-url, BACKSTAGE_RELAY_URL, or config/backstage.json)");
   // A host-local relay address (the hosted gateway's) is used for transport only, never saved.
   const url = `${cfg.transportRelayUrl || cfg.relayUrl}${pathname}`;
   const hdrs = { ...headers };
-  if (cfg.apiKey && !hdrs.authorization) hdrs.authorization = `Bearer ${cfg.apiKey}`;
+  const token = apiKey || effectiveApiKey(cfg);
+  if (token && !hdrs.authorization) hdrs.authorization = `Bearer ${token}`;
   let payload = rawBody;
   if (payload == null && body != null) {
     hdrs["content-type"] = hdrs["content-type"] || "application/json";
@@ -306,7 +311,7 @@ function sealCall(cfg, tool, args, { device, callId: reuse, deadline } = {}) {
   });
   const n = String(link.callCounter || Date.now());
   const key = callKey(unb64url(link.linkKey));
-  const envelope = sealEnvelopeV2({ key, from: ensureAgentId(cfg), n, plaintext });
+  const envelope = sealEnvelopeV2({ key, from: link.agentId || ensureAgentId(cfg), n, plaintext });
   link.callCounter = nextCounter(n);
   saveLink(cfg, name, link);
   return {name, tool, callId, envelope, relayTimeout: budget + 5000, deadline: Date.now() + budget + 5000};
@@ -514,7 +519,7 @@ async function encryptedCallLocked(cfg, tool, args, { device } = {}) {
   });
   const n = String(link.callCounter || Date.now());
   const key = callKey(unb64url(link.linkKey));
-  const envelope = sealEnvelopeV2({ key, from: ensureAgentId(cfg), n, plaintext });
+  const envelope = sealEnvelopeV2({ key, from: link.agentId || ensureAgentId(cfg), n, plaintext });
   link.callCounter = nextCounter(n);
   saveLink(cfg, name, link);
 
@@ -661,16 +666,28 @@ async function cmdDevices(cfg) {
 }
 
 async function cmdPair(cfg, flags) {
-  if (!cfg.apiKey) {
-    const connection = await beginConnection({relayUrl:cfg.relayUrl, name:flags.name || cfg.device || 'phone', clientName:flags.clientName || 'Assistant'});
+  if (!cfg.apiKey || String(cfg.apiKey).startsWith("bsc_")) {
+    const requestedName = flags.name || (!Object.keys(cfg.links || {}).length ? (cfg.device || 'phone') : 'phone');
+    const connection = await beginConnection({relayUrl:cfg.relayUrl, name:requestedName, clientName:flags.clientName || 'Assistant'});
     console.log(`Open Android Backstage and enter ${connection.code}`);
     console.log(`Open on your phone: ${connection.phoneLink}`);
     console.log('Waiting for approval on your phone…');
     for (;;) {
       const linked = await connection.poll();
       if (!linked) continue;
-      persistConfig(cfg,linked);
-      printJson({ok:true,name:linked.device,deviceId:linked.links[linked.device].deviceId,agentId:linked.agentId});
+      const devName = linked.device;
+      const mergedLinks = {
+        ...(cfg.links || {}),
+        [devName]: { ...linked.links[devName], apiKey: linked.apiKey, agentId: linked.agentId },
+      };
+      persistConfig(cfg, {
+        relayUrl: linked.relayUrl,
+        apiKey: cfg.apiKey || linked.apiKey,
+        agentId: cfg.agentId || linked.agentId,
+        device: cfg.device || devName,
+        links: mergedLinks,
+      });
+      printJson({ok:true,name:devName,deviceId:linked.links[devName].deviceId,agentId:linked.agentId});
       return;
     }
   }
@@ -799,12 +816,17 @@ async function cmdRename(cfg, oldName, newName) {
 async function cmdForget(cfg, name) {
   await requireApiKey(cfg);
   if (!name) usage("backstage forget <name>");
-  const { status, body } = await api(cfg, `/v1/devices/${encodeURIComponent(name)}`, { method: "DELETE" });
+  const devKey = cfg.links?.[name]?.apiKey || cfg.apiKey;
+  const isConn = String(devKey || "").startsWith("bsc_");
+  const { status, body } = isConn
+    ? await api(cfg, "/v1/connection", { method: "DELETE", apiKey: devKey })
+    : await api(cfg, `/v1/devices/${encodeURIComponent(name)}`, { method: "DELETE" });
   if (status !== 200) dieTool(body.error || `HTTP ${status}`, body);
   if (cfg.links?.[name]) {
     const links = { ...cfg.links };
     delete links[name];
-    persistConfig(cfg, { links });
+    const remaining = Object.keys(links);
+    persistConfig(cfg, { links, device: cfg.device === name ? (remaining[0] || "") : cfg.device });
   }
   printJson(body);
 }

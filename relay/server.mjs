@@ -20,7 +20,7 @@ import { createLearnResults, LEARN_RESULT_MAX_BODY_BYTES } from "./learn-results
 import { resolvePublicWebhook, deliverWebhook } from "./webhook.mjs";
 import { createR2FromEnv } from "./r2.mjs";
 
-export const VERSION = "1.1.0-alpha1";
+export const VERSION = "2.0.0";
 const MAX_ENVELOPE = 4 * 1024 * 1024;
 const CALL_TIMEOUT_DEFAULT = 30_000;
 const CALL_TIMEOUT_MIN = 1_000;
@@ -262,11 +262,11 @@ export async function createRelay(opts = {}) {
   // A phone that polled recently is usually mid-reconnect (Wi-Fi roam, daemon relaunch).
   // Queue its jobs instead of refusing them; they still expire at their own deadline.
   const reconnectGraceMs = Math.max(offlineMs, opts.reconnectGraceMs ?? Number(process.env.RELAY_RECONNECT_GRACE_MS || 180_000));
-  const maxFileMb = opts.maxFileMb ?? Number(process.env.RELAY_MAX_FILE_MB || 512);
+  const zeroRetention = opts.zeroRetention ?? (process.env.RELAY_ZERO_RETENTION === "1");
+  const maxFileMb = opts.maxFileMb ?? Number(process.env.RELAY_MAX_FILE_MB || (zeroRetention ? 128 : 512));
   const maxFileBytes = opts.maxFileBytes ?? maxFileMb * 1024 * 1024;
   const pairPollMs = Math.min(PAIR_POLL_MAX, opts.pairPollMs ?? PAIR_POLL_MAX);
   const enableLearn = opts.enableLearn ?? (process.env.RELAY_ENABLE_LEARN === "1");
-  const zeroRetention = opts.zeroRetention ?? (process.env.RELAY_ZERO_RETENTION === "1");
   const filesDir = opts.filesDir ?? (process.env.RELAY_FILES_DIR ? path.resolve(process.env.RELAY_FILES_DIR) : null);
   const r2 = opts.r2 !== undefined ? opts.r2 : createR2FromEnv();
   const webhookLookup = opts.webhookLookup;
@@ -279,16 +279,26 @@ export async function createRelay(opts = {}) {
   const queue = createQueue({
     dataDir: zeroRetention ? null : dataDir,
     retentionMs: zeroRetention ? 5 * 60_000 : 86_400_000,
+    quotaBytes: zeroRetention ? 96 * 1024 * 1024 : 512 * 1024 * 1024,
   });
   const files = createFiles({
     dataDir,
     filesDir,
     maxBytes: maxFileBytes,
+    quotaBytes: zeroRetention ? 160 * 1024 * 1024 : 2 * 1024 * 1024 * 1024,
+    maxAccountBytes: zeroRetention ? 128 * 1024 * 1024 : 512 * 1024 * 1024,
     ttlMs: zeroRetention ? 5 * 60_000 : 15 * 60_000,
     shred: zeroRetention,
   });
   files.startSweeper();
-  const uploads = createUploads(dataDir, {maxBytes:maxFileBytes});
+  const uploads = createUploads(dataDir, {
+    uploadsDir: filesDir ? path.join(filesDir, "uploads") : null,
+    maxBytes: maxFileBytes,
+    quotaBytes: zeroRetention ? 160 * 1024 * 1024 : 2 * 1024 * 1024 * 1024,
+    maxAccountBytes: zeroRetention ? 128 * 1024 * 1024 : 512 * 1024 * 1024,
+    ttlMs: zeroRetention ? 5 * 60_000 : 15 * 60_000,
+    shred: zeroRetention,
+  });
   const learnResults = enableLearn ? createLearnResults(dataDir, { log }) : null;
   const rates = new Map();
   const rateTimer = setInterval(() => rates.clear(), 60000); rateTimer.unref();
@@ -307,10 +317,31 @@ export async function createRelay(opts = {}) {
   const eventStreams = new Map();
   const webhooksFile = path.join(dataDir, "webhooks.json");
   let webhooks = {};
-  try { if (fs.existsSync(webhooksFile)) webhooks = JSON.parse(fs.readFileSync(webhooksFile, "utf8")); } catch {}
+  if (!zeroRetention) {
+    try { if (fs.existsSync(webhooksFile)) webhooks = JSON.parse(fs.readFileSync(webhooksFile, "utf8")); } catch {}
+  } else {
+    try { fs.rmSync(webhooksFile, { force: true }); } catch {}
+  }
   let eventSeq = 0;
+  const eventRetentionMs = zeroRetention ? 5 * 60_000 : 10 * 60_000;
+  const eventTimer = setInterval(() => {
+    const cutoff = Date.now() - eventRetentionMs;
+    for (const [acctId, list] of eventsByAccount) {
+      while (list.length && list[0].time < cutoff) list.shift();
+      if (!list.length) eventsByAccount.delete(acctId);
+    }
+  }, 60_000);
+  eventTimer.unref?.();
 
+  function eventAccountId(account) {
+    if (!account.connection) return account.id;
+    return store.deviceById(account.deviceId)?.accountId || account.id;
+  }
+  function webhookKey(account) {
+    return account.connection ? `dev:${account.deviceId}` : account.id;
+  }
   function saveWebhooks() {
+    if (zeroRetention) return;
     try {
       fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
       fs.writeFileSync(webhooksFile, JSON.stringify(webhooks, null, 2) + "\n", { mode: 0o600 });
@@ -330,21 +361,20 @@ export async function createRelay(opts = {}) {
     };
     let list = eventsByAccount.get(accountId);
     if (!list) { list = []; eventsByAccount.set(accountId, list); }
-    if (zeroRetention) {
-      const cutoff = Date.now() - 10 * 60_000;
-      while (list.length && list[0].time < cutoff) list.shift();
-    }
+    const cutoff = Date.now() - eventRetentionMs;
+    while (list.length && list[0].time < cutoff) list.shift();
     list.push(entry);
     if (list.length > 200) list.splice(0, list.length - 200);
     const streams = eventStreams.get(accountId);
     if (streams) {
       const frame = `id: ${entry.seq}\nevent: ${entry.type}\ndata: ${JSON.stringify(entry)}\n\n`;
-      for (const stream of [...streams]) {
-        try { stream.write(frame); } catch { streams.delete(stream); }
+      for (const client of [...streams]) {
+        if (client.deviceId && client.deviceId !== device.id) continue;
+        try { client.res.write(frame); } catch { streams.delete(client); }
       }
     }
-    const hook = webhooks[accountId];
-    if (hook?.url) {
+    const targets = [webhooks[accountId], webhooks[`dev:${device.id}`]].filter((h) => h?.url);
+    for (const hook of targets) {
       const raw = JSON.stringify(entry);
       const headers = { "content-type": "application/json" };
       if (hook.secret) {
@@ -417,10 +447,14 @@ export async function createRelay(opts = {}) {
       const token=bearerToken(req);
       const principal=store.accountByKey(token)||store.deviceByToken(token)||store.connectionByKey(token);
       dashboard.observe(req,res,principal,url.pathname);
-      const rateKey = `${principal ? principal.id : ip}:${url.pathname.startsWith('/v1/pair/') ? 'pair' : 'api'}`;
+      const internalKey = String(req.headers["x-backstage-internal-key"] || "");
+      const internalOwner = String(req.headers["x-backstage-owner"] || "").slice(0, 80);
+      const internalAuthed = Boolean(adminToken && internalKey && hashesEqual(hashToken(internalKey), hashToken(adminToken)));
+      const pairSubject = internalAuthed && internalOwner ? `owner:${internalOwner}` : ip;
+      const rateKey = `${principal ? principal.id : pairSubject}:${url.pathname.startsWith('/v1/pair/') ? 'pair' : 'api'}`;
       const limit = url.pathname.startsWith('/v1/pair/') ? 120 : 3000;
       checkRate(rateKey, limit);
-      if (url.pathname === '/v1/pair/connect' && req.method === 'POST') checkRate(`${ip}:pair-connect`, 20);
+      if (url.pathname === '/v1/pair/connect' && req.method === 'POST') checkRate(`${pairSubject}:pair-connect`, 20);
       if (req.method === "OPTIONS") {
         if (enableLearn && url.pathname.startsWith("/v1/learn/")) {
           const headers = learnOriginHeaders(req, listenUrl, publicUrl, true);
@@ -529,13 +563,18 @@ export async function createRelay(opts = {}) {
           singleUse,
         });
         if (r2) {
-          const uploaded = await r2.uploadFile(entry.path, { ttlSec: Math.round((ttl ?? 900_000) / 1000) });
-          fs.rmSync(entry.path, { force: true });
-          json(res, 200, {
-            id: uploaded.id,
-            url: uploaded.url,
-            expiresAt: new Date(uploaded.expiresAt).toISOString(),
-          });
+          const defaultTtlMs = zeroRetention ? 300_000 : 900_000;
+          const effectiveTtlMs = zeroRetention ? Math.min(ttl ?? defaultTtlMs, 300_000) : (ttl ?? defaultTtlMs);
+          try {
+            const uploaded = await r2.uploadFile(entry.path, { ttlSec: Math.round(effectiveTtlMs / 1000) });
+            json(res, 200, {
+              id: uploaded.id,
+              url: uploaded.url,
+              expiresAt: new Date(uploaded.expiresAt).toISOString(),
+            });
+          } finally {
+            files.removeEntry(entry.id);
+          }
           return;
         }
         const base = publicBaseFromReq(req, listenUrl, publicUrl);
@@ -555,11 +594,16 @@ export async function createRelay(opts = {}) {
         };
         if (body.bootId && device.bootId && device.bootId !== body.bootId) queue.recoverDevice(device.id);
         if (body.bootId) patch.bootId = String(body.bootId).slice(0,100);
-        if (body.model != null) patch.model = body.model;
-        if (body.sdk != null) patch.sdk = body.sdk;
-        if (body.agentVersion != null) patch.agentVersion = body.agentVersion;
-        if (body.capabilities != null) patch.capabilities = body.capabilities;
-        if (body.lanAddresses != null) patch.lanAddresses = body.lanAddresses;
+        if (body.model != null) patch.model = String(body.model).slice(0, 128);
+        if (body.sdk != null && Number.isInteger(Number(body.sdk))) patch.sdk = Number(body.sdk);
+        if (body.agentVersion != null) patch.agentVersion = String(body.agentVersion).slice(0, 64);
+        if (body.capabilities != null) {
+          const capJson = JSON.stringify(body.capabilities);
+          if (capJson && capJson.length <= 4096) patch.capabilities = body.capabilities;
+        }
+        if (Array.isArray(body.lanAddresses)) {
+          patch.lanAddresses = body.lanAddresses.filter((a) => typeof a === "string" && a.length > 0 && a.length <= 64).slice(0, 8);
+        }
         // Phones that run several jobs at once say how many; older phones run one.
         patch.parallelJobs = queue.setLanes(device.id, body.parallelJobs);
 
@@ -627,7 +671,8 @@ export async function createRelay(opts = {}) {
         const since = Number(url.searchParams.get("since") || "0") || 0;
         const limit = Math.max(1, Math.min(100, Number(url.searchParams.get("limit") || "50") || 50));
         const devFilter = url.searchParams.get("device") || "";
-        const all = eventsByAccount.get(account.id) || [];
+        const scopeId = eventAccountId(account);
+        const all = eventsByAccount.get(scopeId) || [];
         const matched = all.filter((e) => e.seq > since
           && (!account.connection || e.deviceId === account.deviceId)
           && (!devFilter || e.device === devFilter || e.deviceId === devFilter));
@@ -639,41 +684,56 @@ export async function createRelay(opts = {}) {
 
       if (url.pathname === "/v1/events/stream" && req.method === "GET") {
         const account = requireAccount(req, store);
+        const scopeId = eventAccountId(account);
+        let totalStreams = 0;
+        for (const s of eventStreams.values()) totalStreams += s.size;
+        let streams = eventStreams.get(scopeId);
+        if (totalStreams >= 200 || (streams && streams.size >= 4)) throw new HttpError(429, "too many open event streams");
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
         res.write(": connected\n\n");
-        let streams = eventStreams.get(account.id);
-        if (!streams) { streams = new Set(); eventStreams.set(account.id, streams); }
-        streams.add(res);
-        req.on("close", () => streams.delete(res));
+        if (!streams) { streams = new Set(); eventStreams.set(scopeId, streams); }
+        const client = { res, deviceId: account.connection ? account.deviceId : null };
+        streams.add(client);
+        req.on("close", () => {
+          streams.delete(client);
+          if (!streams.size) eventStreams.delete(scopeId);
+        });
         return;
       }
 
       if (url.pathname === "/v1/events/webhooks" && ["GET", "POST", "DELETE"].includes(req.method)) {
         const account = requireAccount(req, store);
+        const key = webhookKey(account);
         if (req.method === "GET") {
-          const hook = webhooks[account.id];
+          const hook = webhooks[key];
           json(res, 200, { ok: true, webhook: hook ? { url: hook.url, hasSecret: Boolean(hook.secret) } : null });
           return;
         }
         if (req.method === "DELETE") {
-          delete webhooks[account.id];
+          delete webhooks[key];
           saveWebhooks();
           json(res, 200, { ok: true, webhook: null });
           return;
         }
         const body = parseJsonBody(await readBody(req, 8 * 1024));
         const { url: parsed } = await resolvePublicWebhook(body.url, { lookup: webhookLookup });
-        webhooks[account.id] = { url: parsed.toString(), secret: typeof body.secret === "string" ? body.secret.slice(0, 256) : "" };
+        webhooks[key] = { url: parsed.toString(), secret: typeof body.secret === "string" ? body.secret.slice(0, 256) : "" };
         saveWebhooks();
-        json(res, 200, { ok: true, webhook: { url: parsed.toString(), hasSecret: Boolean(webhooks[account.id].secret) } });
+        json(res, 200, { ok: true, webhook: { url: parsed.toString(), hasSecret: Boolean(webhooks[key].secret) } });
         return;
       }
 
       if (url.pathname === "/v1/connection" && req.method === "DELETE") {
         const account = requireAccount(req, store);
         if (!account.connection) throw new HttpError(400, "not a connection token");
+        const scopeId = eventAccountId(account);
+        delete webhooks[`dev:${account.deviceId}`];
+        saveWebhooks();
         const { droppedDeviceId } = store.revokeConnectionById(account.id);
-        if (droppedDeviceId) queue.dropDevice(droppedDeviceId);
+        if (droppedDeviceId) {
+          queue.dropDevice(droppedDeviceId);
+          eventsByAccount.delete(scopeId);
+        }
         json(res, 200, { ok: true, droppedDeviceId });
         return;
       }
@@ -794,7 +854,7 @@ export async function createRelay(opts = {}) {
         const body = parseJsonBody(await readBody(req));
         const name = String(body.name || 'phone').trim();
         if (!name || name.length > 80) throw new HttpError(400, "invalid connection name");
-        json(res, 200, store.createConnection(name, ip));
+        json(res, 200, store.createConnection(name, pairSubject));
         return;
       }
 
@@ -1023,8 +1083,10 @@ export async function createRelay(opts = {}) {
   async function close() {
     files.stopSweeper();
     uploads.close();
+    r2?.close?.();
     learnResults?.close();
     clearInterval(rateTimer);
+    clearInterval(eventTimer);
     queue.close();
     for (const list of pairWaiters.values()) {
       for (const waiter of list) {

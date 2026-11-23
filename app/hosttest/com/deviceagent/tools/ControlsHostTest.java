@@ -17,12 +17,11 @@ public final class ControlsHostTest {
         check(com.deviceagent.app.LocationAccess.callerAllowed(10123,10123));
         check(!com.deviceagent.app.LocationAccess.callerAllowed(10124,10123));
         check(!com.deviceagent.app.LocationAccess.callerAllowed(1000,10123));
-        check(com.deviceagent.app.LocationAccess.error(true,true,true,false,true)==null);
-        check(com.deviceagent.app.LocationAccess.error(true,true,false,true,true)==null);
-        check("location_permission_required".equals(com.deviceagent.app.LocationAccess.error(true,true,true,true,false)));
-        check("location_permission_required".equals(com.deviceagent.app.LocationAccess.error(true,true,false,false,true)));
-        check("location_service_unavailable".equals(com.deviceagent.app.LocationAccess.error(true,false,true,true,true)));
-        check("access_paused".equals(com.deviceagent.app.LocationAccess.error(false,true,true,true,true)));
+        check(com.deviceagent.app.LocationAccess.error(true,true,true,false)==null);
+        check(com.deviceagent.app.LocationAccess.error(true,true,false,true)==null);
+        check("location_permission_required".equals(com.deviceagent.app.LocationAccess.error(true,true,false,false)));
+        check("location_service_unavailable".equals(com.deviceagent.app.LocationAccess.error(true,false,true,true)));
+        check("access_paused".equals(com.deviceagent.app.LocationAccess.error(false,true,true,true)));
         check(LocationFix.limits(Map.of()).get("timeoutMs").equals(20000));
         check(LocationFix.limits(Map.of("timeoutMs",0)).get("timeoutMs").equals(0));
         rejects(()->LocationFix.limits(Map.of("timeoutMs",20001)));

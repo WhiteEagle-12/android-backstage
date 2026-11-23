@@ -136,7 +136,7 @@ final class PhoneSignIn {
                 preferences(app).edit().remove("ticket").remove("code").remove("linked").commit();callback.ready(result);
             } catch(Exception e){
                 if(e instanceof SimpleHttp.HttpException&&((SimpleHttp.HttpException)e).status==410)preferences(app).edit().remove("ticket").remove("code").remove("linked").commit();
-                callback.failed("Setup did not finish. Reopen Backstage to resume. If it has expired, sign in again with your saved passkey.");
+                callback.failed("Setup did not finish. Reopen Backstage to resume, or sign in again.");
             }
         },"backstage-enroll").start();
     }

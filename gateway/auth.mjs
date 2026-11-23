@@ -22,24 +22,50 @@ export function createAuth({ base, stateFile, approvalFile, connections, owners,
   const checkClient = req => {
     let id = req.body.client_id, secret = req.body.client_secret;
     if (req.headers.authorization?.startsWith('Basic ')) {
-      const raw = Buffer.from(req.headers.authorization.slice(6), 'base64').toString();
-      const split = raw.indexOf(':'); id = decodeURIComponent(raw.slice(0, split)); secret = decodeURIComponent(raw.slice(split+1));
+      try {
+        const raw = Buffer.from(req.headers.authorization.slice(6), 'base64').toString();
+        const split = raw.indexOf(':');
+        if (split <= 0) return null;
+        id = decodeURIComponent(raw.slice(0, split));
+        secret = decodeURIComponent(raw.slice(split+1));
+      } catch { return null; }
     }
     const client = Object.hasOwn(state.clients,id) ? state.clients[id] : null;
     if (!client || (client.secret && !equals(client.secret, digest(secret || '')))) return null;
+    client.lastUsedAt = now();
     return id;
   };
   const issue = row => {
     const token = random(), refresh = random();
     state.access[digest(token)] = {...row, audience:resource, scope:'phone:control', expires: now()+3600000};
-    state.refresh[digest(refresh)] = {...row, audience:resource, scope:'phone:control', expires: now()+30*86400000}; save();
+    state.refresh[digest(refresh)] = {...row, audience:resource, scope:'phone:control', expires: now()+30*86400000};
+    if (row.clientId && Object.hasOwn(state.clients, row.clientId)) state.clients[row.clientId].lastUsedAt = now();
+    save();
     return { access_token: token, token_type: 'Bearer', expires_in: 3600, refresh_token: refresh, scope: 'phone:control' };
+  };
+  const pruneClients = (force = false) => {
+    const t = now();
+    const referenced = new Set();
+    for (const key of ['codes','access','refresh']) for (const row of Object.values(state[key])) if (row?.clientId) referenced.add(row.clientId);
+    for (const row of pending.values()) if (row?.clientId) referenced.add(row.clientId);
+    let changed = false;
+    for (const [id, client] of Object.entries(state.clients)) {
+      if (referenced.has(id)) continue;
+      const expiredMeta = client.expires && client.expires <= t;
+      const age = t - (client.lastUsedAt || client.createdAt || 0);
+      if (expiredMeta || (force ? age >= 0 : (client.createdAt && age > 35 * 86400000))) {
+        delete state.clients[id];
+        changed = true;
+      }
+    }
+    if (changed) save();
   };
   const prune = () => {
     for (const key of ['codes','access','refresh']) for (const [id,row] of Object.entries(state[key])) if (row.expires <= now()) delete state[key][id];
     for (const [id,row] of pending) if (row.expires <= now()) pending.delete(id);
     for (const [id,row] of invitations) if (row.expires <= now()) invitations.delete(id);
     for (const [id,row] of rates) if (row.until <= now()) rates.delete(id);
+    pruneClients(false);
   };
   function routes(app) {
     app.use((req,res,next) => {
@@ -72,16 +98,17 @@ export function createAuth({ base, stateFile, approvalFile, connections, owners,
       if (hitRate('register-hr:' + req.ip, 15, 3600000)) return fail(res,'rate_limit_exceeded',429);
       const b = req.body, method = b.token_endpoint_auth_method || 'none';
       if (!['none','client_secret_post','client_secret_basic'].includes(method) || !Array.isArray(b.redirect_uris) || b.redirect_uris.length < 1 || b.redirect_uris.length > 4 || !b.redirect_uris.every(validRedirect)) return fail(res,'invalid_client_metadata');
+      if (Object.keys(state.clients).length >= 10000) pruneClients(true);
       if (Object.keys(state.clients).length >= 10000) return fail(res,'registration_limit',429);
       const id = random(), secret = method === 'none' ? null : random();
-      state.clients[id] = {name:typeof b.client_name === 'string' ? b.client_name.replace(/[\x00-\x1f\x7f]/g,'').slice(0,60) : 'Assistant',redirects:b.redirect_uris,secret:secret ? digest(secret) : null, method}; save();
+      state.clients[id] = {name:typeof b.client_name === 'string' ? b.client_name.replace(/[\x00-\x1f\x7f]/g,'').slice(0,60) : 'Assistant',redirects:b.redirect_uris,secret:secret ? digest(secret) : null, method, createdAt: now(), lastUsedAt: now()}; save();
       res.status(201).json({client_id:id,...(secret ? {client_secret:secret,client_secret_expires_at:0} : {}),redirect_uris:b.redirect_uris,token_endpoint_auth_method:method,grant_types:['authorization_code','refresh_token'],response_types:['code']});
     });
     app.get('/work/authorize', async (req,res) => {
       const q = req.query;
       if(typeof q.client_id!=='string')return fail(res,'invalid_client');
       if(q.client_id.startsWith('https://')&&(!Object.hasOwn(state.clients,q.client_id)||state.clients[q.client_id].expires<=now())){
-        try{if(Object.keys(state.clients).length>=10000)return fail(res,'registration_limit',429);state.clients[q.client_id]=await metadataReader(q.client_id);save();}catch{return fail(res,'invalid_client_metadata');}
+        try{if(Object.keys(state.clients).length>=10000)pruneClients(true);if(Object.keys(state.clients).length>=10000)return fail(res,'registration_limit',429);state.clients[q.client_id]={...await metadataReader(q.client_id),createdAt:now(),lastUsedAt:now()};save();}catch{return fail(res,'invalid_client_metadata');}
       }
       const client = Object.hasOwn(state.clients,q.client_id)?state.clients[q.client_id]:null;
       if (!client || typeof q.redirect_uri!=='string' || !client.redirects.some(uri=>redirectMatches(uri,q.redirect_uri)) || q.response_type !== 'code' || q.resource !== resource || q.code_challenge_method !== 'S256' || !/^[A-Za-z0-9_-]{43}$/.test(q.code_challenge || '') || (q.scope && q.scope !== 'phone:control') || typeof q.state !== 'string' || q.state.length > 2048) return fail(res,'invalid_request');
@@ -133,11 +160,10 @@ form.addEventListener('submit',async event=>{
     // The approval page's "send to my phone": the owner names their account by email.
     app.post('/work/authorize/phone', (req,res) => {
       if (req.headers.origin !== new URL(base).origin) return fail(res,'invalid_origin',403);
-      const key='phone-send:'+req.ip,row=rates.get(key)||{count:0,until:now()+600000};row.count++;rates.set(key,row);
-      if(row.count>10)return fail(res,'rate_limit_exceeded',429);
+      if(hitRate('phone-send:'+req.ip,10,600000))return fail(res,'rate_limit_exceeded',429);
       const ownerId=owners?.ownerByEmail?.(req.body?.email);
-      // Same reply whether or not the address has an account.
-      if(!ownerId)return res.json({sent:true,check:null});
+      // Anti-enumeration: always return a 6-digit check value whether or not the address has an account.
+      if(!ownerId)return res.json({sent:true,check:String(crypto.randomInt(100000,1000000))});
       try{res.json({sent:true,...connectionRequests.forOAuth(req.body?.ticket,ownerId)});}catch(e){fail(res,e.message);}
     });
     app.post('/work/authorize', async (req,res) => {
@@ -277,15 +303,18 @@ form.addEventListener('submit',async event=>{
       if(ticket){request=pending.get(ticket);if(!request?.phone||request.denied||request.grantId||request.inviteOwner)throw new ConnectionError('invalid_request','Start the agent connection again.');}
       else {
         if(!/^[A-Za-z0-9_-]{43}$/.test(challenge||'')||typeof clientName!=='string'||!clientName.trim()||clientName.length>60)throw new ConnectionError('invalid_request','An agent name and connection proof are required.');
-        if(pending.size>=512||Object.keys(state.clients).length>=10000)throw new ConnectionError('busy','Try again later.');
-        const clientId=random();state.clients[clientId]={name:clientName.replace(/[\x00-\x1f\x7f]/g,''),redirects:[],secret:null,method:'none'};save();
+        if(pending.size>=512)throw new ConnectionError('busy','Try again later.');
+        if(Object.keys(state.clients).length>=10000)pruneClients(true);
+        if(Object.keys(state.clients).length>=10000)throw new ConnectionError('busy','Try again later.');
+        const clientId=random();state.clients[clientId]={name:clientName.replace(/[\x00-\x1f\x7f]/g,''),redirects:[],secret:null,method:'none',createdAt:now(),lastUsedAt:now()};save();
         ticket=random();request={phone:true,local:true,clientId,clientName:state.clients[clientId].name,clientOrigin:'',code:approvalCode(),challenge,expires:row.expires};pending.set(ticket,request);
       }
       // The owner already authenticated on their phone to mint this 144-bit single-use invitation;
-      // claiming it with PKCE grants access in one step with no second phone confirmation.
+      // claiming it with PKCE grants access scoped to the originating device in one step.
       request.inviteOwner=row.ownerId;request.inviteDevice=row.deviceId;
       request.ownerId=row.ownerId;
-      request.grantId=connections.authorize(row.ownerId,request.clientId,request.clientName,'all');
+      const inviteAccess=row.deviceId?[row.deviceId]:'all';
+      request.grantId=connections.authorize(row.ownerId,request.clientId,request.clientName,inviteAccess);
       request.check=String(crypto.randomInt(100000,1000000));row.ticket=ticket;row.request=request;
       return {ticket,check:request.check,clientName:request.clientName,approved:true,expiresIn:Math.max(0,Math.floor((row.expires-now())/1000))};
     },
@@ -315,12 +344,14 @@ form.addEventListener('submit',async event=>{
       const list=(Array.isArray(names)?names:[]).map(n=>String(n||'').replace(/[\x00-\x1f\x7f]/g,'').trim()).filter(Boolean);
       if(!list.length||list.length>8||list.some(n=>n.length>60))throw new ConnectionError('invalid_request','Name one to eight agents, each up to 60 characters.');
       if(!/^[A-Za-z0-9_-]{43}$/.test(challenge||''))throw new ConnectionError('invalid_request','A connection proof is required.');
-      if(requests.size>=512||Object.keys(state.clients).length>=10000)throw new ConnectionError('busy','Try again later.');
+      if(requests.size>=512)throw new ConnectionError('busy','Try again later.');
       const access=bearer?liveAccess(bearer):null;
       const emailSupplied=typeof email==='string'&&email.trim().length>0;
       const ownerId=(access&&connections?.ownerOf?connections.ownerOf(access.grantId):null)
         ||(emailSupplied?owners?.ownerByEmail?.(email):null);
-      const clients=list.map(name=>{const clientId=random();state.clients[clientId]={name,redirects:[],secret:null,method:'none'};return {clientId,name};});save();
+      if(ownerId&&[...requests.values()].filter(r=>r.ownerId===ownerId&&!r.decision&&r.expires>now()).length>=5)throw new ConnectionError('busy','Too many pending requests for this account. Approve or deny one on your phone first.');
+      // Do not persist OAuth clients until the owner approves the request (prevents unauthenticated client-table exhaustion).
+      const clients=list.map(name=>({clientId:random(),name}));
       const id='req_'+crypto.randomBytes(16).toString('hex');
       const row={id,ownerId,clients,challenge,check:String(crypto.randomInt(100000,1000000)),createdAt:now(),expires:now()+600000,decision:null,grants:null,results:null};
       requests.set(id,row);if(ownerId)wakeOwner(ownerId);
@@ -331,6 +362,7 @@ form.addEventListener('submit',async event=>{
       const row=liveRequest(id);
       if(!row||row.decision)throw new ConnectionError('unknown_approval','This request already finished or expired.');
       if(row.ownerId&&row.ownerId!==ownerId)return {check:row.check};
+      if(!row.ownerId&&[...requests.values()].filter(r=>r.ownerId===ownerId&&!r.decision&&r.expires>now()).length>=5)throw new ConnectionError('busy','Too many pending requests for this account. Approve or deny one on your phone first.');
       row.ownerId=ownerId;wakeOwner(ownerId);
       return {check:row.check};
     },
@@ -345,9 +377,12 @@ form.addEventListener('submit',async event=>{
     wait(ownerId,ms){return new Promise(resolve=>{const set=watchers.get(ownerId)||new Set();const done=()=>{clearTimeout(timer);resolve();};const timer=setTimeout(()=>{set.delete(done);resolve();},ms);set.add(done);watchers.set(ownerId,set);});},
     /** Send a browser OAuth approval to the owner's phones instead of typing a code. */
     forOAuth(ticket,ownerId){
+      for(const [id,row] of requests)if(row.expires<=now())requests.delete(id);
       const oauth=pending.get(ticket);
       if(!oauth?.phone||oauth.grantId||oauth.denied||oauth.expires<=now())throw new ConnectionError('unknown_approval','This connection request expired. Start again from your assistant.');
       for(const r of requests.values())if(r.oauthTicket===ticket&&!r.decision)return {check:r.check};
+      if(requests.size>=512)throw new ConnectionError('busy','Try again later.');
+      if([...requests.values()].filter(r=>r.ownerId===ownerId&&!r.decision&&r.expires>now()).length>=5)throw new ConnectionError('busy','Too many pending requests for this account. Approve or deny one on your phone first.');
       const id='req_'+crypto.randomBytes(16).toString('hex');
       const row={id,ownerId,clients:[{clientId:oauth.clientId,name:oauth.clientName}],oauthTicket:ticket,check:String(crypto.randomInt(100000,1000000)),createdAt:now(),expires:Math.min(oauth.expires,now()+600000),decision:null};
       requests.set(id,row);wakeOwner(ownerId);return {check:row.check};
@@ -362,7 +397,13 @@ form.addEventListener('submit',async event=>{
         if(!oauth||oauth.expires<=now())throw new ConnectionError('unknown_approval','This connection request expired. Start again from your assistant.');
         oauth.grantId=connections.authorize(ownerId,oauth.clientId,oauth.clientName,access||'all');oauth.ownerId=ownerId;row.decision='allow';
       }
-      else if(allow){row.grants=row.clients.map(c=>connections.authorize(ownerId,c.clientId,c.name,access||'all'));row.decision='allow';}
+      else if(allow){
+        if(Object.keys(state.clients).length+row.clients.length>10000)pruneClients(true);
+        if(Object.keys(state.clients).length+row.clients.length>10000)throw new ConnectionError('busy','Try again later.');
+        for(const c of row.clients){state.clients[c.clientId]={name:c.name,redirects:[],secret:null,method:'none',createdAt:now(),lastUsedAt:now()};}
+        save();
+        row.grants=row.clients.map(c=>connections.authorize(ownerId,c.clientId,c.name,access||'all'));row.decision='allow';
+      }
       else {row.decision='deny';row.expires=Math.min(row.expires,now()+60000);}
       wakeOwner(ownerId);return {names:row.clients.map(c=>c.name),decision:row.decision};
     },
@@ -388,8 +429,16 @@ form.addEventListener('submit',async event=>{
       }
     }
     if (removed) save();
+    pruneClients(true);
     return removed;
   };
+  const purgeOwner = ownerId => {
+    for (const [id, row] of pending) if (row.ownerId === ownerId || row.inviteOwner === ownerId) pending.delete(id);
+    for (const [id, row] of invitations) if (row.ownerId === ownerId) invitations.delete(id);
+    for (const [id, row] of requests) if (row.ownerId === ownerId) requests.delete(id);
+    wakeOwner(ownerId);
+    pruneClients(true);
+  };
   const clientInfo=id=>{const c=Object.hasOwn(state.clients,id)?state.clients[id]:null;let origin=null;try{origin=c?new URL(c.redirects[0]).origin:null;}catch{}return {name:c?.name||null,origin};};
-  return {routes,requireToken,originAllowed,registeredOrigin,grantForToken,revokeGrants,approvals,invites,clientInfo,requests:connectionRequests};
+  return {routes,requireToken,originAllowed,registeredOrigin,grantForToken,revokeGrants,purgeOwner,approvals,invites,clientInfo,requests:connectionRequests};
 }

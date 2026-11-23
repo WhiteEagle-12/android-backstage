@@ -23,7 +23,7 @@ import {createAppReleases} from './app-releases.mjs';
 import {ownerRoutes} from './owner-routes.mjs';
 import {phoneRoutes} from './phone-api.mjs';
 import {nativeSignInRoutes,androidOrigins} from './native-sign-in.mjs';
-import { mcpTools, asToolResult, VERSION, INSTRUCTIONS as PHONE_INSTRUCTIONS } from '../cli/tools.mjs';
+import { mcpTools, toolAnnotations, asToolResult, VERSION, INSTRUCTIONS as PHONE_INSTRUCTIONS } from '../cli/tools.mjs';
 import { encryptAndUpload } from '../cli/backstage.mjs';
 
 export const uiTools=new Set(['observe','open','tap','type','key','gesture','scroll','scroll_until','wait','sequence','task','task_begin','task_inspect','task_finish','task_share','task_list','handoff','record','confirm'].map(n=>'android.'+n));
@@ -31,9 +31,9 @@ const DEVICE_PROP={device:{type:'string'}};
 const schema=(properties,required=[],extra={})=>({type:'object',properties:{...DEVICE_PROP,...properties},required,additionalProperties:false,...extra});
 const requestId={type:'string',pattern:'^[A-Za-z0-9_-]{1,128}$'};
 const gatewayTools=[
- {name:'android.devices',description:'List linked devices (detail:debug reads battery/network).',inputSchema:schema({detail:{enum:['compact','debug']}})},
- {name:'android.job_status',description:'Check an earlier call outcome by jobId.',inputSchema:schema({jobId:{type:'string'}},['jobId'])},
- {name:'android.artifact',description:'Manage uploads: begin (name,size,sha256), status (artifactId), delete (artifactId).',inputSchema:schema({
+ {name:'android.devices',description:'List linked devices (detail:debug reads battery/network).',annotations:toolAnnotations('android.devices',true),inputSchema:schema({detail:{enum:['compact','debug']}})},
+ {name:'android.job_status',description:'Check an earlier call outcome by jobId.',annotations:toolAnnotations('android.job_status',true),inputSchema:schema({jobId:{type:'string'}},['jobId'])},
+ {name:'android.artifact',description:'Manage uploads: begin (name,size,sha256), status (artifactId), delete (artifactId).',annotations:toolAnnotations('android.artifact',false),inputSchema:schema({
   operation:{type:'string',enum:['begin','status','delete']},
   name:{type:'string',minLength:1},size:{type:'integer',minimum:1},sha256:{type:'string',minLength:1},
   artifactId:{type:'string',minLength:1},requestId
@@ -42,7 +42,7 @@ const gatewayTools=[
   {properties:{operation:{const:'status'}},required:['artifactId'],not:{anyOf:['name','size','sha256','requestId'].map(k=>({required:[k]}))}},
   {properties:{operation:{const:'delete'},artifactId:{pattern:'^art_[a-f0-9]{24}$'}},required:['artifactId','requestId'],not:{anyOf:['name','size','sha256'].map(k=>({required:[k]}))}}
  ]}]})},
- {name:'android.file',description:'Files: pull (path; auto-returns single downloadUrl for >1 MiB or download:true), push (artifactId,remote), fetch (url,remote).',inputSchema:schema({
+ {name:'android.file',description:'Files: pull (path; auto-returns single downloadUrl for >1 MiB or download:true), push (artifactId,remote), fetch (url,remote).',annotations:toolAnnotations('android.file',false),inputSchema:schema({
   operation:{type:'string',enum:['pull','push','fetch']},
   path:{type:'string',minLength:1},offset:{type:'integer',minimum:0,maximum:9007199254740991},length:{type:'integer',minimum:1,maximum:1048576},fileId:{type:'string',pattern:'^file_[a-f0-9]{64}$'},download:{type:'boolean'},
   artifactId:{type:'string',minLength:1},remote:{type:'string',minLength:1},
@@ -52,15 +52,17 @@ const gatewayTools=[
   {properties:{operation:{const:'push'}},required:['artifactId','remote','requestId'],not:{anyOf:['path','offset','length','fileId','download','url','fileKey','sha256'].map(k=>({required:[k]}))}},
   {properties:{operation:{const:'fetch'}},required:['url','remote','requestId'],not:{anyOf:['path','offset','length','fileId','download','artifactId'].map(k=>({required:[k]}))}}
  ]}]})},
- {name:'android.install',description:'Install APK from source {artifactId} or {url,sha256?}.',inputSchema:schema({requestId,source:{oneOf:[{type:'object',properties:{artifactId:{type:'string'}},required:['artifactId'],additionalProperties:false},{type:'object',properties:{url:{type:'string',pattern:'^https?://[^\\s]+$'},sha256:{type:'string'}},required:['url'],additionalProperties:false}]}},['source','requestId'])}
+ {name:'android.install',description:'Install APK from source {artifactId} or {url,sha256?}.',annotations:toolAnnotations('android.install',false),inputSchema:schema({requestId,source:{oneOf:[{type:'object',properties:{artifactId:{type:'string'}},required:['artifactId'],additionalProperties:false},{type:'object',properties:{url:{type:'string',pattern:'^https?://[^\\s]+$'},sha256:{type:'string'}},required:['url'],additionalProperties:false}]}},['source','requestId'])}
 ];
 const replaced=new Set(gatewayTools.map(t=>t.name));
-export const strictCatalogue=[...mcpTools({strict:true}).filter(t=>!replaced.has(t.name)).map(t=>({...t,inputSchema:{...t.inputSchema,properties:{...DEVICE_PROP,...t.inputSchema.properties}}})),...gatewayTools].map(t=>({...t,name:t.name.replaceAll('.','_'),description:t.description.replace(/\bandroid\.([a-z_]+)\b/g,'android_$1'),securitySchemes:[{type:'oauth2',scopes:['phone:control']}],_meta:{securitySchemes:[{type:'oauth2',scopes:['phone:control']}]}}));
+const allStrictCatalogue=[...mcpTools({strict:true}).filter(t=>!replaced.has(t.name)).map(t=>({...t,inputSchema:{...t.inputSchema,properties:{...DEVICE_PROP,...t.inputSchema.properties}}})),...gatewayTools].map(t=>({...t,name:t.name.replaceAll('.','_'),description:t.description.replace(/\bandroid\.([a-z_]+)\b/g,'android_$1'),annotations:t.annotations||toolAnnotations(t.name),securitySchemes:[{type:'oauth2',scopes:['phone:control']}],_meta:{securitySchemes:[{type:'oauth2',scopes:['phone:control']}]}}));
+// Raw shell is excluded from the public hosted catalog by default to protect Privacy Fence & account boundaries.
+export const strictCatalogue=allStrictCatalogue.filter(t=>t.name!=='android_shell');
 export const catalogue=strictCatalogue.map(t=>({...t,inputSchema:advertisedSchema(t.inputSchema,t.inputSchema,{toolName:t.name})}));
 export const TOOL_CONTRACT={version:VERSION,sha256:createHash('sha256').update(JSON.stringify(catalogue)).digest('hex')};
 const ajv=new Ajv({strict:false,allErrors:true});
-const validators=new Map(strictCatalogue.map(t=>[t.name,ajv.compile(t.inputSchema)]));
-export const SERVER_INSTRUCTIONS=PHONE_INSTRUCTIONS.replace(/\bandroid\./g,'android_')+'\nUploads: android_artifact begin -> android_install / android_file push -> android_artifact delete.';
+const validators=new Map(allStrictCatalogue.map(t=>[t.name,ajv.compile(t.inputSchema)]));
+export const SERVER_INSTRUCTIONS=PHONE_INSTRUCTIONS.replace(/\bandroid\./g,'android_')+'\nSafety: Always call android_confirm before irreversible actions (sending messages, posting, paying, or deleting).\nUploads: android_artifact begin -> android_install / android_file push -> android_artifact delete.';
 
 /** Accept legacy pre-consolidation tool names seamlessly without advertising them in tools/list. */
 export function normalizeToolCall(name, rawArgs = {}) {
@@ -120,7 +122,7 @@ const failure=(e)=>{
   return asToolResult({ok:false,code:'tool_failed',error:'The phone action did not finish. The phone may be offline, paused, or this connection may no longer have access. Do not retry a write unless its outcome is known.'},true);
 };
 
-export function createWorkApp({base,stateFile,approvalFile,connections,owners,artifacts,metadataReader,callTool,directFilesUrl=null,keepAlive,allowTestRedirect=false,zeroRetention=false,audit=()=>{},now=Date.now}) {
+export function createWorkApp({base,stateFile,approvalFile,connections,owners,artifacts,metadataReader,callTool,directFilesUrl=null,keepAlive,allowTestRedirect=false,zeroRetention=false,allowShell=process.env.BACKSTAGE_ALLOW_HOSTED_SHELL==='1',audit=()=>{},now=Date.now}) {
   if(zeroRetention&&stateFile)fs.rmSync(stateFile+'.requests',{recursive:true,force:true});
   const journal=createRequestJournal({directory:stateFile+'.requests',memoryOnly:zeroRetention,now,reconcile:async(grantId,name,args,jobId)=>{
     if(!connections?.active(grantId))return null;
@@ -162,8 +164,9 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
   });
   app.use(express.json({limit:'128kb'})); app.use(express.urlencoded({extended:false,limit:'8kb'}));
   auth.routes(app);
-  if(owners)ownerRoutes(app,{base,connections,owners,auth,artifacts,now});
-  if(connections&&owners){phoneRoutes(app,{connections,auth,owners,now,base,artifacts,appReleases:createAppReleases()});nativeSignInRoutes(app,{connections,owners,now});}
+  const nativeSignIn = (connections&&owners) ? nativeSignInRoutes(app,{connections,owners,now}) : null;
+  if(owners)ownerRoutes(app,{base,connections,owners,auth,artifacts,nativeSignIn,now});
+  if(connections&&owners)phoneRoutes(app,{connections,auth,owners,now,base,artifacts,nativeSignIn,appReleases:createAppReleases()});
   app.get('/work/health', (req,res) => res.json({ok:true,service:'backstage-work',version:VERSION,toolContract:TOOL_CONTRACT}));
   app.options('/work/mcp',(req,res)=>{
     if(!req.headers.origin||!auth.registeredOrigin(req.headers.origin))return res.sendStatus(403);
@@ -212,10 +215,12 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
       if(first.outcome!=='succeeded'||(first.eof&&!rest.download))return first;
       const tmpDir=artifacts.tempDir||os.tmpdir();
       const tmp=path.join(tmpDir,`backstage-pull-${randomBytes(12).toString('hex')}.bin`);
-      const fd=fs.openSync(tmp,'wx',0o600);
+      let fd=fs.openSync(tmp,'wx',0o600);
       const hash=createHash('sha256');
       let offset=0;
+      const maxPullBytes=artifacts.maxBytes||128*1024*1024;
       const fileId=first.fileId,totalBytes=first.totalBytes;
+      let saved;
       try {
         let row=first;
         for(;;){
@@ -223,18 +228,21 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
           if(fileId&&row.fileId&&row.fileId!==fileId)throw new ConnectionError('file_changed','The file changed during transfer. Retry pull.');
           const buf=Buffer.from(typeof row.dataBase64==='string'?row.dataBase64:'','base64');
           if(row.sha256&&createHash('sha256').update(buf).digest('hex')!==row.sha256)throw new ConnectionError('integrity_mismatch','Pulled chunk failed SHA-256 check.');
+          if(offset+buf.length>maxPullBytes)throw new ConnectionError('invalid_request',`File exceeds maximum transfer size (${maxPullBytes} bytes).`);
           if(buf.length){fs.writeSync(fd,buf,0,buf.length,offset);hash.update(buf);offset+=buf.length;}
           if(row.eof||!buf.length)break;
           row=await send('android.pull',{path:rest.path,offset,length:1048576,...(fileId?{fileId}:{})});
         }
         fs.fsyncSync(fd);
+        fs.closeSync(fd);fd=-1;
+        const sha256=hash.digest('hex');
+        saved=artifacts.createFromFile({grantId,name:path.basename(rest.path),tempPath:tmp,size:offset,sha256});
       } catch(e){
-        fs.closeSync(fd);shredFile(tmp,zeroRetention||artifacts.zeroRetention);throw e;
+        if(fd>=0){try{fs.closeSync(fd);}catch{}}
+        shredFile(tmp,zeroRetention||artifacts.zeroRetention);
+        throw e;
       }
-      fs.closeSync(fd);
-      const sha256=hash.digest('hex');
-      const saved=artifacts.createFromFile({grantId,name:path.basename(rest.path),tempPath:tmp,size:offset,sha256});
-      return {outcome:'succeeded',path:rest.path,bytes:offset,totalBytes:totalBytes??offset,sha256,fileId,artifactId:saved.artifactId,downloadUrl:base+'/artifacts/'+saved.artifactId+'/download',downloadToken:saved.downloadToken,expiresAt:saved.expiresAt,device:{id:device.id,name:device.name}};
+      return {outcome:'succeeded',path:rest.path,bytes:offset,totalBytes:totalBytes??offset,sha256:saved.sha256,fileId,artifactId:saved.artifactId,downloadUrl:base+'/artifacts/'+saved.artifactId+'/download',downloadToken:saved.downloadToken,expiresAt:saved.expiresAt,device:{id:device.id,name:device.name}};
     }
     if(engine==='android.install'&&rest.source?.artifactId||engine==='android.file'&&rest.operation==='push'){
       return artifacts.use(rest.source?.artifactId||rest.artifactId,grantId,async artifact=>{
@@ -268,11 +276,14 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
     if (req.headers.origin && !auth.originAllowed(req.headers.origin,req.backstageClient)) return res.sendStatus(403);
     if(req.headers.origin){res.set('Access-Control-Allow-Origin',req.headers.origin);res.vary('Origin');}
     if (req.method !== 'POST') {res.set('Allow','POST');return res.sendStatus(405);}
+    const activeCatalogue = allowShell ? allStrictCatalogue.map(t=>({...t,inputSchema:advertisedSchema(t.inputSchema,t.inputSchema,{toolName:t.name})})) : catalogue;
     const server = new Server({name:'android-backstage-work',version:VERSION},{capabilities:{tools:{}},instructions:SERVER_INSTRUCTIONS});
-    server.setRequestHandler(ListToolsRequestSchema,async () => ({tools:catalogue}));
+    server.setRequestHandler(ListToolsRequestSchema,async () => ({tools:activeCatalogue}));
     server.setRequestHandler(CallToolRequestSchema,async request => {
       const normalized = normalizeToolCall(request.params.name, request.params.arguments || {});
-      const name = normalized.name, validate = validators.get(name);
+      const name = normalized.name;
+      if (name === 'android_shell' && !allowShell) return asToolResult({outcome:'failed',code:'tool_disabled',inputDelivered:false,error:'Raw shell access is disabled on the hosted server to enforce Privacy Fence and account isolation. Use structured tools or the Local E2EE Bridge.'},true);
+      const validate = validators.get(name);
       let args = normalized.args || {};
       if (!validate) return asToolResult({outcome:'failed',code:'unknown_tool',inputDelivered:false,error:'Unknown tool. Refresh tools/list and use a listed tool name.'},true);
       if (args && typeof args === 'object' && !Array.isArray(args) && args.requestId === undefined && !validate(args)) {
@@ -313,7 +324,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   const vault = loadVaultFromEnv();
   const directRoutes = (cloudMode || process.env.BACKSTAGE_DIRECT_ROUTES === '0') ? null : createDirectRoutes({log:line=>console.log(line)});
   const connections = createConnections({directory:path.join(dir,'connections'),relayUrl:process.env.BACKSTAGE_RELAY_URL,
-    relayInternalUrl:process.env.BACKSTAGE_RELAY_INTERNAL_URL||null,directRoutes,vault,log:line=>console.log(line)});
+    relayInternalUrl:process.env.BACKSTAGE_RELAY_INTERNAL_URL||null,relayInternalToken:process.env.RELAY_INTERNAL_TOKEN||process.env.RELAY_ADMIN_TOKEN||null,directRoutes,vault,log:line=>console.log(line)});
   const artifacts = createArtifacts({directory:process.env.BACKSTAGE_ARTIFACTS_DIR||path.join(dir,'artifacts'),zeroRetention});
   const base=process.env.BACKSTAGE_WORK_BASE || 'https://relay.android-backstage.com/work';
   const owners=createOwners({stateFile:path.join(dir,'owners.json'),origin:new URL(base).origin,androidOrigins,mailer:createMailer()});

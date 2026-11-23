@@ -6,7 +6,7 @@ import {page,escape,scriptJSON} from './pages.mjs';
 import {connectionPage} from './connect-page.mjs';
 import {validDeviceName,ConnectionError} from './connections.mjs';
 
-export function ownerRoutes(app,{owners,connections,base,auth,artifacts=null,now=Date.now}) {
+export function ownerRoutes(app,{owners,connections,base,auth,artifacts=null,nativeSignIn=null,now=Date.now}) {
   const origin=new URL(base).origin,pending=new Map();
   const nonce=res=>{const n=crypto.randomBytes(24).toString('base64url');res.set('Content-Security-Policy',`default-src 'none'; script-src 'nonce-${n}' 'self'; style-src 'unsafe-inline'; img-src https://android-backstage.com; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`);return n;};
   const safeReturn=value=>typeof value==='string'&&(/^\/work\/(account|enroll)(\?[A-Za-z0-9_=&%.-]{0,120})?$/.test(value)||/^\/work\/connect\/approve\?request=req_[a-f0-9]{32}$/.test(value)||value.startsWith('/work/authorize?'))?value:'/work/account';
@@ -39,7 +39,7 @@ document.getElementById('recovery-form')?.addEventListener('submit',async e=>{e.
 document.getElementById('signin')?.addEventListener('click',()=>signIn('authenticate'));document.getElementById('register')?.addEventListener('click',()=>signIn('register'));`,n));
   });
   app.post('/work/email/start',async(req,res)=>{
-    if(limited('email-ip:'+req.ip,20))return res.status(429).json({error:'Too many attempts. Wait a few minutes.'});
+    if(limited('email-ip:'+req.ip,8))return res.status(429).json({error:'Too many attempts. Wait a few minutes.'});
     try{res.json(await owners.startEmail(req.body?.email));}catch(e){res.status(400).json({error:e.message});}
   });
   app.post('/work/email/verify',(req,res)=>{
@@ -133,21 +133,25 @@ document.querySelectorAll('.card[data-grant]').forEach(card=>{const id=card.data
 document.getElementById('logout').onclick=async()=>{await fetch('/work/account/sign-out',{method:'POST'});window.location.assign('/work/sign-in');};
 document.getElementById('delete-account').onclick=async()=>{if(prompt('Type DELETE to permanently delete your Android Backstage account, all device links, and all assistant access.')!=='DELETE')return;try{await post('/work/account/delete',{confirm:'DELETE'});window.location.assign('/work/sign-in');}catch(e){status.textContent=e.message;}};`,n));
   });
-  app.post('/work/account/revoke',(req,res)=>{const id=signedIn(req,res);if(!id)return;try{connections.revokeOwned(id,req.body.grantId);auth?.revokeGrants?.([req.body.grantId]);res.json({ok:true});}catch(e){problem(res,e,404);}});
+  app.post('/work/account/revoke',(req,res)=>{const id=signedIn(req,res);if(!id)return;try{connections.revokeOwned(id,req.body.grantId);auth?.revokeGrants?.([req.body.grantId]);artifacts?.removeForGrants?.([req.body.grantId]);res.json({ok:true});}catch(e){problem(res,e,404);}});
   app.post('/work/account/access',(req,res)=>{const id=signedIn(req,res);if(!id)return;
     const access=req.body.allDevices===true?'all':Array.isArray(req.body.devices)?req.body.devices.filter(x=>typeof x==='string').slice(0,20):null;
     if(access===null||(Array.isArray(access)&&!access.length))return res.status(400).json({error:'Tick at least one device.'});
     try{res.json({ok:true,access:connections.setAccess(id,req.body.grantId,access)});}catch(e){problem(res,e);}});
   app.post('/work/account/devices/rename',(req,res)=>{const id=signedIn(req,res);if(!id)return;try{res.json({ok:true,...connections.rename(id,req.body.deviceId,String(req.body.name||'').trim())});}catch(e){problem(res,e);}});
-  app.post('/work/account/devices/remove',(req,res)=>{const id=signedIn(req,res);if(!id)return;try{connections.remove(id,req.body.deviceId);res.json({ok:true});}catch(e){problem(res,e);}});
+  app.post('/work/account/devices/remove',async(req,res)=>{const id=signedIn(req,res);if(!id)return;try{await connections.remove(id,req.body.deviceId);res.json({ok:true});}catch(e){problem(res,e);}});
   app.post('/work/account/sign-out',(req,res)=>{owners.signOut(req,res);res.json({ok:true});});
-  app.post('/work/account/delete',(req,res)=>{
+  app.post('/work/account/delete',async(req,res)=>{
     const id=signedIn(req,res);if(!id)return;
     if(req.body?.confirm!=='DELETE')return res.status(400).json({error:'Confirmation required.'});
-    const {grantIds}=connections.removeAllForOwner(id);
+    auth?.purgeOwner?.(id);
+    await nativeSignIn?.purgeOwner?.(id);
+    const cancels=[];
+    for(const [ticket,row] of pending)if(row.ownerId===id){pending.delete(ticket);cancels.push(row.connection?.cancel?.().catch(()=>{}));}
+    await Promise.all(cancels);
+    const {grantIds}=await connections.removeAllForOwner(id);
     auth?.revokeGrants?.(grantIds);
     artifacts?.removeForGrants?.(grantIds);
-    for(const [ticket,row] of pending)if(row.ownerId===id){pending.delete(ticket);row.connection?.cancel?.().catch(()=>{});}
     owners.deleteOwner(id,req,res);
     res.json({ok:true,deleted:true});
   });

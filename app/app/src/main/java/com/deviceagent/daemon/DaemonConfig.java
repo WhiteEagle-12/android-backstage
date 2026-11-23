@@ -25,8 +25,12 @@ public final class DaemonConfig {
     public String agentVersion = BuildInfo.VERSION;
     public String apkPath = "";
     public String packageName = BuildInfo.DEFAULT_PACKAGE;
-    /** Inbound HTTP port (LAN envelopes + app supervision). Default 18422. */
+    /** Inbound HTTP port (app supervision; optional LAN envelopes when allowLanDirect is enabled). Default 18422. */
     public int port = 18422;
+    /** Opt-in LAN/tailnet listener bind (0.0.0.0); false binds strictly to 127.0.0.1. */
+    public boolean allowLanDirect = false;
+    /** Opt-in: keep global USB debugging enabled so adbd survives Wi-Fi transitions. */
+    public boolean keepUsbDebugging = false;
     /** Absolute path of the json file this was loaded from (or will be written to). */
     public String configPath = DEFAULT_PATH;
     /** Linked agents: {@code [{agentId, linkKey, lastCallCounter, resultCounter}]}. */
@@ -71,6 +75,8 @@ public final class DaemonConfig {
             }
         }
         if (c.port <= 0 || c.port >= 65536) c.port = 18422;
+        c.allowLanDirect = Boolean.TRUE.equals(obj.get("allowLanDirect"));
+        c.keepUsbDebugging = Boolean.TRUE.equals(obj.get("keepUsbDebugging"));
         c.links = parseLinks(obj.get("links"));
         if (obj.get("revokedLinks") instanceof List) for (Object x : (List<?>)obj.get("revokedLinks")) c.revokedLinks.add(String.valueOf(x));
         if (obj.get("blockedPackages") instanceof List) for (Object x : (List<?>)obj.get("blockedPackages")) c.blockedPackages.add(String.valueOf(x));
@@ -90,6 +96,8 @@ public final class DaemonConfig {
         m.put("apkPath", apkPath == null ? "" : apkPath);
         m.put("packageName", packageName == null || packageName.isEmpty() ? BuildInfo.DEFAULT_PACKAGE : packageName);
         if (port != 18422) m.put("port", port);
+        if (allowLanDirect) m.put("allowLanDirect", true);
+        if (keepUsbDebugging) m.put("keepUsbDebugging", true);
         List<Map<String, Object>> linkRows = new ArrayList<>();
         if (links != null) {
             for (Link link : links) {

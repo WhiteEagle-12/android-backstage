@@ -17,7 +17,7 @@ import java.util.Map;
 /** A shell-only bridge; location runs with the app's granted identity and foreground service. */
 public final class LocationProvider extends ContentProvider {
  public static boolean granted(Context context,String permission){return context.checkSelfPermission(permission)==PackageManager.PERMISSION_GRANTED;}
- public static boolean allowed(Context context){return LocationAccess.allowed(granted(context,Manifest.permission.ACCESS_COARSE_LOCATION),granted(context,Manifest.permission.ACCESS_FINE_LOCATION),granted(context,Manifest.permission.ACCESS_BACKGROUND_LOCATION));}
+ public static boolean allowed(Context context){return LocationAccess.allowed(granted(context,Manifest.permission.ACCESS_COARSE_LOCATION),granted(context,Manifest.permission.ACCESS_FINE_LOCATION));}
  @Override public boolean onCreate(){return true;}
  @Override public synchronized Bundle call(String method,String argument,Bundle extras){
   int uid=Binder.getCallingUid();
@@ -29,17 +29,17 @@ public final class LocationProvider extends ContentProvider {
    ToolCatalog.validate("android.location",args);
    Context context=getContext();AgentService service=AgentService.locationService();
    String error=LocationAccess.error(AgentConfig.load(context).accessEnabled,service!=null,
-    granted(context,Manifest.permission.ACCESS_COARSE_LOCATION),granted(context,Manifest.permission.ACCESS_FINE_LOCATION),granted(context,Manifest.permission.ACCESS_BACKGROUND_LOCATION));
+    granted(context,Manifest.permission.ACCESS_COARSE_LOCATION),granted(context,Manifest.permission.ACCESS_FINE_LOCATION));
    if(error!=null)return reply(Json.mapOf("ok",false,"code",error,"fix",null,"error",switch(error){
     case "access_paused"->"Phone access is paused. Open Backstage and resume access.";
-    case "location_permission_required"->"Open Backstage, tap Allow location, and allow location access all the time. Choose precise location for more accuracy.";
+    case "location_permission_required"->"Open Backstage, tap Allow location, and allow location access while using the app.";
     default->"Open Backstage and resume access before requesting location.";
    }));
    service.beginLocation();
    try{return reply(LocationHost.read(context,args));}
    finally{service.endLocation();}
   }catch(IllegalArgumentException e){return reply(Json.mapOf("ok",false,"code","invalid_argument","error",e.getMessage()));}
-  catch(SecurityException e){return reply(Json.mapOf("ok",false,"code","location_permission_required","error","Allow location access all the time in Backstage's Android permissions, then retry."));}
+  catch(SecurityException e){return reply(Json.mapOf("ok",false,"code","location_permission_required","error","Allow location access in Backstage's Android permissions, then retry."));}
   catch(IllegalStateException e){return reply(Json.mapOf("ok",false,"code","location_service_unavailable","error","Open Backstage and resume access, then retry."));}
   finally{Binder.restoreCallingIdentity(identity);}
  }

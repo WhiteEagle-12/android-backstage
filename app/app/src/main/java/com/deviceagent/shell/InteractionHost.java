@@ -54,7 +54,16 @@ public final class InteractionHost {
         try {
             if(op.equals("audio")){initializeMediaServices();return audioJobs.handle(shellContext(),args);}
             if(op.equals("restore_supervision"))return SupervisionRecovery.restore(context);
-            if(op.equals("apk_info")){var info=shellContext().getPackageManager().getPackageArchiveInfo(Json.string(args,"path"),0);if(info==null)throw new IllegalArgumentException("The APK could not be read");return Json.mapOf("ok",true,"package",info.packageName);}
+            if(op.equals("apk_info")){
+                var pm=shellContext().getPackageManager();
+                int sigFlag=android.os.Build.VERSION.SDK_INT>=28?android.content.pm.PackageManager.GET_SIGNING_CERTIFICATES:android.content.pm.PackageManager.GET_SIGNATURES;
+                var info=pm.getPackageArchiveInfo(Json.string(args,"path"),sigFlag);
+                if(info==null)throw new IllegalArgumentException("The APK could not be read");
+                String cert=certSha256(info);
+                String installedCert="";
+                try{installedCert=certSha256(pm.getPackageInfo(info.packageName,sigFlag));}catch(Exception ignored){}
+                return Json.mapOf("ok",true,"package",info.packageName,"certSha256",cert,"installedCertSha256",installedCert);
+            }
             if(op.equals("device_control")){
                 if(!"status".equals(args.get("operation"))){if(!Integer.valueOf(0).equals(args.get("display")))throw new IllegalArgumentException("Device changes require a foreground session");try(var guard=inputGuard(0,args)){guard.check();try{return DeviceControls.handle(shellContext(),args);}catch(IllegalArgumentException e){throw e;}catch(Exception e){return Json.mapOf("ok",false,"inputDelivered",null,"code","input_outcome_unknown","error","Android did not confirm the device change. Read device_control status before trying again.");}}}
                 return DeviceControls.handle(shellContext(),args);
@@ -132,16 +141,37 @@ public final class InteractionHost {
         int flags=fields.containsKey("permissions")?android.content.pm.PackageManager.GET_PERMISSIONS:0;
         String pkg=Json.string(args,"package"),query=Json.string(args,"query");
         if(pkg!=null){
+            if(com.deviceagent.tools.PrivacyFence.isGloballyBlocked(pkg))return Json.mapOf("ok",false,"code","blocked_app","error","This app is blocked in Backstage privacy settings.");
             try{return packageFields(pm.getPackageInfo(pkg,flags),args);}
             catch(android.content.pm.PackageManager.NameNotFoundException e){return Json.mapOf("ok",false,"code","package_not_found","error","This package is not installed. Search installed packages and choose a matching name.");}
         }
         List<Object> rows=new ArrayList<>();
         String filter=query==null?"":query.toLowerCase(java.util.Locale.ROOT);
         // One binder listing, with no per-package dumpsys or shell process.
-        for(var info:pm.getInstalledPackages(flags))if(info.packageName.toLowerCase(java.util.Locale.ROOT).contains(filter)){
-            rows.add(args.containsKey("fields")?packageFields(info,args):info.packageName);
+        for(var info:pm.getInstalledPackages(flags)){
+            if(com.deviceagent.tools.PrivacyFence.isGloballyBlocked(info.packageName))continue;
+            if(info.packageName.toLowerCase(java.util.Locale.ROOT).contains(filter)){
+                rows.add(args.containsKey("fields")?packageFields(info,args):info.packageName);
+            }
         }
         return Json.mapOf("ok",true,"count",rows.size(),"packages",rows);
+    }
+    @SuppressWarnings("deprecation")
+    private static String certSha256(android.content.pm.PackageInfo info){
+        if(info==null)return "";
+        try{
+            android.content.pm.Signature[] sigs=null;
+            if(android.os.Build.VERSION.SDK_INT>=28&&info.signingInfo!=null){
+                sigs=info.signingInfo.hasMultipleSigners()?info.signingInfo.getApkContentsSigners():info.signingInfo.getSigningCertificateHistory();
+            }else{
+                sigs=info.signatures;
+            }
+            if(sigs==null||sigs.length==0)return "";
+            byte[] digest=java.security.MessageDigest.getInstance("SHA-256").digest(sigs[0].toByteArray());
+            StringBuilder sb=new StringBuilder(digest.length*2);
+            for(byte b:digest)sb.append(String.format(java.util.Locale.US,"%02x",b&0xff));
+            return sb.toString();
+        }catch(Exception e){return "";}
     }
     private static Map<String,Object> packageFields(android.content.pm.PackageInfo info,Map<String,Object> args){
         List<Map<String,Object>> permissions=new ArrayList<>();

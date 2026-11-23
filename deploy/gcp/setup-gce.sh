@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Provision a $0/month Always Free GCE VM (e2-micro in us-central1, 1 GB RAM, 30 GB pd-standard)
+# Provision a GCE VM (e2-micro in us-central1, 1 GB RAM, 30 GB pd-standard — Always Free eligible;
+# note GCP external IPv4 & internet egress >1 GB/mo may incur small monthly charges after trial credits)
 # or scaled e2-small for Android Backstage with Cloudflare Tunnel + R2 + Resend + zero-retention tmpfs.
 #
 # Usage:
-#   bash deploy/gcp/setup-gce.sh                    # Always Free e2-micro ($0/mo forever)
+#   bash deploy/gcp/setup-gce.sh                          # Always Free e2-micro
 #   GCP_MACHINE_TYPE=e2-small bash deploy/gcp/setup-gce.sh  # Scale up to 2 GB RAM (~$12/mo)
 set -euo pipefail
 
@@ -66,11 +67,11 @@ install -d -o backstage -g backstage -m 0700 \
   /var/lib/android-backstage/app-releases \
   /etc/android-backstage
 
-# Capped RAM-only tmpfs mounts for transient artifacts and relay files (vanish on reboot, never hit SSD).
-install -d -o backstage -g backstage -m 0700 /run/android-backstage /run/android-backstage/artifacts /run/android-backstage/relay-files
-grep -q "/run/android-backstage/artifacts" /etc/fstab || cat >>/etc/fstab <<FSTAB
-tmpfs /run/android-backstage/artifacts tmpfs rw,nosuid,nodev,noexec,size=128M,mode=0700,uid=backstage,gid=backstage 0 0
-tmpfs /run/android-backstage/relay-files tmpfs rw,nosuid,nodev,noexec,size=128M,mode=0700,uid=backstage,gid=backstage 0 0
+# Capped RAM-only tmpfs mounts on persistent rootfs mountpoints (vanish on reboot, never hit SSD, survive reboots safely).
+install -d -o backstage -g backstage -m 0700 /var/cache/android-backstage /var/cache/android-backstage/artifacts /var/cache/android-backstage/relay-files
+grep -q "/var/cache/android-backstage/artifacts" /etc/fstab || cat >>/etc/fstab <<FSTAB
+tmpfs /var/cache/android-backstage/artifacts tmpfs rw,nosuid,nodev,noexec,size=192M,mode=0700,uid=backstage,gid=backstage,nofail 0 0
+tmpfs /var/cache/android-backstage/relay-files tmpfs rw,nosuid,nodev,noexec,size=192M,mode=0700,uid=backstage,gid=backstage,nofail 0 0
 FSTAB
 mount -a || true
 STARTUP

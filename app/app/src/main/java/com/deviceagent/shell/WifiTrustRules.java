@@ -1,6 +1,11 @@
 package com.deviceagent.shell;
 
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -9,15 +14,18 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
- * Parsing and policy for keeping Wireless debugging approved on the owner's networks.
+ * Parsing and policy for keeping Wireless debugging approved on networks the owner
+ * explicitly trusted.
  *
  * Android remembers "Always allow on this network" per access point (BSSID), not per
- * network name, so a building with many access points asks again on every new one.
- * Backstage approves every access point of a network the owner already uses: a saved
- * network protected by a password or enterprise sign-in, or one the owner approved
- * by hand. Open networks are never approved automatically.
+ * network name, so a multi-AP home mesh asks again on another AP of the same SSID.
+ * Backstage only auto-approves the currently connected, WPA-authenticated BSSID when
+ * the owner has already approved that SSID at least once. Open/OWE networks and
+ * arbitrary saved Wi-Fi networks (hotels, offices, cafes) are never auto-approved.
  */
 public final class WifiTrustRules {
     private WifiTrustRules() {}
@@ -87,9 +95,42 @@ public final class WifiTrustRules {
         return out;
     }
 
+    /**
+     * Only explicitly owner-approved SSIDs ({@code learned}) are eligible for automatic
+     * BSSID approval, and open/OWE networks are always excluded.
+     */
     public static boolean eligible(String ssid, Map<String, Boolean> saved, Set<String> learned) {
-        if (ssid == null || ssid.isEmpty()) return false;
-        return Boolean.TRUE.equals(saved.get(ssid)) || learned.contains(ssid);
+        if (ssid == null || ssid.isEmpty() || learned == null || !learned.contains(ssid)) return false;
+        if (saved != null && Boolean.FALSE.equals(saved.get(ssid))) return false;
+        return true;
+    }
+
+    /** HMAC-SHA256 tag over the canonical sorted BSSID set so external-storage tampering is rejected. */
+    public static String signTrustedBssids(Set<String> bssids, String localToken) {
+        if (localToken == null || localToken.isBlank()) return "";
+        List<String> sorted = new ArrayList<>();
+        if (bssids != null) {
+            for (String b : bssids) {
+                if (b != null && !b.isBlank()) sorted.add(b.trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        Collections.sort(sorted);
+        String payload = "wifi-trust-v1\n" + String.join("\n", sorted);
+        try {
+            Mac mac = Mac.getInstance("HmacSHA256");
+            mac.init(new SecretKeySpec(localToken.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(mac.doFinal(payload.getBytes(StandardCharsets.UTF_8)));
+        } catch (GeneralSecurityException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    public static boolean verifyTrustedBssids(Set<String> bssids, String localToken, String tag) {
+        if (tag == null || tag.isBlank() || localToken == null || localToken.isBlank()) return false;
+        String expected = signTrustedBssids(bssids, localToken);
+        return MessageDigest.isEqual(
+                expected.getBytes(StandardCharsets.UTF_8),
+                tag.trim().getBytes(StandardCharsets.UTF_8));
     }
 
     /**

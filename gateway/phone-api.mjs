@@ -10,12 +10,26 @@ import {assistantIcon} from './assistants.mjs';
  * browser account page can do is available here as JSON, so the app is the
  * management surface and the server stays a backend.
  */
-export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifacts=null,now=Date.now}) {
-  const nonces=new Map(), sessions=new Map(), attempts=new Map();
+export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifacts=null,nativeSignIn=null,now=Date.now}) {
+  const nonces=new Map(), sessions=new Map(), attempts=new Map(), adds=new Map();
   const random=()=>crypto.randomBytes(32).toString('base64url');
   const digest=v=>crypto.createHash('sha256').update(v).digest('hex');
-  const prune=()=>{for(const m of [nonces,sessions])for(const [k,v] of m)if(v.expires<=now())m.delete(k);for(const [k,v] of attempts)if(v.until<=now())attempts.delete(k);};
-  const limited=(key,max,windowMs)=>{prune();const row=attempts.get(key)||{count:0,until:now()+windowMs};row.count++;attempts.set(key,row);return row.count>max;};
+  const evict=(map,max)=>{while(map.size>=max){const k=map.keys().next().value;if(k===undefined)break;map.delete(k);}};
+  const prune=()=>{
+    const t=now();
+    for(const m of [nonces,sessions])for(const [k,v] of m)if(v.expires<=t)m.delete(k);
+    for(const [k,v] of attempts)if(v.until<=t)attempts.delete(k);
+    for(const [k,v] of adds)if(v.expires<=t){adds.delete(k);v.pairing?.cancel?.().catch(()=>{});}
+  };
+  const limited=(key,max,windowMs)=>{
+    prune();
+    let row=attempts.get(key);
+    if(!row||row.until<=now())row={count:0,until:now()+windowMs};
+    row.count++;
+    if(!attempts.has(key))evict(attempts,10000);
+    attempts.set(key,row);
+    return row.count>max;
+  };
   const send=(res,e)=>{if(e instanceof ConnectionError)return res.status({unknown_device:404,unknown_approval:404,access_revoked:404,invalid_request:400,busy:429,no_devices:409,assistant_paused:409}[e.code]||400).json({error:e.code,message:e.message});res.status(500).json({error:'server_error',message:'Something went wrong on the server.'});};
 
   // The phone answers with HMAC-SHA256(linkKey, "backstage owner v1\n" + nonce).
@@ -40,7 +54,7 @@ export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifa
     const expected=crypto.createHmac('sha256',Buffer.from(found.linkKey,'base64url')).update('backstage owner v1\n'+nonce).digest();
     let given;try{given=Buffer.from(String(mac||''),'base64url');}catch{given=Buffer.alloc(0);}
     if(given.length!==expected.length||!crypto.timingSafeEqual(given,expected))return res.status(403).json({error:'challenge_failed',message:'This phone could not prove its link. Reconnect it if the problem continues.'});
-    const token=random();sessions.set(digest(token),{ownerId:found.ownerId,deviceId:found.device.id,agentId,expires:now()+12*3600000});
+    const token=random();evict(sessions,10000);sessions.set(digest(token),{ownerId:found.ownerId,deviceId:found.device.id,agentId,expires:now()+12*3600000});
     res.json({token,deviceId:found.device.id,expiresIn:12*3600});
   });
   function requireSession(req,res,next){
@@ -71,21 +85,21 @@ export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifa
     host:['cursor','codex','claude-code','grok','opencode','gemini','antigravity','chatgpt'].includes(req.query.host)?req.query.host:'other',
     requirements:'Local setup needs Node.js 22 or newer. Never reset existing connections or ask for a new approval to retry an install that was already approved.',
     server:base+'/mcp',
-    instructions:'Connect Android Backstage with minimal friction. For CLI and desktop coding agents (including T3 Code, Claude Code, Codex, Cursor, Antigravity, Gemini CLI, OpenCode, and Grok), use local (agent.mjs): it works over HTTPS with no localhost OAuth callback server and automatically installs and verifies the MCP server. If the user pasted a one-use invitation from Backstage, connect --code finishes immediately in one step with zero extra phone confirmation. Otherwise, connect --all --email USER_EMAIL pushes straight to their phone (one tap Allow, no browser login). Never ask the user to paste passwords/tokens or manually open Claude Code to run /mcp.',
+    instructions:'Connect Android Backstage with minimal friction. For CLI and desktop coding agents (including Claude Code, Codex, Cursor, Antigravity, Gemini CLI, OpenCode, and Grok), use local (agent.mjs): it works over HTTPS with no localhost OAuth callback server and automatically installs and verifies the MCP server. If the user pasted a one-use invitation from Backstage, connect --code finishes immediately in one step with zero extra phone confirmation. Otherwise, connect --all --email USER_EMAIL pushes straight to their phone (one tap Allow, no browser login). Never ask the user to paste passwords/tokens or manually open Claude Code to run /mcp.',
     local:{script:base+'/connect/agent.mjs',
       command:'node agent.mjs connect --name AGENT_NAME --host HOST [--email USER_EMAIL]',
       all:'node agent.mjs connect --all [--email USER_EMAIL]',
       invitation:'node agent.mjs connect --code INVITATION --name AGENT_NAME --host HOST',
       hosts:['cursor','codex','claude-code','grok','opencode','gemini','antigravity'],
-      next:'Download agent.mjs to a private local folder. If the user gave a one-use invitation, run `node agent.mjs connect --code INVITATION --name AGENT_NAME --host HOST`—it approves, installs, and verifies automatically in one shot with no second tap on the phone. Without an invitation, run `node agent.mjs connect --all --email USER_EMAIL` (or omit `--email` if this computer already has a Backstage connection; if you do not know the email, ask for just their email or start in the background and show the approval link / six check digits immediately via send_to_user so they can tap Allow on their phone with zero browser login). If installation fails after approval, keep the saved account file and run `node agent.mjs install --host HOST --account FILE`. Then verify MCP automatically yourself (see verify) and report success only after android_devices returns an online phone model. Never print credentials.'},
+      next:'Download agent.mjs to a private local folder. If the user gave a one-use invitation, run `node agent.mjs connect --code INVITATION --name AGENT_NAME --host HOST`—it approves, installs, and verifies automatically in one shot with no second tap on the phone. Without an invitation, run `node agent.mjs connect --all --email USER_EMAIL` (or omit `--email` if this computer already has a Backstage connection; if you do not know the email, ask for just their email or start in the background and show the user the approval link and six check digits immediately so they can tap Allow on their phone with zero browser login). If installation fails after approval, keep the saved account file and run `node agent.mjs install --host HOST --account FILE`. Then verify MCP automatically yourself (see verify) and report success only after android_devices returns an online phone model. Never print credentials.'},
     verify:{
       description:'Run automatic end-to-end MCP verification yourself right after install so the user never has to open Claude Code or another CLI manually. Replace SERVER_NAME with the exact name printed by agent.mjs (e.g. android-backstage or android-backstage-xxxxxxxx).',
       'claude-code':'claude -p "Call the android_devices MCP tool and return the connected phone name and model." --allowedTools "mcp__SERVER_NAME__*"',
       codex:'codex exec "Call the android_devices MCP tool and return the connected phone name and model."',
       gemini:'gemini -p "Call the android_devices MCP tool and return the connected phone name and model."',
-      t3:'In T3 Code, run the host headless CLI verification command above (e.g. `claude -p ...` or `codex exec ...`) directly from your shell, or launch a quick child verification turn/delegate on that host so a fresh session loads the newly installed MCP server and calls android_devices automatically. If the host has no headless CLI (e.g. Cursor/Antigravity without a fresh child), rely on `node agent.mjs verify --account FILE` (which executes a live MCP initialize + android_devices call against the phone) and clearly report that it is verified and ready for the next session.'
+      standalone:'If the host has no headless CLI, run `node agent.mjs verify --account FILE` (which executes a live MCP initialize + android_devices call against the phone) and report that it is verified and ready for the next session.'
     },
-    native:{next:'Only use native remote HTTP OAuth when running interactively in the same OS as the browser (never inside T3 Code, SSH, or WSL, where the localhost callback port is unreachable or closes early). Register the server URL as a remote (Streamable HTTP) MCP server named android-backstage in user scope (`claude mcp add --transport http --scope user android-backstage URL`, `codex mcp add android-backstage --url URL`, or `gemini mcp add --transport http android-backstage URL`), start sign-in, and verify with android_devices.'},
+    native:{next:'Only use native remote HTTP OAuth when running interactively in the same OS as the browser (not over SSH, WSL, or headless sessions where the localhost callback port is unreachable or closes early). Register the server URL as a remote (Streamable HTTP) MCP server named android-backstage in user scope (`claude mcp add --transport http --scope user android-backstage URL`, `codex mcp add android-backstage --url URL`, or `gemini mcp add --transport http android-backstage URL`), start sign-in, and verify with android_devices.'},
     cloud:{instructions:'Add the Android Backstage connection using the server URL and OAuth. On its connection page, enter your Backstage email to approve on your phone (or paste a one-use code from Backstage for instant approval). Ask the user to press Connect only if your host requires it.'}
   }));
   const describeGrant=(ownerId,g)=>{const info=auth?.clientInfo?.(g.clientId)||{};const origin=info.origin||null;return {id:g.id,name:g.name||info.name||'Assistant',origin,icon:assistantIcon(g.name||info.name||'',origin||''),access:g.access,createdAt:g.createdAt,paused:!!g.paused,lastUsedAt:g.lastUsedAt?new Date(g.lastUsedAt).toISOString():null,sessions:g.sessions||[]};};
@@ -123,10 +137,15 @@ export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifa
   app.post('/work/phone/email/remove',requireSession,(req,res)=>{try{owners.removeEmail(req.phone.ownerId);res.json(owners.methods(req.phone.ownerId));}catch(e){ownerError(res,e);}});
   app.post('/work/phone/recovery',requireSession,(req,res)=>{try{res.json({codes:owners.newRecoveryCodes(req.phone.ownerId)});}catch(e){ownerError(res,e);}});
   app.post('/work/phone/passkeys/remove',requireSession,(req,res)=>{try{owners.removePasskey(req.phone.ownerId,String(req.body?.id||''));res.json(owners.methods(req.phone.ownerId));}catch(e){ownerError(res,e);}});
-  app.post('/work/phone/account/delete',requireSession,(req,res)=>{
+  app.post('/work/phone/account/delete',requireSession,async(req,res)=>{
     if(req.body?.confirm!=='DELETE')return res.status(400).json({error:'invalid_request',message:'Confirmation required.'});
     const ownerId=req.phone.ownerId;
-    const {grantIds}=connections.removeAllForOwner(ownerId);
+    auth?.purgeOwner?.(ownerId);
+    await nativeSignIn?.purgeOwner?.(ownerId);
+    const cancels=[];
+    for(const [k,v] of adds)if(v.ownerId===ownerId){adds.delete(k);cancels.push(v.pairing?.cancel?.().catch(()=>{}));}
+    await Promise.all(cancels);
+    const {grantIds}=await connections.removeAllForOwner(ownerId);
     auth?.revokeGrants?.(grantIds);
     artifacts?.removeForGrants?.(grantIds);
     for(const [k,v] of sessions)if(v.ownerId===ownerId)sessions.delete(k);
@@ -150,15 +169,17 @@ export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifa
     }catch(e){send(res,e);}
   });
   app.post('/work/phone/devices/rename',requireSession,(req,res)=>{try{res.json({device:connections.rename(req.phone.ownerId,String(req.body?.deviceId||''),String(req.body?.name||''))});}catch(e){send(res,e);}});
-  app.post('/work/phone/devices/remove',requireSession,(req,res)=>{
+  app.post('/work/phone/devices/remove',requireSession,async(req,res)=>{
     const id=String(req.body?.deviceId||'');
     if(id===req.phone.deviceId)return res.status(400).json({error:'invalid_request',message:'Remove this phone from another device, or uninstall Backstage on it.'});
-    try{connections.remove(req.phone.ownerId,id);res.json({removed:id});}catch(e){send(res,e);}
+    try{await connections.remove(req.phone.ownerId,id);res.json({removed:id});}catch(e){send(res,e);}
   });
   // Adding a device: this phone shows a code the new device types into its own Backstage app.
-  const adds=new Map();
   app.post('/work/phone/devices/add',requireSession,async(req,res)=>{
     try{
+      prune();
+      let ownAdds=0;for(const v of adds.values())if(v.ownerId===req.phone.ownerId)ownAdds++;
+      if(ownAdds>=5||adds.size>=512)throw new ConnectionError('busy','Too many pending device setups. Finish or cancel one first.');
       const name=typeof req.body?.name==='string'?req.body.name:'';
       const pairing=await connections.begin({clientName:'Android Backstage',ownerId:req.phone.ownerId,name});
       const ticket=random();adds.set(ticket,{pairing,ownerId:req.phone.ownerId,expires:now()+600000});
@@ -179,7 +200,7 @@ export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifa
   });
   app.post('/work/phone/assistants/pause',requireSession,(req,res)=>{try{res.json({paused:connections.setPaused(req.phone.ownerId,String(req.body?.grantId||''),req.body?.paused===true)});}catch(e){send(res,e);}});
   app.post('/work/phone/assistants/stop',requireSession,async(req,res)=>{try{res.json({stopped:await connections.stopWork(req.phone.ownerId,String(req.body?.grantId||''))});}catch(e){send(res,e);}});
-  app.post('/work/phone/assistants/remove',requireSession,(req,res)=>{try{connections.revokeOwned(req.phone.ownerId,String(req.body?.grantId||''));res.json({removed:true});}catch(e){send(res,e);}});
+  app.post('/work/phone/assistants/remove',requireSession,(req,res)=>{try{const grantId=String(req.body?.grantId||'');connections.revokeOwned(req.phone.ownerId,grantId);auth?.revokeGrants?.([grantId]);artifacts?.removeForGrants?.([grantId]);res.json({removed:true});}catch(e){send(res,e);}});
   // OAuth approvals typed into the app.
   app.post('/work/phone/approvals/preview',requireSession,(req,res)=>{
     if(limited('approval:'+req.phone.ownerId,20,600000))return res.status(429).json({error:'busy',message:'Too many attempts. Wait a few minutes.'});
@@ -191,5 +212,8 @@ export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifa
     if(Array.isArray(access)&&access.length===0)return res.status(400).json({error:'choose_device',message:'Pick at least one device or allow all.'});
     try{res.json(auth.approvals.approve(req.body?.code,req.phone.ownerId,access));}catch(e){send(res,e);}
   });
-  app.post('/work/phone/approvals/deny',requireSession,(req,res)=>{res.json({denied:auth.approvals.deny(req.body?.code)});});
+  app.post('/work/phone/approvals/deny',requireSession,(req,res)=>{
+    if(limited('approval:'+req.phone.ownerId,20,600000))return res.status(429).json({error:'busy',message:'Too many attempts. Wait a few minutes.'});
+    res.json({denied:auth.approvals.deny(req.body?.code)});
+  });
 }

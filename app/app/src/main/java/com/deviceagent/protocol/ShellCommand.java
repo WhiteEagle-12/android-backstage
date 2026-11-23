@@ -121,15 +121,21 @@ public final class ShellCommand {
 
     /** mCurrentFocus of one display's section in {@code dumpsys window displays}. */
     public static String focusOnDisplay(int displayId) {
-        return "dumpsys window displays 2>/dev/null | awk '/^ *Display: mDisplayId=/{d=($0 ~ /mDisplayId="
-                + displayId + "([^0-9]|$)/)} d && /mCurrentFocus=/{print; exit}'";
+        return "dumpsys window displays 2>/dev/null | { d=0; while IFS= read -r l; do "
+                + "case \"$l\" in *'Display: mDisplayId='*) "
+                + "case \"$l\" in *'mDisplayId=" + displayId + "'|*'mDisplayId=" + displayId + "'[!0-9]*) d=1 ;; *) d=0 ;; esac ;; esac; "
+                + "if [ \"$d\" = 1 ]; then case \"$l\" in *'mCurrentFocus='*) printf '%s\\n' \"$l\"; break ;; esac; fi; "
+                + "done; }";
     }
 
     /** OEMs may leave mFocusedApp null; popups may omit a window component. */
     public static String focusedAppOnDisplay(int displayId) {
         if (displayId <= 0) throw new IllegalArgumentException("Use a private display");
-        return "dumpsys window displays 2>/dev/null | awk '/^ *Display: mDisplayId=/{d=($0 ~ /mDisplayId="
-                + displayId + "([^0-9]|$)/)} d && /mCurrentFocus=|mFocusedApp=/{print}'";
+        return "dumpsys window displays 2>/dev/null | { d=0; while IFS= read -r l; do "
+                + "case \"$l\" in *'Display: mDisplayId='*) "
+                + "case \"$l\" in *'mDisplayId=" + displayId + "'|*'mDisplayId=" + displayId + "'[!0-9]*) d=1 ;; *) d=0 ;; esac ;; esac; "
+                + "if [ \"$d\" = 1 ]; then case \"$l\" in *'mCurrentFocus='*|*'mFocusedApp='*) printf '%s\\n' \"$l\" ;; esac; fi; "
+                + "done; }";
     }
 
     /** The crash ring buffer: one FATAL EXCEPTION record per app crash, survives the app dying. */
@@ -149,7 +155,11 @@ public final class ShellCommand {
     public static String instrument(String component, String testClass, String extraArgs) {
         StringBuilder cmd = new StringBuilder("am instrument -w -r");
         if (testClass != null && !testClass.isBlank()) cmd.append(" -e class ").append(quote(testClass));
-        if (extraArgs != null && !extraArgs.isBlank()) cmd.append(' ').append(extraArgs);
+        if (extraArgs != null && !extraArgs.isBlank()) {
+            for (String token : extraArgs.trim().split("\\s+")) {
+                if (!token.isEmpty()) cmd.append(' ').append(quote(token));
+            }
+        }
         return cmd.append(' ').append(quote(component)).toString();
     }
 
@@ -171,6 +181,10 @@ public final class ShellCommand {
 
     public static String install(String remotePath) {
         return join("pm", "install", "-r", "-t", remotePath);
+    }
+
+    public static String installRelease(String remotePath) {
+        return join("pm", "install", "-r", remotePath);
     }
 
     public static String getprop(String key) {

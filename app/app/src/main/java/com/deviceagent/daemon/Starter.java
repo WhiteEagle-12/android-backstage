@@ -170,6 +170,21 @@ public final class Starter {
             int port,
             List<DaemonConfig.Link> links,
             String deviceId) {
+        return configJson(relayUrl, deviceToken, localToken, deviceName, agentVersion, apkPath, packageName, port, links, deviceId, false);
+    }
+
+    public static String configJson(
+            String relayUrl,
+            String deviceToken,
+            String localToken,
+            String deviceName,
+            String agentVersion,
+            String apkPath,
+            String packageName,
+            int port,
+            List<DaemonConfig.Link> links,
+            String deviceId,
+            boolean keepUsbDebugging) {
         DaemonConfig c = new DaemonConfig();
         c.relayUrl = empty(relayUrl);
         c.deviceToken = empty(deviceToken);
@@ -180,6 +195,7 @@ public final class Starter {
         c.apkPath = empty(apkPath);
         c.packageName = empty(packageName).isEmpty() ? BuildInfo.DEFAULT_PACKAGE : packageName;
         c.port = port > 0 ? port : 18422;
+        c.keepUsbDebugging = keepUsbDebugging;
         if (links != null) c.links = new ArrayList<>(links);
         return c.toJson();
     }

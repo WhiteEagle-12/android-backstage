@@ -5,8 +5,6 @@ description: Use Android Backstage to run requested tasks on the user's connecte
 
 Use the Android Backstage tools attached to this conversation. Discover them through the host's tool search when needed.
 
-When helping Gavin learn, prefer a short interactive visual when changing, sorting, labeling, or comparing something would teach the concept better than more prose. Read [Visual learning](references/visual-learning.md) for the optional parallel-builder workflow. Keep the main tutor responsible for the lesson and for deciding when to show the activity. This learning preference does not authorize phone control during an unrelated task.
-
 For missing access, use the host's native plugin Connect action. It opens Backstage sign-in: the user signs in with their saved passkey and approves this assistant. Only a new Backstage account needs phone enrollment. New conversations, projects and models reuse saved access. Do not reset pairing or copy another client's keys. If no native connection action is available, prepare the remote MCP URL https://relay.android-backstage.com/work/mcp and ask for the one required host add/connect action. A public marketplace listing is not required for a host that permits private native connectors.
 
 Perform the user's requested task once connected. A setup check uses android_devices; request detail:"debug" on the named device only when identity or capabilities are needed. If offline or paused, ask the user to open Backstage and resume access. Do not replace the saved phone.

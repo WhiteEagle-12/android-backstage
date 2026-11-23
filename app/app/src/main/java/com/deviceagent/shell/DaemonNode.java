@@ -234,13 +234,14 @@ public final class DaemonNode {
     }
 
     private volatile boolean settingsGranted;
+    private static final java.nio.file.Path USB_OWNED_MARKER =
+            java.nio.file.Paths.get(com.deviceagent.daemon.Starter.DIR, "usb-enabled-by-backstage");
 
     /**
-     * This process lives in adbd's cgroup, so init kills it whenever adbd stops.
-     * Android turns Wireless debugging off each time Wi-Fi drops; with USB
-     * debugging also off, that stops adbd. Keeping USB debugging on keeps adbd
-     * running through Wi-Fi loss. The settings grant lets the app turn Wireless
-     * debugging back on to relaunch this daemon after a reboot.
+     * Grants WRITE_SECURE_SETTINGS to the Backstage app so it can relaunch after reboot
+     * on owner-approved Wi-Fi networks. Only turns on USB debugging when the owner
+     * explicitly enabled {@code keepUsbDebugging}, and records a marker so Backstage
+     * turns it back off on pause/stop without touching pre-existing developer settings.
      */
     private void keepAdbRunning() {
         String pkg = config.packageName;
@@ -252,14 +253,38 @@ public final class DaemonNode {
             record(note);
             DaemonLog.print(note);
         }
+        if (!config.keepUsbDebugging) {
+            restoreUsbDebuggingIfOwned();
+            return;
+        }
         android.os.Bundle usb = LocalShell.run("settings get global adb_enabled", null, 4_000L);
         byte[] out = usb.getByteArray("stdout");
         if (out != null && "1".equals(new String(out, java.nio.charset.StandardCharsets.UTF_8).trim())) return;
+        try {
+            java.nio.file.Path parent = USB_OWNED_MARKER.getParent();
+            if (parent != null) java.nio.file.Files.createDirectories(parent);
+            java.nio.file.Files.write(USB_OWNED_MARKER, "1\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Exception ignored) {
+        }
         android.os.Bundle on = LocalShell.run("settings put global adb_enabled 1", null, 4_000L);
-        String note = "USB debugging was off; turned on so Wi-Fi loss cannot stop the daemon: exit " + on.getInt("exit", -1);
+        String note = "USB debugging was off; turned on per keepUsbDebugging setting: exit " + on.getInt("exit", -1);
         record(note);
         // Turning USB debugging on restarts adbd, which ends this daemon; the app relaunches it.
         com.deviceagent.daemon.Lifeline.event(note);
+    }
+
+    /** Restores adb_enabled=0 on pause/stop or opt-out if Backstage was the one that enabled it. */
+    public void restoreUsbDebuggingIfOwned() {
+        try {
+            if (!java.nio.file.Files.isRegularFile(USB_OWNED_MARKER)) return;
+            java.nio.file.Files.deleteIfExists(USB_OWNED_MARKER);
+        } catch (Exception e) {
+            return;
+        }
+        android.os.Bundle off = LocalShell.run("settings put global adb_enabled 0", null, 4_000L);
+        String note = "restored USB debugging off (enabled by Backstage): exit " + off.getInt("exit", -1);
+        record(note);
+        DaemonLog.print(note);
     }
 
     private void record(String line) {

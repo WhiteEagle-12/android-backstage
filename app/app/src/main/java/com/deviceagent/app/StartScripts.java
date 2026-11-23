@@ -31,7 +31,8 @@ public final class StartScripts {
                 context.getPackageName(),
                 config.daemonPort,
                 config.links,
-                config.deviceId);
+                config.deviceId,
+                config.keepUsbDebugging);
     }
 
     public static String apkPath(Context context) {

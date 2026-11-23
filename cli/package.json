@@ -30,6 +30,7 @@
     "*.json",
     "instructions.txt",
     "README.md",
+    "LICENSE",
     "!test/**"
   ],
   "scripts": {

@@ -21,7 +21,8 @@ export function createDashboard({dataDir,store,queue,listedDevice,version,memory
   let events=[],dirty=false,storageError=false;const active=new Map();let nextId=0;
   if(memoryOnly){try{fs.rmSync(file,{force:true});}catch{}}
   else{try{const saved=JSON.parse(fs.readFileSync(file,'utf8'));if(Array.isArray(saved))events=saved;}catch(e){if(e.code!=='ENOENT'){storageError=true;log.error?.('Dashboard history unavailable; starting a new bounded history.');}}}
-  function prune(){events=events.filter(e=>Number.isFinite(e.at)&&e.at>Date.now()-RETENTION).slice(-LIMIT);}
+  const retentionMs = memoryOnly ? 5 * 60_000 : RETENTION;
+  function prune(){events=events.filter(e=>Number.isFinite(e.at)&&e.at>Date.now()-retentionMs).slice(-LIMIT);}
   prune();
   function flush(){if(memoryOnly||!dirty)return;try{prune();writePrivateJson(file,events);dirty=false;storageError=false;}catch{storageError=true;log.error?.('Dashboard could not save activity history.');}}
   const timer=setInterval(flush,2000);timer.unref();

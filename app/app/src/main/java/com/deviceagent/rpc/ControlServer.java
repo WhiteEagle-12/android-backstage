@@ -38,6 +38,7 @@ public final class ControlServer {
     private final long startedAt = System.currentTimeMillis();
     private Thread thread;
     private ServerSocket server;
+    private java.util.concurrent.ExecutorService pool;
     private int port = PORT;
     private volatile java.util.function.Supplier<Map<String, Object>> extraHealth = Map::of;
 
@@ -76,12 +77,22 @@ public final class ControlServer {
     public boolean start() {
         if (thread != null && thread.isAlive()) return true;
         try {
-            server = new ServerSocket(port, 32, InetAddress.getByName("0.0.0.0"));
+            // Bind loopback by default so untrusted LAN/Wi-Fi peers cannot reach the daemon unless direct LAN mode is enabled.
+            String bindHost = config.allowLanDirect ? "0.0.0.0" : "127.0.0.1";
+            server = new ServerSocket(port, 32, InetAddress.getByName(bindHost));
         } catch (IOException e) {
             DaemonLog.print("bind :" + port + " failed: " + e.getMessage());
             server = null;
             return false;
         }
+        pool = new java.util.concurrent.ThreadPoolExecutor(
+                2, 16, 30L, java.util.concurrent.TimeUnit.SECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<>(32),
+                r -> {
+                    Thread t = new Thread(r, "backstage-inbound-req");
+                    t.setDaemon(true);
+                    return t;
+                });
         thread = new Thread(this::run, "backstage-inbound");
         thread.setDaemon(true);
         thread.start();
@@ -97,6 +108,10 @@ public final class ControlServer {
             } catch (IOException ignored) {
             }
         }
+        if (pool != null) {
+            pool.shutdownNow();
+            pool = null;
+        }
         if (thread != null) thread.interrupt();
     }
 
@@ -107,16 +122,23 @@ public final class ControlServer {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
                     Socket sock = ss.accept();
-                    Thread worker = new Thread(() -> {
-                        try (Socket s = sock) {
-                            handle(s);
-                        } catch (IOException ignored) {
-                        } catch (Throwable e) {
-                            DaemonLog.print("inbound handler crashed", e);
-                        }
-                    }, "backstage-inbound-req");
-                    worker.setDaemon(true);
-                    worker.start();
+                    java.util.concurrent.ExecutorService exec = pool;
+                    if (exec == null) {
+                        try { sock.close(); } catch (IOException ignored) {}
+                        return;
+                    }
+                    try {
+                        exec.execute(() -> {
+                            try (Socket s = sock) {
+                                handle(s);
+                            } catch (IOException ignored) {
+                            } catch (Throwable e) {
+                                DaemonLog.print("inbound handler crashed", e);
+                            }
+                        });
+                    } catch (java.util.concurrent.RejectedExecutionException e) {
+                        try { sock.close(); } catch (IOException ignored) {}
+                    }
                 } catch (IOException e) {
                     if (server == null) return;
                 }
@@ -488,13 +510,16 @@ public final class ControlServer {
 
     private boolean authorized(HttpReq req) {
         String expected = config.localToken == null ? "" : config.localToken;
-        if (expected.isEmpty()) return true;
+        if (expected.isEmpty()) return false;
         String auth = req.header("authorization");
         if (auth == null) return false;
         String prefix = "Bearer ";
         if (auth.length() < prefix.length()) return false;
         if (!auth.regionMatches(true, 0, prefix, 0, prefix.length())) return false;
-        return expected.equals(auth.substring(prefix.length()).trim());
+        String given = auth.substring(prefix.length()).trim();
+        return java.security.MessageDigest.isEqual(
+                expected.getBytes(StandardCharsets.UTF_8),
+                given.getBytes(StandardCharsets.UTF_8));
     }
 
     private static Map<String, Object> parseObject(String body) {
@@ -546,10 +571,7 @@ public final class ControlServer {
     }
 
     private static String corsHeaders() {
-        return "Access-Control-Allow-Origin: *\r\n"
-                + "Access-Control-Allow-Methods: GET, POST, DELETE, OPTIONS\r\n"
-                + "Access-Control-Allow-Headers: Authorization, Content-Type, mcp-session-id, MCP-Protocol-Version\r\n"
-                + "Access-Control-Max-Age: 86400\r\n";
+        return "";
     }
 
     private static HttpReq readRequest(InputStream in) throws IOException {

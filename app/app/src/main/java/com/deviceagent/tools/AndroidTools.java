@@ -93,7 +93,39 @@ public final class AndroidTools {
     private void requireDisplayAllowed(int display) {
         if (privacyFence.count() == 0) return;
         String comp = focusComponent(display);
-        privacyFence.requireComponentAllowed(comp);
+        if (comp != null && !comp.isBlank()) {
+            privacyFence.requireComponentAllowed(comp);
+            return;
+        }
+        try {
+            for (Map<String, Object> task : tasksOnDisplay(display)) {
+                if (Boolean.FALSE.equals(task.get("visible"))) continue;
+                if (task.get("package") instanceof String pkg && !pkg.isBlank()) {
+                    privacyFence.requireAllowed(pkg);
+                }
+            }
+        } catch (InputNotSentException e) {
+            throw e;
+        } catch (RuntimeException ignored) {
+        }
+    }
+
+    private void requireIntentTargetAllowed(String action, String data, String pkg, String component) {
+        if (privacyFence.count() == 0) return;
+        if (pkg != null && !pkg.isBlank()) privacyFence.requireAllowed(pkg);
+        if (component != null && !component.isBlank()) privacyFence.requireComponentAllowed(component);
+        if ((pkg != null && !pkg.isBlank()) || (component != null && !component.isBlank())) return;
+        StringBuilder cmd = new StringBuilder("cmd package resolve-activity --brief");
+        if (action != null && !action.isBlank()) cmd.append(" -a ").append(ShellCommand.quote(action));
+        if (data != null && !data.isBlank()) cmd.append(" -d ").append(ShellCommand.quote(data));
+        try {
+            ProcessResult res = device.exec(cmd.toString(), 4_000L);
+            Matcher m = Pattern.compile("(?m)^\\s*([A-Za-z][A-Za-z0-9_.]*)/(\\S+)\\s*$").matcher(res.stdoutText());
+            while (m.find()) privacyFence.requireAllowed(m.group(1));
+        } catch (InputNotSentException e) {
+            throw e;
+        } catch (RuntimeException ignored) {
+        }
     }
 
     public AndroidTools(DeviceExecutor device) {
@@ -293,16 +325,38 @@ public final class AndroidTools {
     private void recordActivity(String owner,String name,Map<String,Object> args,Map<String,Object> out){
         if(timeline==null||"android.devices".equals(name)||"android.task".equals(name)&&"list".equals(args.get("operation")))return;
         String target=Json.string(args,"package");
-        if(target==null||target.isBlank())target=Json.string(args,"url");
+        if(target==null||target.isBlank()){
+            String url=Json.string(args,"url");
+            if(url!=null&&!url.isBlank())target=sanitizeUrlTarget(url);
+        }
         if((target==null||target.isBlank())&&out.get("app") instanceof String app&&!app.isBlank())target=app;
         if((target==null||target.isBlank())&&args.get("operation") instanceof String op)target=op;
         if((target==null||target.isBlank())&&args.get("kind") instanceof String k)target=k;
         Integer disp=args.get("display") instanceof Number n?n.intValue():out.get("display") instanceof Number m?m.intValue():null;
         timeline.record(owner,name,target,Observations.str(out.get("outcome")),Json.string(out,"code"),disp);
     }
+    private static String sanitizeUrlTarget(String raw){
+        try{
+            java.net.URI u=java.net.URI.create(raw.trim());
+            String scheme=u.getScheme(),host=u.getHost();
+            if(scheme!=null&&host!=null)return scheme+"://"+host;
+            if(scheme!=null)return scheme+"://";
+        }catch(IllegalArgumentException ignored){}
+        int cut=raw.indexOf('?');
+        int hash=raw.indexOf('#');
+        if(hash>=0&&(cut<0||hash<cut))cut=hash;
+        return cut>=0?raw.substring(0,cut):raw;
+    }
     private Map<String,Object> taskBegin(Map<String,Object> args,String owner){
         if(args.containsKey("package"))privacyFence.requireAllowed(Json.string(args,"package"));
-        if(args.get("intent") instanceof Map<?,?> im&&im.get("package") instanceof String ip)privacyFence.requireAllowed(ip);
+        if(args.get("intent") instanceof Map<?,?> im){
+            String ip=im.get("package") instanceof String s?s:null;
+            String ic=im.get("component") instanceof String s?s:null;
+            String ia=im.get("action") instanceof String s?s:null;
+            String id=im.get("data") instanceof String s?s:null;
+            requireIntentTargetAllowed(ia,id,ip,ic);
+        }
+        if(args.get("url") instanceof String u&&!u.isBlank())requireIntentTargetAllowed("android.intent.action.VIEW",u,null,null);
         Map<String,Object> begun=tasks().begin(args,owner);
         if(!Boolean.TRUE.equals(begun.get("ok"))||(!args.containsKey("package")&&!args.containsKey("url")&&!args.containsKey("intent")))return begun;
         if(!(begun.get("display") instanceof Number d))return begun;
@@ -451,7 +505,11 @@ public final class AndroidTools {
                 case "uninstall"->uninstall(pkg);
                 case "grant"->grant(pkg,Json.string(args,"permission"));
                 case "clear_data"->clearData(pkg);
-                case "instrument"->instrument(Json.string(args,"component"),Json.string(args,"class"),Json.string(args,"args"),Json.integer(args,"timeoutMs",120000));
+                case "instrument"->{
+                    String comp=Json.string(args,"component");
+                    if(comp!=null&&!comp.isBlank())privacyFence.requireComponentAllowed(comp);
+                    yield instrument(comp,Json.string(args,"class"),Json.string(args,"args"),Json.integer(args,"timeoutMs",120000));
+                }
                 default->throw new IllegalArgumentException("Unknown developer operation");
             };
         }
@@ -480,15 +538,25 @@ public final class AndroidTools {
         }
         if(args.containsKey("intent")){
             var intentMap=PrimitiveArguments.map(args.get("intent"));
-            if(intentMap.get("package") instanceof String ip)privacyFence.requireAllowed(ip);
+            requireIntentTargetAllowed(Json.string(intentMap,"action"),Json.string(intentMap,"data"),Json.string(intentMap,"package"),Json.string(intentMap,"component"));
             var launched=device.exec(IntentCommand.build(intentMap,display));if(!launched.ok()||launched.stdoutText().contains("Error:"))return Json.mapOf("ok",false,"inputDelivered",null,"code","input_outcome_unknown","error","Android did not confirm the launch. Inspect the session before opening it again.");return resultMap(launched);
         }
-        if(args.containsKey("url"))return intent(Json.mapOf("action","android.intent.action.VIEW","data",args.get("url"),"display",display));
-        if(args.containsKey("settingsAction"))return intent(Json.mapOf("action",args.get("settingsAction"),"display",display));
+        if(args.containsKey("url")){
+            String u=Json.string(args,"url");
+            requireIntentTargetAllowed("android.intent.action.VIEW",u,null,null);
+            return intent(Json.mapOf("action","android.intent.action.VIEW","data",u,"display",display));
+        }
+        if(args.containsKey("settingsAction")){
+            String sa=Json.string(args,"settingsAction");
+            requireIntentTargetAllowed(sa,null,null,null);
+            return intent(Json.mapOf("action",sa,"display",display));
+        }
         if(args.containsKey("activity"))return launch(Json.string(args,"package"),Json.string(args,"activity"),display);
         return open(Json.string(args,"package"),display);
     }
     private Map<String,Object> packages(Map<String,Object> args){
+        String pkg=Json.string(args,"package");
+        if(pkg!=null&&!pkg.isBlank())privacyFence.requireAllowed(pkg);
         var options=new LinkedHashMap<>(args);if("debug".equals(args.get("detail")))options.put("diagnostics",true);ResultFields.packageInfo(Map.of(),options);
         return device.interaction("packages",options);
     }
@@ -529,6 +597,9 @@ public final class AndroidTools {
 
     public Map<String, Object> shell(String command) {
         if (command == null || command.isBlank()) throw new IllegalArgumentException("command is required");
+        if (privacyFence.count() > 0) {
+            throw new InputNotSentException("blocked_app", "Raw shell is disabled while blocked apps are configured in Privacy settings.");
+        }
         ProcessResult process=device.exec(command);
         Map<String,Object> result=resultMap(process);
         result.put("commandSucceeded",process.ok());
@@ -650,9 +721,27 @@ public final class AndroidTools {
         if (since != null && !since.isBlank() && !since.matches("\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d{1,3})?")) {
             throw new IllegalArgumentException("since must look like MM-DD HH:MM:SS.mmm (device local time)");
         }
-        if (packageName != null && !packageName.isBlank()) ShellCommand.requirePackage(packageName);
+        if (packageName != null && !packageName.isBlank()) {
+            ShellCommand.requirePackage(packageName);
+            privacyFence.requireAllowed(packageName);
+        }
         List<Map<String, Object>> list = collectCrashes(packageName, max <= 0 ? 5 : max, since);
+        if (privacyFence.count() > 0) {
+            list.removeIf(c -> isBlockedRecord(c));
+        }
         return Json.mapOf("ok", true, "count", list.size(), "crashes", list, "package", packageName, "since", since);
+    }
+
+    private boolean isBlockedRecord(Map<String, Object> record) {
+        if (record == null || privacyFence.count() == 0) return false;
+        for (String key : List.of("package", "process")) {
+            Object v = record.get(key);
+            if (v instanceof String s && !s.isBlank()) {
+                String base = s.split("[:\\s/]", 2)[0].trim();
+                if (privacyFence.isBlocked(base)) return true;
+            }
+        }
+        return false;
     }
 
     /** Dropbox first (immune to log.tag=S ROMs), logcat crash buffer as the fallback. */
@@ -890,7 +979,7 @@ public final class AndroidTools {
         device.exec("mkdir -p " + ShellCommand.quote(Starter.DIR));
         String remote = Starter.UPDATE_APK;
         if (url != null && !url.isBlank()) {
-            stageDownload(url, remote, fileKey, sha256);
+            stageDownload(url, remote, fileKey, sha256, true);
         } else if (path != null && !path.isBlank()) {
             if (Files.isRegularFile(java.nio.file.Paths.get(path))) {
                 device.push(path, remote);
@@ -904,10 +993,23 @@ public final class AndroidTools {
                 + " 2>/dev/null || wc -c < " + ShellCommand.quote(remote)).trimmedStdout();
         if (size.isEmpty() || size.equals("0")) throw new IllegalStateException("staged APK is empty: " + remote);
 
+        Map<String, Object> info = device.interaction("apk_info", Map.of("path", remote));
+        if (!Boolean.TRUE.equals(info.get("ok")) || !selfPackage.equals(info.get("package"))) {
+            device.exec("rm -f " + ShellCommand.quote(remote));
+            throw new IllegalStateException("Refusing self-update: APK package does not match " + selfPackage);
+        }
+        String apkCert = Json.string(info, "certSha256");
+        String installedCert = Json.string(info, "installedCertSha256");
+        if (apkCert != null && !apkCert.isBlank() && installedCert != null && !installedCert.isBlank()
+                && !apkCert.equalsIgnoreCase(installedCert)) {
+            device.exec("rm -f " + ShellCommand.quote(remote));
+            throw new IllegalStateException("Refusing self-update: APK signing certificate does not match the installed app.");
+        }
+
         // Stop taking relay jobs: anything started now would die with this process.
         com.deviceagent.rpc.DeviceNode.drain();
         ProcessResult install = device.exec(
-                ShellCommand.install(remote), 180_000L);
+                ShellCommand.installRelease(remote), 180_000L);
         if (!install.ok() && !install.stdoutText().toLowerCase(Locale.US).contains("success")) {
             throw new CommandFailedException(install);
         }
@@ -1148,14 +1250,32 @@ public final class AndroidTools {
     }
 
     public Map<String, Object> logcat(String packageName, int maxLines) {
+        if (packageName != null && !packageName.isBlank()) {
+            privacyFence.requireAllowed(packageName);
+        }
         StringBuilder cmd = new StringBuilder("logcat -d -v threadtime");
         if (maxLines > 0) cmd.append(" -t ").append(maxLines);
         if (packageName != null && !packageName.isBlank()) cmd.append(" | grep -- ").append(ShellCommand.quote(packageName));
         ProcessResult result = device.exec(cmd.toString());
-        String[] lines = result.stdoutText().isEmpty() ? new String[0] : result.stdoutText().split("\\R");
+        String[] raw = result.stdoutText().isEmpty() ? new String[0] : result.stdoutText().split("\\R");
+        List<String> filtered;
+        if (privacyFence.count() > 0) {
+            List<String> blocked = privacyFence.list();
+            filtered = new ArrayList<>(raw.length);
+            for (String line : raw) {
+                boolean hide = false;
+                for (String b : blocked) {
+                    if (line.contains(b)) { hide = true; break; }
+                }
+                if (!hide) filtered.add(line);
+            }
+        } else {
+            filtered = List.of(raw);
+        }
         Map<String, Object> out = resultMap(result);
-        out.put("lines", List.of(lines));
-        out.put("count", lines.length);
+        out.put("lines", filtered);
+        out.put("count", filtered.size());
+        if (privacyFence.count() > 0) out.put("stdout", String.join("\n", filtered));
         return out;
     }
 
@@ -1373,36 +1493,37 @@ public final class AndroidTools {
         if (!remote.startsWith("/data/local/tmp/") && !remote.startsWith("/sdcard/")) {
             throw new IllegalArgumentException("remote must be under /data/local/tmp or /sdcard");
         }
-        if (fileKey == null || fileKey.isBlank()) {
-            return resultMap(device.exec(
-                    "curl -L --fail --retry 2 -o " + ShellCommand.quote(remote) + " " + ShellCommand.quote(url),
-                    180_000L));
-        }
-        stageDownload(url, remote, fileKey, sha256);
-        String size = device.exec("stat -c %s " + ShellCommand.quote(remote)
-                + " 2>/dev/null || wc -c < " + ShellCommand.quote(remote)).trimmedStdout();
-        return Json.mapOf("ok", true, "remote", remote, "bytes", size);
+        stageDownload(url, remote, fileKey, sha256, false);
+        long bytes = 0;
+        try { bytes = Files.size(java.nio.file.Paths.get(remote)); } catch (Exception ignored) {}
+        return Json.mapOf("ok", true, "remote", remote, "bytes", Long.toString(bytes));
     }
 
     /**
-     * Download {@code url} to {@code dest}. When {@code fileKey} is set the blob is
-     * BSF1 ciphertext: write it to a temp file, decrypt, verify sha256, then move
-     * the plaintext to {@code dest}.
+     * Download {@code url} to {@code dest} using pure Java streaming HTTP(S) so stock
+     * Android devices (without /system/bin/curl or sha256sum) work reliably. When
+     * {@code fileKey} is set the blob is BSF1 ciphertext: decrypt and verify sha256.
      */
     private void stageDownload(String url, String dest, String fileKey, String sha256) {
-        device.exec("mkdir -p " + ShellCommand.quote(Starter.DIR));
+        stageDownload(url, dest, fileKey, sha256, false);
+    }
+
+    private void stageDownload(String url, String dest, String fileKey, String sha256, boolean requireHttps) {
+        Path destPath = java.nio.file.Paths.get(dest);
+        try {
+            if (destPath.getParent() != null) Files.createDirectories(destPath.getParent());
+        } catch (java.io.IOException e) {
+            device.exec("mkdir -p " + ShellCommand.quote(destPath.getParent() == null ? Starter.DIR : destPath.getParent().toString()));
+        }
         if (fileKey == null || fileKey.isBlank()) {
-            ProcessResult download = device.exec(downloadCommand(url, dest), downloadBudgetMs());
-            if (!download.ok()) {
-                device.exec("rm -f " + ShellCommand.quote(dest));
-                throw new CommandFailedException(download);
-            }
-            if (sha256 != null && !sha256.isBlank()) {
-                String actual = device.exec("sha256sum " + ShellCommand.quote(dest)).trimmedStdout().split("\\s+")[0];
-                if (!actual.equalsIgnoreCase(sha256.trim())) {
-                    device.exec("rm -f " + ShellCommand.quote(dest));
-                    throw new IllegalStateException("The downloaded file does not match its checksum");
+            try {
+                downloadToFile(url, destPath, requireHttps);
+                if (sha256 != null && !sha256.isBlank()) {
+                    com.deviceagent.crypto.FileCipher.verifySha256(destPath, sha256);
                 }
+            } catch (java.io.IOException | SecurityException e) {
+                try { Files.deleteIfExists(destPath); } catch (java.io.IOException ignored) {}
+                throw new IllegalStateException("Download failed: " + e.getMessage(), e);
             }
             return;
         }
@@ -1418,36 +1539,79 @@ public final class AndroidTools {
         if (key.length != 32) {
             throw new IllegalArgumentException("fileKey must decode to 32 bytes");
         }
-        String enc = Starter.DIR + "/dl-" + Long.toHexString(System.nanoTime()) + ".bsf1";
-        ProcessResult download = device.exec(downloadCommand(url, enc), downloadBudgetMs());
-        if (!download.ok()) {
-            // Each attempt uses a new name, so a partial file would never be resumed.
-            device.exec("rm -f " + ShellCommand.quote(enc));
-            throw new CommandFailedException(download);
-        }
+        Path encDir = java.nio.file.Paths.get(Starter.DIR);
+        try { Files.createDirectories(encDir); } catch (java.io.IOException ignored) {}
+        Path encPath = encDir.resolve("dl-" + Long.toHexString(System.nanoTime()) + ".bsf1");
         try {
-            java.nio.file.Path encPath = java.nio.file.Paths.get(enc);
-            java.nio.file.Path destPath = java.nio.file.Paths.get(dest);
+            downloadToFile(url, encPath, requireHttps);
             com.deviceagent.crypto.FileCipher.decryptFile(encPath, destPath, key);
             com.deviceagent.crypto.FileCipher.verifySha256(destPath, sha256);
-        } catch (java.io.IOException e) {
-            throw new IllegalStateException("file decrypt failed: " + e.getMessage(), e);
-        } catch (SecurityException e) {
+        } catch (java.io.IOException | SecurityException e) {
+            try { Files.deleteIfExists(destPath); } catch (java.io.IOException ignored) {}
             throw new IllegalStateException("file decrypt failed: " + e.getMessage(), e);
         } finally {
-            device.exec("rm -f " + ShellCommand.quote(enc));
+            try { Files.deleteIfExists(encPath); } catch (java.io.IOException ignored) {}
         }
     }
 
-    /**
-     * Resume after drops and give up only when the transfer stalls (under 16 kB/s for
-     * 45 s) or the call's own deadline nears, not after a fixed 180 s: a large APK over
-     * a slow path used to fail while still making progress.
-     */
-    static String downloadCommand(String url, String dest) {
-        return "rm -f " + ShellCommand.quote(dest) + "; curl -L --fail --silent --show-error --connect-timeout 15"
-                + " --retry 5 --retry-delay 2 --retry-all-errors -C - --speed-limit 16384 --speed-time 45 -o "
-                + ShellCommand.quote(dest) + " " + ShellCommand.quote(url);
+    private static void downloadToFile(String rawUrl, Path dest, boolean requireHttps) throws java.io.IOException {
+        String current = rawUrl.trim();
+        long deadlineMs = System.currentTimeMillis() + downloadBudgetMs();
+        for (int hops = 0; hops <= 5; hops++) {
+            java.net.URI uri;
+            try { uri = java.net.URI.create(current); }
+            catch (IllegalArgumentException e) { throw new IllegalArgumentException("Invalid download URL"); }
+            String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase(Locale.ROOT);
+            if (!"https".equals(scheme) && !"http".equals(scheme)) {
+                throw new IllegalArgumentException("Download URL must use https or http");
+            }
+            if (requireHttps && !"https".equals(scheme)) {
+                throw new SecurityException("Updates require HTTPS (refused redirect or URL: " + scheme + ")");
+            }
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) uri.toURL().openConnection();
+            conn.setInstanceFollowRedirects(false);
+            conn.setConnectTimeout(15_000);
+            conn.setReadTimeout(45_000);
+            conn.setRequestProperty("User-Agent", "Android-Backstage/" + BuildInfo.VERSION);
+            try {
+                int code = conn.getResponseCode();
+                if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+                    String location = conn.getHeaderField("Location");
+                    if (location == null || location.isBlank()) throw new java.io.IOException("Redirect missing Location header");
+                    current = uri.resolve(location.trim()).toString();
+                    continue;
+                }
+                if (code < 200 || code >= 300) {
+                    throw new java.io.IOException("HTTP " + code);
+                }
+                Path tmp = dest.resolveSibling(dest.getFileName().toString() + ".part-" + Long.toHexString(System.nanoTime()));
+                try (java.io.InputStream in = conn.getInputStream();
+                     java.io.OutputStream out = Files.newOutputStream(tmp)) {
+                    byte[] buf = new byte[32768];
+                    int n;
+                    while ((n = in.read(buf)) >= 0) {
+                        if (System.currentTimeMillis() > deadlineMs) {
+                            throw new java.io.IOException("Download timed out");
+                        }
+                        if (n > 0) out.write(buf, 0, n);
+                    }
+                    out.flush();
+                } catch (java.io.IOException e) {
+                    try { Files.deleteIfExists(tmp); } catch (java.io.IOException ignored) {}
+                    throw e;
+                }
+                try {
+                    Files.move(tmp, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                            java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                } catch (java.io.IOException e) {
+                    Files.move(tmp, dest, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                }
+                return;
+            } finally {
+                conn.disconnect();
+            }
+        }
+        throw new java.io.IOException("Too many redirects");
     }
 
     private static long downloadBudgetMs() {
@@ -1474,13 +1638,25 @@ public final class AndroidTools {
         return DevDiagnostics.parseGfxInfo(packageName, res.stdoutText());
     }
 
+    @SuppressWarnings("unchecked")
     public Map<String, Object> anrRecords(String packageName, int max) {
         if (packageName != null && !packageName.isBlank()) {
             ShellCommand.requirePackage(packageName);
             privacyFence.requireAllowed(packageName);
         }
         ProcessResult res = device.exec("logcat -b events -d -v threadtime -t 500", 8_000L);
-        return DevDiagnostics.parseAnrs(res.stdoutText(), packageName, Math.max(1, Math.min(50, max)));
+        Map<String, Object> parsed = DevDiagnostics.parseAnrs(res.stdoutText(), packageName, Math.max(1, Math.min(50, max)));
+        if (privacyFence.count() > 0 && parsed.get("anrs") instanceof List<?> rows) {
+            List<Map<String, Object>> clean = new ArrayList<>();
+            for (Object row : rows) {
+                if (row instanceof Map<?, ?> m && !isBlockedRecord((Map<String, Object>) m)) {
+                    clean.add((Map<String, Object>) m);
+                }
+            }
+            parsed.put("anrs", clean);
+            parsed.put("count", clean.size());
+        }
+        return parsed;
     }
 
     public Map<String, Object> grant(String packageName, String permission) {

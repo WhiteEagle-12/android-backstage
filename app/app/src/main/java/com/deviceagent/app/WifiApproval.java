@@ -50,9 +50,20 @@ final class WifiApproval {
             File dir = context.getExternalFilesDir(null);
             File file = dir == null ? null : new File(dir, "wifi-trust.json");
             if (file == null || !file.isFile()) return out;
-            Object list = Json.object(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8)).get("trustedBssids");
-            if (list instanceof List<?> rows) for (Object row : rows) if (row instanceof String b) out.add(b.toLowerCase(Locale.ROOT));
+            java.util.Map<String, Object> obj = Json.object(new String(Files.readAllBytes(file.toPath()), StandardCharsets.UTF_8));
+            Object list = obj.get("trustedBssids");
+            if (list instanceof List<?> rows) {
+                for (Object row : rows) {
+                    if (row instanceof String b && !b.isBlank()) out.add(b.toLowerCase(Locale.ROOT));
+                }
+            }
+            String token = AgentConfig.load(context).localToken;
+            String mac = obj.get("mac") instanceof String s ? s : "";
+            if (!com.deviceagent.shell.WifiTrustRules.verifyTrustedBssids(out, token, mac)) {
+                return new HashSet<>();
+            }
         } catch (Exception ignored) {
+            return new HashSet<>();
         }
         return out;
     }

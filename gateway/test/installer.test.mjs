@@ -58,7 +58,7 @@ test('setup script downloads from a hidden release directory and instructions us
  const base='http://127.0.0.1:'+server.address().port;
  const response=await fetch(base+'/work/connect/agent.mjs');assert.equal(response.status,200);
  assert.match(response.headers.get('content-type'),/javascript/);assert.equal(await response.text(),fs.readFileSync(new URL('../agent-connector.mjs',import.meta.url),'utf8'));
- const guide=await (await fetch(base+'/work/connect/instructions')).json();assert.match(guide.local.next,/android_devices/);assert.doesNotMatch(guide.local.next,/android_getprop/);assert.match(guide.instructions,/T3 Code/);assert.match(guide.verify['claude-code'],/claude -p/);assert.match(guide.verify.codex,/codex exec/);
+ const guide=await (await fetch(base+'/work/connect/instructions')).json();assert.match(guide.local.next,/android_devices/);assert.doesNotMatch(guide.local.next,/android_getprop/);assert.doesNotMatch(guide.instructions,/T3 Code/);assert.match(guide.verify['claude-code'],/claude -p/);assert.match(guide.verify.codex,/codex exec/);
  assert.equal((await fetch(base+'/work/connect/account.json')).status,404);
 });
 
@@ -73,12 +73,10 @@ test('OpenCode settings keep comments, gain one entry, and replace it on reconne
  text=fs.readFileSync(file,'utf8');assert.equal(text.split('"android-backstage"').length-1,1,'reconnecting replaces the entry');
  assert.deepEqual(parse(text).mcp['android-backstage'].command.slice(0,1),['/usr/bin/node']);assert.ok(parse(text).mcp.other);
 });
-test('Gemini and Antigravity entries go to their settings files, including T3 profiles',t=>{
- const f=fixture(t),profile=path.join(f.home,'.t3','userdata','providers','antigravity','abc','config');fs.mkdirSync(profile,{recursive:true});
- fs.writeFileSync(path.join(profile,'mcp_config.json'),JSON.stringify({mcpServers:{'jev-browser':{command:'node'}}}));
+test('Gemini and Antigravity entries go to their settings files',t=>{
+ const f=fixture(t);
  install('gemini',f.account,{home:f.home,name:'android-backstage',node:'node'});install('antigravity',f.account,{home:f.home,name:'android-backstage',node:'node'});
  assert.equal(JSON.parse(fs.readFileSync(path.join(f.home,'.gemini','settings.json'))).mcpServers['android-backstage'].args.at(-1),f.account);
- const t3=JSON.parse(fs.readFileSync(path.join(profile,'mcp_config.json')));assert.ok(t3.mcpServers['jev-browser']);assert.equal(t3.mcpServers['android-backstage'].args.at(-1),f.account);
  assert.ok(JSON.parse(fs.readFileSync(path.join(f.home,'.gemini','antigravity','mcp_config.json'))).mcpServers['android-backstage']);
 });
 test('Grok uses its own settings command and replacing removes the old entry first',t=>{

@@ -71,10 +71,31 @@ public final class ShareToAgentActivity extends Activity {
     private static List<Map<String, Object>> copyUris(android.content.Context ctx, List<Uri> uris, String fallbackMime) {
         List<Map<String, Object>> out = new ArrayList<>();
         if (uris.isEmpty()) return out;
-        File dir = new File(ctx.getExternalFilesDir(null) != null ? ctx.getExternalFilesDir(null) : ctx.getCacheDir(), "inbox");
+        // Stage shared copies in app-private cache (0700/0600) — never world-readable external storage.
+        File dir = new File(ctx.getCacheDir(), "inbox");
         dir.mkdirs();
+        dir.setReadable(false, false);
+        dir.setWritable(false, false);
+        dir.setExecutable(false, false);
+        dir.setReadable(true, true);
+        dir.setWritable(true, true);
+        dir.setExecutable(true, true);
+        // Clean up shared files older than 24 hours.
+        long cutoff = System.currentTimeMillis() - 86_400_000L;
+        File[] existing = dir.listFiles();
+        if (existing != null) {
+            for (File old : existing) {
+                if (old.isFile() && old.lastModified() < cutoff) old.delete();
+            }
+        }
+        String ownPkg = ctx.getPackageName();
         for (Uri uri : uris) {
             if (uri == null) continue;
+            // Reject file:// and Backstage's own content authorities so no app can trick Backstage into exfiltrating its private files.
+            String scheme = uri.getScheme();
+            if (!"content".equalsIgnoreCase(scheme)) continue;
+            String authority = uri.getAuthority();
+            if (authority != null && ownPkg != null && (authority.equals(ownPkg) || authority.startsWith(ownPkg + "."))) continue;
             String name = displayName(ctx, uri);
             String mime = ctx.getContentResolver().getType(uri);
             if (mime == null || mime.isBlank()) mime = fallbackMime;
@@ -100,7 +121,8 @@ public final class ShareToAgentActivity extends Activity {
                 continue;
             }
             if (total < 0) continue;
-            dest.setReadable(true, false);
+            dest.setReadable(false, false);
+            dest.setReadable(true, true);
             out.add(Json.mapOf("name", name, "mimeType", mime, "path", dest.getAbsolutePath(), "size", total));
         }
         return out;
