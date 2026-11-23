@@ -34,19 +34,12 @@ read -r -p "Proceed with creating VM ${INSTANCE}? [y/N] " ans
 gcloud config set project "${PROJECT_ID}"
 gcloud services enable compute.googleapis.com
 
-# No public HTTP/SSH firewall needed when using Cloudflare Tunnel + IAP SSH.
-# In us-central1 / us-west1 / us-east1, 1x e2-micro + 30 GB pd-standard + STANDARD tier is Always Free ($0/mo).
-gcloud compute instances create "${INSTANCE}" \
-  --zone="${ZONE}" \
-  --machine-type="${MACHINE_TYPE}" \
-  --boot-disk-size="${DISK_SIZE_GB}GB" \
-  --boot-disk-type="${DISK_TYPE}" \
-  --image-family=debian-12 \
-  --image-project=debian-cloud \
-  --network-tier=STANDARD \
-  --no-scopes \
-  --metadata=startup-script='#!/usr/bin/env bash
+STARTUP_FILE="$(mktemp)"
+trap 'rm -f "$STARTUP_FILE"' EXIT
+cat >"$STARTUP_FILE" <<'STARTUP'
+#!/usr/bin/env bash
 set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y ca-certificates curl gnupg git rsync zram-tools
 if ! command -v node >/dev/null 2>&1; then
@@ -80,6 +73,20 @@ tmpfs /run/android-backstage/artifacts tmpfs rw,nosuid,nodev,noexec,size=128M,mo
 tmpfs /run/android-backstage/relay-files tmpfs rw,nosuid,nodev,noexec,size=128M,mode=0700,uid=backstage,gid=backstage 0 0
 FSTAB
 mount -a || true
-'
+STARTUP
+
+# No public HTTP/SSH firewall needed when using Cloudflare Tunnel + IAP SSH.
+# In us-central1 / us-west1 / us-east1, 1x e2-micro + 30 GB pd-standard + STANDARD tier is Always Free ($0/mo).
+gcloud compute instances create "${INSTANCE}" \
+  --zone="${ZONE}" \
+  --machine-type="${MACHINE_TYPE}" \
+  --boot-disk-size="${DISK_SIZE_GB}GB" \
+  --boot-disk-type="${DISK_TYPE}" \
+  --image-family=debian-12 \
+  --image-project=debian-cloud \
+  --network-tier=STANDARD \
+  --no-scopes \
+  --metadata=enable-oslogin=TRUE \
+  --metadata-from-file="startup-script=${STARTUP_FILE}"
 
 echo "VM created. Next: gcloud compute ssh ${INSTANCE} --zone=${ZONE}, install the release under /opt/android-backstage, generate /etc/android-backstage/vault.key (mode 0600), copy backstage.env.example -> /etc/android-backstage/env (0600), and enable the systemd units in deploy/gcp/README.md."
