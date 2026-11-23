@@ -8,6 +8,7 @@ import { isPublicIp, parsePublicWebhookUrl, resolvePublicWebhook } from "../webh
 import { createR2Store } from "../r2.mjs";
 import { createFiles } from "../files.mjs";
 import { createQueue } from "../queue.mjs";
+import { createRelay } from "../server.mjs";
 
 test("webhook SSRF guard blocks loopback, RFC1918, Tailnet, metadata, IPv4-mapped IPv6, and DNS rebinding", async () => {
   for (const badIp of [
@@ -155,6 +156,31 @@ test("R2 zero-egress store signs SigV4 PUT and returns presigned GET URL", async
     assert.match(out.url, /X-Amz-Algorithm=AWS4-HMAC-SHA256/);
     assert.match(out.url, /X-Amz-Expires=900/);
     assert.match(out.url, /X-Amz-Signature=[a-f0-9]{64}$/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("relay zeroRetention mode keeps jobs and dashboard strictly in memory and purges stale disk artifacts", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bs-relay-zdr-"));
+  try {
+    fs.mkdirSync(path.join(dir, "jobs"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "jobs", "stale.json"), '{"id":"stale"}');
+    fs.writeFileSync(path.join(dir, "dashboard-activity.json"), '[{"route":"/v1/call"}]');
+
+    const relay = await createRelay({ port: 0, host: "127.0.0.1", dataDir: dir, zeroRetention: true, log: { log() {}, error() {} } });
+    try {
+      assert.equal(fs.existsSync(path.join(dir, "jobs")), false, "stale jobs dir removed on startup");
+      assert.equal(fs.existsSync(path.join(dir, "dashboard-activity.json")), false, "stale dashboard history removed on startup");
+
+      const h = await fetch(`${relay.url}/v1/me`, { headers: { authorization: `Bearer ${relay.firstApiKey}` } });
+      assert.equal(h.status, 200);
+      assert.equal(fs.existsSync(path.join(dir, "jobs")), false, "no jobs dir created in zeroRetention mode");
+      assert.equal(fs.existsSync(path.join(dir, "dashboard-activity.json")), false, "no dashboard file created in zeroRetention mode");
+    } finally {
+      await relay.close();
+    }
+    assert.equal(fs.existsSync(path.join(dir, "dashboard-activity.json")), false, "close() does not flush dashboard to disk in zeroRetention mode");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -16,13 +16,14 @@ export function routeLabel(pathname){
   if(pathname.startsWith('/v1/files/'))return '/v1/files/:id';
   return 'other';
 }
-export function createDashboard({dataDir,store,queue,listedDevice,version,log=console}){
+export function createDashboard({dataDir,store,queue,listedDevice,version,memoryOnly=false,log=console}){
   const file=path.join(dataDir,'dashboard-activity.json'), start=Date.now();
   let events=[],dirty=false,storageError=false;const active=new Map();let nextId=0;
-  try{const saved=JSON.parse(fs.readFileSync(file,'utf8'));if(Array.isArray(saved))events=saved;}catch(e){if(e.code!=='ENOENT'){storageError=true;log.error?.('Dashboard history unavailable; starting a new bounded history.');}}
+  if(memoryOnly){try{fs.rmSync(file,{force:true});}catch{}}
+  else{try{const saved=JSON.parse(fs.readFileSync(file,'utf8'));if(Array.isArray(saved))events=saved;}catch(e){if(e.code!=='ENOENT'){storageError=true;log.error?.('Dashboard history unavailable; starting a new bounded history.');}}}
   function prune(){events=events.filter(e=>Number.isFinite(e.at)&&e.at>Date.now()-RETENTION).slice(-LIMIT);}
   prune();
-  function flush(){if(!dirty)return;try{prune();writePrivateJson(file,events);dirty=false;storageError=false;}catch{storageError=true;log.error?.('Dashboard could not save activity history.');}}
+  function flush(){if(memoryOnly||!dirty)return;try{prune();writePrivateJson(file,events);dirty=false;storageError=false;}catch{storageError=true;log.error?.('Dashboard could not save activity history.');}}
   const timer=setInterval(flush,2000);timer.unref();
   function observe(req,res,principal,pathname){
     if(!principal || !pathname.startsWith('/v1/') || pathname==='/v1/dashboard')return;

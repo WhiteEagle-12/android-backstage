@@ -26,7 +26,7 @@ export const validDeviceName=name=>typeof name==='string'&&/^[A-Za-z0-9][A-Za-z0
  * A device ID is stable for the life of the record. Reconnecting a phone replaces
  * the link file behind the same ID, so assistant access and names survive.
  */
-export function createConnections({directory,relayUrl,relayInternalUrl=null,directRoutes=null,begin=beginConnection,call=encryptedCall,fetchImpl=fetch,now=Date.now,log=()=>{}}) {
+export function createConnections({directory,relayUrl,relayInternalUrl=null,directRoutes=null,vault=null,begin=beginConnection,call=encryptedCall,fetchImpl=fetch,now=Date.now,log=()=>{}}) {
   fs.mkdirSync(directory,{recursive:true,mode:0o700});
   const phones=path.join(directory,'phones');
   fs.mkdirSync(phones,{recursive:true,mode:0o700});
@@ -35,6 +35,16 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
   let devices=readJson(devicesFile,{});
   const saveDevices=()=>writePrivateJson(devicesFile,devices);
   const phoneFile=id=>{if(!DEVICE_ID.test(id||''))throw new ConnectionError('unknown_device','Unknown device.');return path.join(phones,id+'.json');};
+  const writePhoneFile=(id,data)=>writePrivateJson(phoneFile(id),vault?vault.sealPhoneConfig(data,id):data);
+  const readPhoneFile=id=>{
+    const file=phoneFile(id),raw=readJson(file,null);
+    if(!raw||!vault)return raw;
+    const {config,migrated}=vault.openPhoneConfig(raw,id);
+    if(migrated)writePrivateJson(file,vault.sealPhoneConfig(config,id));
+    return config;
+  };
+  const readLinkConfig=target=>target?.legacy?readJson(target.filePath,null):readPhoneFile(target.id);
+  const linkIoHooks=target=>(!vault||target?.legacy)?{}:{readConfig:()=>readPhoneFile(target.id)||{},writeConfig:(_p,data)=>writePhoneFile(target.id,data)};
   const grantFile=id=>{if(!GRANT_ID.test(id||''))throw new ConnectionError('access_revoked','This assistant connection is not valid.');return path.join(directory,id+'.json');};
 
   // One-time adoption of the single-phone index: the saved phone becomes a named device.
@@ -49,6 +59,7 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
   // Grants written by the single-phone gateway name their phone directly.
   for(const name of fs.readdirSync(directory))if(/^grant_[a-f0-9]{32}\.json$/.test(name)){const row=readJson(path.join(directory,name),null);if(row?.phoneId)adopt(row.ownerId,row.phoneId);}
   if(adopted)saveDevices();
+  if(vault)for(const id of Object.keys(devices))try{readPhoneFile(id);}catch{}
 
   const readGrant=id=>{const file=grantFile(id);if(!fs.existsSync(file)||fs.existsSync(file+'.revoked'))return null;const row=readJson(file,null);if(!row)return null;
     // Older grants named one phone and had no access list. They keep working with every device of that owner.
@@ -121,7 +132,7 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
   }
   async function probeUncached(device) {
     if(device.needsReconnect)return {...device,online:false,status:'needs_reconnect'};
-    let config;try {config=readJson(linkPath(device),null);} catch {config=null;}
+    let config;try {config=readLinkConfig(device);} catch {config=null;}
     const link=config?.links?.[config.device];
     if(!config?.relayUrl||!config.apiKey||!link)return {...device,online:false,status:'needs_reconnect'};
     try {
@@ -181,9 +192,9 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
     else if(args?.sessionId&&row.sessions.has(args.sessionId)&&result?.leaseExpiresAt)row.sessions.get(args.sessionId).leaseExpiresAt=result.leaseExpiresAt;
   }
   async function callLink(target,name,args){
-    const filePath=linkPath(target);const config=readJson(filePath,null);
+    const filePath=linkPath(target);const config=readLinkConfig(target);
     if(!config)throw new ConnectionError('device_link_revoked',`"${target.name}" has no working link.`);
-    return call({...config,file:config,filePath,directUrl:null,transportRelayUrl:transportFor(config)},name,args,{});
+    return call({...config,...linkIoHooks(target),file:config,filePath,directUrl:null,transportRelayUrl:transportFor(config)},name,args,{});
   }
 
   return {
@@ -194,9 +205,10 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
     deviceByAgent(agentId) {
       if(!/^agt_[A-Za-z0-9_-]{8,64}$/.test(agentId||''))return null;
       for(const [id,row] of Object.entries(devices)){
-        const config=readJson(phoneFile(id),null);
-        if(config?.agentId!==agentId)continue;
-        const linkKey=config.links?.[config.device]?.linkKey;
+        const raw=readJson(phoneFile(id),null);
+        if(raw?.agentId!==agentId)continue;
+        const config=readPhoneFile(id);
+        const linkKey=config?.links?.[config.device]?.linkKey;
         if(!linkKey||!row.ownerId)return null;
         return {device:publicDevice(id,row),ownerId:row.ownerId,linkKey};
       }
@@ -211,7 +223,7 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
     },
     remove(ownerId,deviceId) {
       const device=findOwned(ownerId,deviceId);if(!device||device.id!==deviceId)throw new ConnectionError('unknown_device','Device not found.');
-      const config=readJson(phoneFile(deviceId),null);
+      let config=null;try{config=readPhoneFile(deviceId);}catch{}
       delete devices[deviceId];probeCache.delete(deviceId);lanCache.delete(deviceId);routes.delete(deviceId);saveDevices();fs.rmSync(phoneFile(deviceId),{force:true});
       for(const id of grantIds()){const row=readGrant(id);if(row&&Array.isArray(row.access)&&row.access.includes(deviceId)){row.access=row.access.filter(x=>x!==deviceId);writeGrant(id,row);}}
       if(config?.relayUrl&&config?.apiKey&&String(config.apiKey).startsWith('bsc_')){
@@ -225,7 +237,7 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
       for(const id of ownedGrants){this.revoke(id);work.delete(id);}
       const ownedDevices=ownerDevices(ownerId).map(d=>d.id);
       for(const deviceId of ownedDevices){
-        const config=readJson(phoneFile(deviceId),null);
+        let config=null;try{config=readPhoneFile(deviceId);}catch{}
         delete devices[deviceId];probeCache.delete(deviceId);lanCache.delete(deviceId);routes.delete(deviceId);fs.rmSync(phoneFile(deviceId),{force:true});
         if(config?.relayUrl&&config?.apiKey&&String(config.apiKey).startsWith('bsc_')){
           void fetchImpl(relayBase(config)+'/v1/connection',{method:'DELETE',headers:{Authorization:'Bearer '+config.apiKey},signal:AbortSignal.timeout(5000)}).catch(()=>{});
@@ -291,7 +303,7 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
             if(ownerId){
               const targetId=deviceId||'phone_'+crypto.randomBytes(16).toString('hex');
               if(deviceId&&!devices[deviceId])throw new ConnectionError('unknown_device','That device was removed while connecting.');
-              writePrivateJson(phoneFile(targetId),config);
+              writePhoneFile(targetId,config);
               probeCache.delete(targetId);devices[targetId]=deviceId?{...devices[deviceId],linkedAt:now(),needsReconnect:false,lastError:null}:{ownerId,name:uniqueName(ownerId,label),createdAt:now(),linkedAt:now(),needsReconnect:false};
               saveDevices();
               resultId=clientId?authorize(ownerId,clientId,clientName,'all'):targetId;
@@ -308,13 +320,13 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
       if(!active(grantId))throw new ConnectionError('access_revoked','This assistant’s access was removed.');
       if(readGrant(grantId)?.paused)throw new ConnectionError('assistant_paused','The owner paused this assistant in Backstage. Ask them to resume it.');
       const filePath=linkPath(target);
-      let config;try {config=readJson(filePath,null);} catch {config=null;}
+      let config;try {config=readLinkConfig(target);} catch {config=null;}
       if(!config)throw new ConnectionError('device_link_revoked',`"${target.name}" has no working link. Reconnect it at the Backstage account page.`);
       try {
         const directUrl=await directUrlFor(target,config);
         routes.set(target.id,directUrl?'direct':'relay');
         // Host environment credentials must never be resolved into a user's link.
-        const result=await call({...config,file:config,filePath,directUrl:null,transportRelayUrl:transportFor(config)},name,args,{
+        const result=await call({...config,...linkIoHooks(target),file:config,filePath,directUrl:null,transportRelayUrl:transportFor(config)},name,args,{
           authorize:()=>{if(!active(grantId))throw new ConnectionError('access_revoked','This assistant’s access was removed.');},
           directUrl,
           onRoute:(route,why)=>{routes.set(target.id,route==='relay'&&directUrl?'relay_after_direct':route);if(route==='relay'&&directUrl){directRoutes?.failed(target.id);log(`${target.name}: ${name} fell back to the relay (${why})`);}}});
@@ -335,7 +347,7 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
     /** Read one job's outcome by ID through the device's link, for uncertain writes. */
     async job(device,jobId) {
       if(!/^[A-Za-z0-9_-]{16,100}$/.test(jobId||''))throw new ConnectionError('invalid_request','Job ID required.');
-      const config=readJson(linkPath(device),null);if(!config)throw new ConnectionError('device_link_revoked',`"${device.name}" has no working link.`);
+      const config=readLinkConfig(device);if(!config)throw new ConnectionError('device_link_revoked',`"${device.name}" has no working link.`);
       const response=await fetchImpl(relayBase(config)+'/v1/jobs/'+jobId,{headers:{Authorization:'Bearer '+config.apiKey},signal:AbortSignal.timeout(15000)});
       const body=await response.json().catch(()=>({}));
       if(response.status===401){markLink(device.id,{needsReconnect:true,lastError:'The phone removed this link.'});throw new ConnectionError('device_link_revoked',`"${device.name}" removed this link. Reconnect it at the Backstage account page.`);}
@@ -352,7 +364,7 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,dire
       }
       return rest;
     },
-    linkConfig(device) {return readJson(linkPath(device),null);}
+    linkConfig(device) {return readLinkConfig(device);}
   };
 }
 

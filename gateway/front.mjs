@@ -3,7 +3,8 @@ import http from 'node:http';
 import net from 'node:net';
 import { createRelay } from '../relay/server.mjs';
 const publicPort = Number(process.env.PORT || 18421);
-const relay = await createRelay({port:Number(process.env.BACKSTAGE_INTERNAL_RELAY_PORT || 18420),host:'127.0.0.1'});
+const zeroRetention = process.env.RELAY_ZERO_RETENTION !== '0';
+const relay = await createRelay({port:Number(process.env.BACKSTAGE_INTERNAL_RELAY_PORT || 18420),host:'127.0.0.1',zeroRetention});
 const front = http.createServer((req,res)=>{
   let pathname;try {pathname=new URL(req.url,'http://localhost').pathname;}catch{res.writeHead(400).end();return;}
   const work = pathname === '/.well-known/assetlinks.json' || pathname === '/work' || pathname.startsWith('/work/') || pathname === '/.well-known/oauth-authorization-server/work' || pathname === '/.well-known/oauth-protected-resource/work/mcp';

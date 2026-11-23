@@ -11,7 +11,8 @@ import Ajv from 'ajv';
 import {advertisedSchema} from '../cli/advertised-schema.mjs';
 import {invalidArguments} from './validation.mjs';
 import { createConnections, ConnectionError } from './connections.mjs';
-import { createArtifacts } from './artifacts.mjs';
+import { createArtifacts, shredFile } from './artifacts.mjs';
+import { loadVaultFromEnv } from './vault.mjs';
 import { createDirectRoutes, overTailnet } from './direct-routes.mjs';
 import {createRequestJournal} from './request-journal.mjs';
 import {jsonKeepAlive} from './json-keepalive.mjs';
@@ -119,8 +120,9 @@ const failure=(e)=>{
   return asToolResult({ok:false,code:'tool_failed',error:'The phone action did not finish. The phone may be offline, paused, or this connection may no longer have access. Do not retry a write unless its outcome is known.'},true);
 };
 
-export function createWorkApp({base,stateFile,approvalFile,connections,owners,artifacts,metadataReader,callTool,directFilesUrl=null,keepAlive,allowTestRedirect=false,audit=()=>{},now=Date.now}) {
-  const journal=createRequestJournal({directory:stateFile+'.requests',now,reconcile:async(grantId,name,args,jobId)=>{
+export function createWorkApp({base,stateFile,approvalFile,connections,owners,artifacts,metadataReader,callTool,directFilesUrl=null,keepAlive,allowTestRedirect=false,zeroRetention=false,audit=()=>{},now=Date.now}) {
+  if(zeroRetention&&stateFile)fs.rmSync(stateFile+'.requests',{recursive:true,force:true});
+  const journal=createRequestJournal({directory:stateFile+'.requests',memoryOnly:zeroRetention,now,reconcile:async(grantId,name,args,jobId)=>{
     if(!connections?.active(grantId))return null;
     const device=connections.resolve(grantId,args.device),job=await connections.job(device,jobId);
     if(job.state==='complete'&&job.recorded?.result)return {...job.recorded.result,device:{id:device.id,name:device.name}};
@@ -151,7 +153,9 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
     try {
       const file=artifacts.download(req.params.id,{uploadToken:bearer,grantId:auth.grantForToken(bearer)});
       res.set({'Content-Type':'application/octet-stream','Content-Disposition':`attachment; filename="${file.name}"`,'Content-Length':String(file.size),'X-Content-Sha256':file.sha256,'Cache-Control':'no-store'});
-      fs.createReadStream(file.path).pipe(res);
+      const stream=fs.createReadStream(file.path);
+      if(file.singleUse&&file.consume)stream.once('close',()=>{try{file.consume();}catch{}});
+      stream.pipe(res);
     } catch(e){res.status(e.code==='unknown_artifact'?404:400).json({error:e.code||'invalid_request',message:e.message});}
   });
   app.use(express.json({limit:'128kb'})); app.use(express.urlencoded({extended:false,limit:'8kb'}));
@@ -204,7 +208,8 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
     if(engine==='android.file'&&rest.operation==='pull'&&rest.offset==null&&artifacts){
       const first=await send('android.pull',{path:rest.path,offset:0,length:rest.length||1048576});
       if(first.outcome!=='succeeded'||(first.eof&&!rest.download))return first;
-      const tmp=path.join(os.tmpdir(),`backstage-pull-${randomBytes(12).toString('hex')}.bin`);
+      const tmpDir=artifacts.tempDir||os.tmpdir();
+      const tmp=path.join(tmpDir,`backstage-pull-${randomBytes(12).toString('hex')}.bin`);
       const fd=fs.openSync(tmp,'wx',0o600);
       const hash=createHash('sha256');
       let offset=0;
@@ -222,7 +227,7 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
         }
         fs.fsyncSync(fd);
       } catch(e){
-        fs.closeSync(fd);fs.rmSync(tmp,{force:true});throw e;
+        fs.closeSync(fd);shredFile(tmp,zeroRetention||artifacts.zeroRetention);throw e;
       }
       fs.closeSync(fd);
       const sha256=hash.digest('hex');
@@ -302,17 +307,20 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   if (!dir || !process.env.BACKSTAGE_RELAY_URL) throw new Error('BACKSTAGE_WORK_STATE and BACKSTAGE_RELAY_URL required');
   fs.mkdirSync(dir,{recursive:true,mode:0o700});
   const cloudMode = process.env.BACKSTAGE_CLOUD_MODE === '1';
+  const zeroRetention = process.env.BACKSTAGE_ZERO_RETENTION !== '0';
+  const vault = loadVaultFromEnv();
   const directRoutes = (cloudMode || process.env.BACKSTAGE_DIRECT_ROUTES === '0') ? null : createDirectRoutes({log:line=>console.log(line)});
   const connections = createConnections({directory:path.join(dir,'connections'),relayUrl:process.env.BACKSTAGE_RELAY_URL,
-    relayInternalUrl:process.env.BACKSTAGE_RELAY_INTERNAL_URL||null,directRoutes,log:line=>console.log(line)});
-  const artifacts = createArtifacts({directory:path.join(dir,'artifacts')});
+    relayInternalUrl:process.env.BACKSTAGE_RELAY_INTERNAL_URL||null,directRoutes,vault,log:line=>console.log(line)});
+  const artifacts = createArtifacts({directory:process.env.BACKSTAGE_ARTIFACTS_DIR||path.join(dir,'artifacts'),zeroRetention});
   const base=process.env.BACKSTAGE_WORK_BASE || 'https://relay.android-backstage.com/work';
   const owners=createOwners({stateFile:path.join(dir,'owners.json'),origin:new URL(base).origin,androidOrigins,mailer:createMailer()});
-  const app = createWorkApp({connections,owners,artifacts,base,directFilesUrl:process.env.BACKSTAGE_DIRECT_FILES_URL||null,stateFile:path.join(dir,'oauth.json'),approvalFile:path.join(dir,'approval.json'),
-    audit:row=>fs.appendFileSync(path.join(dir,'calls.jsonl'),JSON.stringify(row)+'\n',{mode:0o600})});
+  const auditEnabled = process.env.BACKSTAGE_AUDIT_LOG === '1';
+  const app = createWorkApp({connections,owners,artifacts,base,zeroRetention,directFilesUrl:process.env.BACKSTAGE_DIRECT_FILES_URL||null,stateFile:path.join(dir,'oauth.json'),approvalFile:path.join(dir,'approval.json'),
+    audit:auditEnabled ? (row=>fs.appendFileSync(path.join(dir,'calls.jsonl'),JSON.stringify(row)+'\n',{mode:0o600})) : (()=>{})});
   const listener = app.listen(Number(process.env.PORT || 18424),'127.0.0.1',error=>{
     if(error){console.error('Cannot bind Work listener:',error.code);process.exitCode=1;}
-    else console.log('Backstage Work listening on loopback');
+    else console.log(`Backstage Work listening on loopback (zero-retention=${zeroRetention?'on':'off'}, vault=${vault?'sealed':'plain'})`);
   });
   listener.on('error',()=>{process.exitCode=1;});
 }

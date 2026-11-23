@@ -266,12 +266,27 @@ export async function createRelay(opts = {}) {
   const maxFileBytes = opts.maxFileBytes ?? maxFileMb * 1024 * 1024;
   const pairPollMs = Math.min(PAIR_POLL_MAX, opts.pairPollMs ?? PAIR_POLL_MAX);
   const enableLearn = opts.enableLearn ?? (process.env.RELAY_ENABLE_LEARN === "1");
+  const zeroRetention = opts.zeroRetention ?? (process.env.RELAY_ZERO_RETENTION === "1");
+  const filesDir = opts.filesDir ?? (process.env.RELAY_FILES_DIR ? path.resolve(process.env.RELAY_FILES_DIR) : null);
   const r2 = opts.r2 !== undefined ? opts.r2 : createR2FromEnv();
   const webhookLookup = opts.webhookLookup;
 
   const store = createStore(dataDir, { log });
-  const queue = createQueue({ dataDir });
-  const files = createFiles({ dataDir, maxBytes: maxFileBytes });
+  if (zeroRetention) {
+    fs.rmSync(path.join(dataDir, "jobs"), { recursive: true, force: true });
+    fs.rmSync(path.join(dataDir, "dashboard-activity.json"), { force: true });
+  }
+  const queue = createQueue({
+    dataDir: zeroRetention ? null : dataDir,
+    retentionMs: zeroRetention ? 5 * 60_000 : 86_400_000,
+  });
+  const files = createFiles({
+    dataDir,
+    filesDir,
+    maxBytes: maxFileBytes,
+    ttlMs: zeroRetention ? 5 * 60_000 : 15 * 60_000,
+    shred: zeroRetention,
+  });
   files.startSweeper();
   const uploads = createUploads(dataDir, {maxBytes:maxFileBytes});
   const learnResults = enableLearn ? createLearnResults(dataDir, { log }) : null;
@@ -315,6 +330,10 @@ export async function createRelay(opts = {}) {
     };
     let list = eventsByAccount.get(accountId);
     if (!list) { list = []; eventsByAccount.set(accountId, list); }
+    if (zeroRetention) {
+      const cutoff = Date.now() - 10 * 60_000;
+      while (list.length && list[0].time < cutoff) list.shift();
+    }
     list.push(entry);
     if (list.length > 200) list.splice(0, list.length - 200);
     const streams = eventStreams.get(accountId);
@@ -386,7 +405,7 @@ export async function createRelay(opts = {}) {
     }
   }
 
-  const dashboard = createDashboard({dataDir,store,queue,listedDevice,version:VERSION,log});
+  const dashboard = createDashboard({dataDir,store,queue,listedDevice,version:VERSION,memoryOnly:zeroRetention,log});
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, "http://127.0.0.1");
@@ -1042,7 +1061,8 @@ function isMain() {
 }
 
 if (isMain()) {
-  const relay = await createRelay();
+  const zeroRetention = process.env.RELAY_ZERO_RETENTION !== "0";
+  const relay = await createRelay({ zeroRetention });
   const bind = process.env.HOST || "0.0.0.0";
-  console.log(`backstage-relay ${VERSION} listening on http://${bind}:${relay.port}`);
+  console.log(`backstage-relay ${VERSION} listening on http://${bind}:${relay.port} (zero-retention=${zeroRetention ? "on" : "off"})`);
 }

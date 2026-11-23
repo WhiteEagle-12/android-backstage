@@ -35,7 +35,10 @@ import { downloadFile } from './download.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
-const DEFAULT_CONFIG = path.join(REPO_ROOT, "config", "backstage.json");
+const IN_REPO = fs.existsSync(path.join(REPO_ROOT, "relay", "server.mjs"));
+const USER_CONFIG = path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "android-backstage", "backstage.json");
+const DEFAULT_CONFIG = IN_REPO ? path.join(REPO_ROOT, "config", "backstage.json") : USER_CONFIG;
+const DEFAULT_PUBLIC_RELAY = "https://relay.android-backstage.com";
 const CODE_RE = /^[ABCDEFGHJKMNPQRSTVWXYZ23456789]{4}-[ABCDEFGHJKMNPQRSTVWXYZ23456789]{6}$/;
 
 function usage(message) {
@@ -119,7 +122,8 @@ function configPath(flags = {}) {
   return path.resolve(flags.config || process.env.BACKSTAGE_CONFIG || DEFAULT_CONFIG);
 }
 
-function loadFileConfig(filePath) {
+function loadFileConfig(filePath, cfg = null) {
+  if (cfg?.readConfig) return cfg.readConfig(filePath);
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch (err) {
@@ -128,18 +132,20 @@ function loadFileConfig(filePath) {
   }
 }
 
-function saveFileConfig(filePath, data) {
+function saveFileConfig(filePath, data, cfg = null) {
+  if (cfg?.writeConfig) return cfg.writeConfig(filePath, data);
   writePrivateJson(filePath, data);
 }
 
 function resolveConfig(flags) {
   const filePath = configPath(flags);
   const file = loadFileConfig(filePath);
+  const fallbackRelay = IN_REPO ? "" : DEFAULT_PUBLIC_RELAY;
   return {
     filePath,
     file,
     directUrl: flags.direct || null,
-    relayUrl: String(flags.relayUrl || process.env.BACKSTAGE_RELAY_URL || file.relayUrl || "").replace(/\/$/, ""),
+    relayUrl: String(flags.relayUrl || process.env.BACKSTAGE_RELAY_URL || file.relayUrl || fallbackRelay).replace(/\/$/, ""),
     apiKey: flags.apiKey || process.env.BACKSTAGE_API_KEY || file.apiKey || "",
     device: flags.device || process.env.BACKSTAGE_DEVICE || file.device || "",
     agentId: file.agentId || "",
@@ -148,7 +154,7 @@ function resolveConfig(flags) {
 }
 
 function persistConfig(cfg, patch) {
-  const current = loadFileConfig(cfg.filePath);
+  const current = loadFileConfig(cfg.filePath, cfg);
   const next = {
     ...current,
     relayUrl: cfg.relayUrl || current.relayUrl || "",
@@ -159,7 +165,7 @@ function persistConfig(cfg, patch) {
     ...patch,
   };
   if (patch.links) next.links = patch.links;
-  saveFileConfig(cfg.filePath, next);
+  saveFileConfig(cfg.filePath, next, cfg);
   cfg.file = next;
   if (next.agentId) cfg.agentId = next.agentId;
   if (next.links) cfg.links = next.links;
@@ -254,7 +260,7 @@ async function encryptedCall(cfg, tool, args, options = {}) {
     // The hosted gateway can revoke one grant while it waits on a shared link.
     // Check after acquiring the link lock, before sending any phone command.
     options.authorize?.();
-    const current = loadFileConfig(cfg.filePath);
+    const current = loadFileConfig(cfg.filePath, cfg);
     cfg.links = current.links || {};
     cfg.agentId = current.agentId || cfg.agentId;
     const queueMs=performance.now()-queuedAt,started=performance.now();
@@ -411,7 +417,7 @@ async function directThenRelay(cfg, tool, args, options, sealed) {
   for (;;) {
     const pending = await withConfigLock(cfg.filePath, async () => {
       options.authorize?.();
-      const current = loadFileConfig(cfg.filePath);
+      const current = loadFileConfig(cfg.filePath, cfg);
       cfg.links = current.links || {};
       cfg.agentId = current.agentId || cfg.agentId;
       return submitCall(cfg, tool, args, {...options, callId, deadline});
@@ -473,7 +479,7 @@ async function openResult(cfg, name, callId, status, body) {
   if (status >= 400) throw new Error(body?.error || `HTTP ${status}`);
   if (!body?.envelope) throw new Error("relay returned no envelope");
   return withConfigLock(cfg.filePath, async () => {
-    const current = loadFileConfig(cfg.filePath);
+    const current = loadFileConfig(cfg.filePath, cfg);
     cfg.links = current.links || {};
     const link = linkFor(cfg, name);
     const opened = openEnvelope({ key: resultKey(unb64url(link.linkKey)), envelope: body.envelope });
@@ -985,10 +991,9 @@ async function cmdMcpBridge(cfg, flags) {
   if (!cfg.device && linked.length === 1) cfg.device = linked[0];
   if (flags.printConfig) {
     const dev = cfg.device || "<device-name>";
-    const entry = {
-      command: "node",
-      args: [path.resolve(fileURLToPath(import.meta.url)), "mcp-bridge", "--device", dev],
-    };
+    const entry = IN_REPO
+      ? { command: "node", args: [path.resolve(fileURLToPath(import.meta.url)), "mcp-bridge", "--device", dev] }
+      : { command: "npx", args: ["-y", "android-backstage", "mcp-bridge", "--device", dev] };
     printJson({
       mode: "e2ee-local-bridge",
       note: "All commands and replies are sealed end-to-end (AES-256-GCM) between this machine and your phone; the relay never sees plaintext.",
@@ -997,10 +1002,12 @@ async function cmdMcpBridge(cfg, flags) {
     return;
   }
   if (!cfg.device || !cfg.links?.[cfg.device]) {
+    const pairCmd = IN_REPO ? "node cli/backstage.mjs pair --name phone" : "npx -y android-backstage pair --name phone";
+    const runCmd = IN_REPO ? "node cli/backstage.mjs mcp-bridge --device phone" : "npx -y android-backstage mcp-bridge --device phone";
     process.stderr.write(
       "Android Backstage E2EE bridge is not paired for a device yet.\n"
-      + "Run once: node cli/backstage.mjs pair --name phone\n"
-      + "Then re-run: node cli/backstage.mjs mcp-bridge --device phone\n"
+      + `Run once: ${pairCmd}\n`
+      + `Then re-run: ${runCmd}\n`
     );
     process.exitCode = 2;
     return;

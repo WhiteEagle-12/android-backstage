@@ -10,6 +10,27 @@ import {pipeline} from "node:stream/promises";
 import {writePrivateJson} from "./persist.mjs";
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
+const ZERO_CHUNK = Buffer.alloc(65536);
+
+function shredSync(p, shred) {
+  if (shred) {
+    try {
+      const st = fs.statSync(p);
+      if (st.isFile() && st.size > 0) {
+        const fd = fs.openSync(p, "r+");
+        try {
+          let rem = st.size, pos = 0;
+          while (rem > 0) {
+            const n = Math.min(rem, ZERO_CHUNK.length);
+            fs.writeSync(fd, ZERO_CHUNK, 0, n, pos);
+            pos += n; rem -= n;
+          }
+        } finally { fs.closeSync(fd); }
+      }
+    } catch { /* best-effort */ }
+  }
+  try { fs.unlinkSync(p); } catch { /* already gone */ }
+}
 
 export function isLocalFile(p) {
   try {
@@ -33,13 +54,15 @@ function contentTypeFor(name) {
 
 export function createFiles({
   dataDir,
+  filesDir: customFilesDir = null,
   maxBytes,
   quotaBytes = 2 * 1024 * 1024 * 1024,
   maxAccountFiles = 32,
   maxAccountBytes = 512 * 1024 * 1024,
   ttlMs = DEFAULT_TTL_MS,
+  shred = false,
 }) {
-  const filesDir = path.join(dataDir, "files");
+  const filesDir = customFilesDir || path.join(dataDir, "files");
   fs.mkdirSync(filesDir, { recursive: true, mode: 0o700 });
   let reservedBytes = 0, activeUploads = 0;
   const reservedByOwner = new Map();
@@ -80,11 +103,7 @@ export function createFiles({
   function removeEntry(id) {
     registry.delete(id);
     for (const p of [dataPath(id), metaPath(id)]) {
-      try {
-        fs.unlinkSync(p);
-      } catch {
-        /* already gone */
-      }
+      shredSync(p, shred);
     }
   }
 
@@ -248,11 +267,7 @@ export function createFiles({
     const stream = fs.createReadStream(entry.path, { start, end });
     stream.on("close", () => {
       if (entry.singleUse) {
-        try {
-          fs.unlinkSync(entry.path);
-        } catch {
-          /* ignore */
-        }
+        shredSync(entry.path, shred);
       }
     });
     stream.on("error", () => {

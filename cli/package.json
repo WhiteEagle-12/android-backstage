@@ -3,10 +3,35 @@
   "version": "2.0.0",
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Android Backstage CLI: SPAKE2 pairing, zero-knowledge E2EE envelopes, stdio MCP.",
+  "description": "Android Backstage CLI & Local E2EE MCP Bridge — control your Android phone over a blind relay with zero-knowledge AES-256-GCM encryption.",
+  "homepage": "https://android-backstage.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WhiteEagle-12/android-backstage.git",
+    "directory": "cli"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "keywords": [
+    "android",
+    "mcp",
+    "model-context-protocol",
+    "ai-agent",
+    "e2ee",
+    "spake2",
+    "automation"
+  ],
   "bin": {
     "android-backstage": "./backstage.mjs"
   },
+  "files": [
+    "*.mjs",
+    "*.json",
+    "instructions.txt",
+    "README.md",
+    "!test/**"
+  ],
   "scripts": {
     "test": "node --test test/*.test.mjs"
   }

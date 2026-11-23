@@ -10,15 +10,39 @@ import {ConnectionError} from './connections.mjs';
  * must match the received bytes before any phone can be pointed at it. Uploads are
  * resumable by offset so large builds can cross proxies with request-size limits.
  */
-export function createArtifacts({directory,maxBytes=256*1024*1024,ttlMs=45*60000,quotaBytes=1024*1024*1024,maxGrantBytes=256*1024*1024,now=Date.now}) {
+const ZERO_CHUNK = Buffer.alloc(65536);
+
+/** Overwrite file bytes with zeros before unlinking (used in zero-retention mode). */
+export function shredFile(filePath, shred = true) {
+  if (shred) {
+    try {
+      const st = fs.statSync(filePath);
+      if (st.isFile() && st.size > 0) {
+        const fd = fs.openSync(filePath, 'r+');
+        try {
+          let remaining = st.size, pos = 0;
+          while (remaining > 0) {
+            const n = Math.min(remaining, ZERO_CHUNK.length);
+            fs.writeSync(fd, ZERO_CHUNK, 0, n, pos);
+            pos += n; remaining -= n;
+          }
+        } finally { fs.closeSync(fd); }
+      }
+    } catch { /* best-effort */ }
+  }
+  fs.rmSync(filePath, { force: true });
+}
+
+export function createArtifacts({directory,maxBytes=256*1024*1024,zeroRetention=false,ttlMs=zeroRetention?5*60000:45*60000,quotaBytes=1024*1024*1024,maxGrantBytes=256*1024*1024,now=Date.now}) {
   fs.mkdirSync(directory,{recursive:true,mode:0o700});
   const meta=id=>path.join(directory,id+'.json'),blob=id=>path.join(directory,id+'.bin');
   const busy=new Set();
+  const purge=id=>{shredFile(blob(id),zeroRetention);shredFile(meta(id),zeroRetention);};
   const valid=id=>/^art_[a-f0-9]{24}$/.test(id||'');
   const read=id=>{if(!valid(id))return null;try {return JSON.parse(fs.readFileSync(meta(id),'utf8'));} catch {return null;}};
   const save=row=>writePrivateJson(meta(row.id),row);
   const all=()=>fs.readdirSync(directory).filter(n=>n.endsWith('.json')).map(n=>read(n.slice(0,-5))).filter(Boolean);
-  function sweep() {for(const row of all())if(row.expiresAt<=now()&&!busy.has(row.id)){fs.rmSync(meta(row.id),{force:true});fs.rmSync(blob(row.id),{force:true});}}
+  function sweep() {for(const row of all())if(row.expiresAt<=now()&&!busy.has(row.id))purge(row.id);}
   function checkGrantQuota(rows,grantId,size) {
     const mine=rows.filter(r=>r.grantId===grantId);
     if(mine.length>=6)throw new ConnectionError('busy','Six uploads are still stored. Delete one you no longer need with android_artifact_delete, or wait for it to expire.');
@@ -69,12 +93,12 @@ export function createArtifacts({directory,maxBytes=256*1024*1024,ttlMs=45*60000
       row.offset+=written;
       if(row.offset===row.size){
         const digest=await new Promise((resolve,reject)=>{const h=crypto.createHash('sha256');fs.createReadStream(blob(id)).on('data',d=>h.update(d)).on('end',()=>resolve(h.digest('hex'))).on('error',reject);});
-        if(digest!==row.sha256){fs.rmSync(blob(id),{force:true});fs.rmSync(meta(id),{force:true});throw new ConnectionError('integrity_mismatch',`Received SHA-256 ${digest} does not match the declared ${row.sha256}. The upload was discarded; begin again.`);}
+        if(digest!==row.sha256){purge(id);throw new ConnectionError('integrity_mismatch',`Received SHA-256 ${digest} does not match the declared ${row.sha256}. The upload was discarded; begin again.`);}
         row.complete=true;
       }
       save(row);return publicRow(row);
     } catch(e) {
-      if(!(e instanceof ConnectionError)){fs.rmSync(blob(id),{force:true});fs.rmSync(meta(id),{force:true});throw new ConnectionError('upload_failed','The upload stream failed. Begin a new upload.');}
+      if(!(e instanceof ConnectionError)){purge(id);throw new ConnectionError('upload_failed','The upload stream failed. Begin a new upload.');}
       throw e;
     } finally {busy.delete(id);}
   }
@@ -97,16 +121,16 @@ export function createArtifacts({directory,maxBytes=256*1024*1024,ttlMs=45*60000
     if(!row)return {artifactId:id,deleted:false};
     if(row.grantId!==grantId)throw new ConnectionError('unknown_artifact','Unknown artifact.');
     if(busy.has(id))throw new ConnectionError('busy','This upload is in use. Try again when its current operation finishes.');
-    fs.rmSync(blob(id),{force:true});fs.rmSync(meta(id),{force:true});
+    purge(id);
     return {artifactId:id,deleted:true};
   }
-  function createFromFile({grantId,name,tempPath,size,sha256}) {
+  function createFromFile({grantId,name,tempPath,size,sha256,singleUse=zeroRetention}) {
     sweep();
     if(!Number.isSafeInteger(size)||size<0||size>maxBytes)throw new ConnectionError('invalid_request',`size must be 0–${maxBytes} bytes.`);
     if(!/^[a-f0-9]{64}$/i.test(sha256||''))throw new ConnectionError('invalid_request','sha256 must be lowercase hex.');
     checkGrantQuota(all(),grantId,size);
     const clean=path.basename(String(name||'file.bin')).replace(/[^A-Za-z0-9._-]/g,'_').slice(0,80)||'file.bin';
-    const row={id:'art_'+crypto.randomBytes(12).toString('hex'),grantId,name:clean,size,sha256:sha256.toLowerCase(),offset:size,complete:true,tokenHash:null,createdAt:now(),expiresAt:now()+ttlMs};
+    const row={id:'art_'+crypto.randomBytes(12).toString('hex'),grantId,name:clean,size,sha256:sha256.toLowerCase(),offset:size,complete:true,singleUse:!!singleUse,tokenHash:null,createdAt:now(),expiresAt:now()+ttlMs};
     const token='artdl_'+crypto.randomBytes(24).toString('base64url');
     row.tokenHash=crypto.createHash('sha256').update(token).digest('hex');
     try {
@@ -114,7 +138,7 @@ export function createArtifacts({directory,maxBytes=256*1024*1024,ttlMs=45*60000
     } catch(e) {
       if(e.code!=='EXDEV')throw e;
       fs.copyFileSync(tempPath,blob(row.id));
-      fs.rmSync(tempPath,{force:true});
+      shredFile(tempPath,zeroRetention);
     }
     fs.chmodSync(blob(row.id),0o600);
     save(row);
@@ -126,7 +150,7 @@ export function createArtifacts({directory,maxBytes=256*1024*1024,ttlMs=45*60000
     let removed=0;
     for(const row of all()){
       if(set.has(row.grantId)&&!busy.has(row.id)){
-        fs.rmSync(blob(row.id),{force:true});fs.rmSync(meta(row.id),{force:true});removed++;
+        purge(row.id);removed++;
       }
     }
     return removed;
@@ -134,8 +158,10 @@ export function createArtifacts({directory,maxBytes=256*1024*1024,ttlMs=45*60000
   function download(id,auth) {
     const row=authorizedRow(id,typeof auth==='string'?{grantId:auth}:auth||{});
     if(!row.complete)throw new ConnectionError('artifact_incomplete',`Artifact ${id} is incomplete.`);
-    return {...publicRow(row),path:blob(id)};
+    const singleUse=!!row.singleUse;
+    if(singleUse)shredFile(meta(id),zeroRetention);
+    return {...publicRow(row),path:blob(id),singleUse,consume:()=>{if(!busy.has(id))shredFile(blob(id),zeroRetention);}};
   }
   const timer=setInterval(sweep,60000);timer.unref();
-  return {begin,append,status,ready,use,remove,removeForGrants,createFromFile,download,sweep,close:()=>clearInterval(timer),maxBytes};
+  return {begin,append,status,ready,use,remove,removeForGrants,createFromFile,download,sweep,close:()=>clearInterval(timer),maxBytes,tempDir:directory,zeroRetention};
 }
