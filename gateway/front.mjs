@@ -4,7 +4,12 @@ import net from 'node:net';
 import { createRelay } from '../relay/server.mjs';
 const publicPort = Number(process.env.PORT || 18421);
 const zeroRetention = process.env.RELAY_ZERO_RETENTION !== '0';
-const relay = await createRelay({port:Number(process.env.BACKSTAGE_INTERNAL_RELAY_PORT || 18420),host:'127.0.0.1',zeroRetention});
+const relayHost = process.env.BACKSTAGE_INTERNAL_RELAY_HOST || '127.0.0.1';
+const relayUpstreamHost = (relayHost === '0.0.0.0' || relayHost === '::') ? '127.0.0.1' : relayHost;
+const relayPort = Number(process.env.BACKSTAGE_INTERNAL_RELAY_PORT || 18420);
+const workHost = process.env.BACKSTAGE_WORK_UPSTREAM_HOST || '127.0.0.1';
+const workPort = Number(process.env.BACKSTAGE_WORK_UPSTREAM_PORT || 18424);
+const relay = await createRelay({port:relayPort,host:relayHost,zeroRetention});
 const front = http.createServer((req,res)=>{
   let pathname;try {pathname=new URL(req.url,'http://localhost').pathname;}catch{res.writeHead(400).end();return;}
   const work = pathname === '/.well-known/assetlinks.json' || pathname === '/work' || pathname.startsWith('/work/') || pathname === '/.well-known/oauth-authorization-server/work' || pathname === '/.well-known/oauth-protected-resource/work/mcp';
@@ -19,7 +24,7 @@ const front = http.createServer((req,res)=>{
   // Cloudflare overwrites this header; the front listener is loopback-only.
   // Never trust an arbitrary client-supplied forwarding chain.
   headers['x-forwarded-for']=net.isIP(req.headers['cf-connecting-ip']||'')?req.headers['cf-connecting-ip']:req.socket.remoteAddress;
-  const upstream=http.request({host:'127.0.0.1',port:work?18424:relay.port,method:req.method,path:req.url,headers},reply=>{
+  const upstream=http.request({host:work?workHost:relayUpstreamHost,port:work?workPort:relay.port,method:req.method,path:req.url,headers},reply=>{
     // Browser-facing hardening for every response, whichever service answered.
     const out={...reply.headers,'strict-transport-security':'max-age=31536000','x-content-type-options':'nosniff','referrer-policy':'no-referrer','x-frame-options':'DENY','permissions-policy':'camera=(), microphone=(), geolocation=(), payment=()','cross-origin-opener-policy':'same-origin','cache-control':reply.headers['cache-control']||'no-store'};
     res.writeHead(reply.statusCode,out);reply.pipe(res);

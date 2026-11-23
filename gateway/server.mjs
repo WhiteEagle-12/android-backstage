@@ -129,7 +129,9 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
     if(['cancelled','expired'].includes(job.state))return {outcome:'failed',inputDelivered:false,code:'job_not_executed',jobId,error:'The queued command did not run. Start a new request if it is still needed.'};
     return null;
   }});
-  const app = express(); app.disable('x-powered-by'); app.set('trust proxy','loopback');
+  const app = express(); app.disable('x-powered-by');
+  const trustProxy = process.env.BACKSTAGE_TRUST_PROXY || 'loopback';
+  app.set('trust proxy', trustProxy.includes(',') ? trustProxy.split(',').map(s=>s.trim()).filter(Boolean) : trustProxy);
   const auth = createAuth({base,stateFile,approvalFile,connections,owners,metadataReader,allowTestRedirect,now});
   // Artifact bytes stream straight to disk; they must not meet the JSON body parser.
   app.put('/work/artifacts/:id',async(req,res)=>{
@@ -318,9 +320,10 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   const auditEnabled = process.env.BACKSTAGE_AUDIT_LOG === '1';
   const app = createWorkApp({connections,owners,artifacts,base,zeroRetention,directFilesUrl:process.env.BACKSTAGE_DIRECT_FILES_URL||null,stateFile:path.join(dir,'oauth.json'),approvalFile:path.join(dir,'approval.json'),
     audit:auditEnabled ? (row=>fs.appendFileSync(path.join(dir,'calls.jsonl'),JSON.stringify(row)+'\n',{mode:0o600})) : (()=>{})});
-  const listener = app.listen(Number(process.env.PORT || 18424),'127.0.0.1',error=>{
+  const bindHost = process.env.HOST || '127.0.0.1';
+  const listener = app.listen(Number(process.env.PORT || 18424),bindHost,error=>{
     if(error){console.error('Cannot bind Work listener:',error.code);process.exitCode=1;}
-    else console.log(`Backstage Work listening on loopback (zero-retention=${zeroRetention?'on':'off'}, vault=${vault?'sealed':'plain'})`);
+    else console.log(`Backstage Work listening on ${bindHost} (zero-retention=${zeroRetention?'on':'off'}, vault=${vault?'sealed':'plain'})`);
   });
   listener.on('error',()=>{process.exitCode=1;});
 }
