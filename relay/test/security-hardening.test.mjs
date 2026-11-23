@@ -218,5 +218,20 @@ test("allowPublicPair=false blocks anonymous /v1/pair/connect while allowing aut
     });
     assert.equal(withAdmin.status, 200);
     assert.ok(withAdmin.body.sessionId);
+
+    const withInternalKey = await httpJson(`${url}/v1/pair/connect`, {
+      method: "POST",
+      headers: { "x-backstage-internal-key": "adm_secret_123", "x-backstage-owner": "owner_test", "content-type": "application/json" },
+      body: { name: "phone-gateway" },
+    });
+    assert.equal(withInternalKey.status, 200);
+    assert.ok(withInternalKey.body.sessionId);
+
+    const badInternalKey = await httpJson(`${url}/v1/pair/connect`, {
+      method: "POST",
+      headers: { "x-backstage-internal-key": "wrong", "content-type": "application/json" },
+      body: { name: "phone-bad" },
+    });
+    assert.equal(badInternalKey.status, 403);
   });
 });

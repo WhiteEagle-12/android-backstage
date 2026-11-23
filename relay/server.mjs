@@ -853,15 +853,9 @@ export async function createRelay(opts = {}) {
 
       if (url.pathname === "/v1/pair/connect" && req.method === "POST") {
         if (!allowPublicPair) {
-          const token = bearerToken(req);
           const hasAccount = Boolean(token && store.accountByKey(token));
-          let hasAdmin = false;
-          if (adminToken && token) {
-            const given = crypto.createHash("sha256").update(token, "utf8").digest();
-            const expected = crypto.createHash("sha256").update(String(adminToken), "utf8").digest();
-            hasAdmin = crypto.timingSafeEqual(given, expected);
-          }
-          if (!hasAccount && !hasAdmin) {
+          const hasAdmin = Boolean(adminToken && token && hashesEqual(hashToken(token), hashToken(adminToken)));
+          if (!internalAuthed && !hasAccount && !hasAdmin) {
             json(res, 403, {
               error: "account_required",
               message: "Sign in at android-backstage.com to use the hosted relay, or self-host your own relay from GitHub.",
