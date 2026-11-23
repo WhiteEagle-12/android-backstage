@@ -151,17 +151,49 @@ public final class AppCopy {
     public static final String TOKEN_COPIED = "Local token copied.";
 
     // Sign-in & setup
-    public static final String SIGN_IN_TITLE = "Sign in";
+    public static final String SIGN_IN_TITLE = "Log in";
+    public static final String SIGN_UP_TITLE = "Create account";
     public static final String SIGN_IN_FINISHING = "Finishing sign-in…";
     public static final String FIELD_EMAIL = "Email";
     public static final String FIELD_EMAIL_HINT = "you@example.com";
+    public static final String FIELD_PASSWORD = "Password";
+    public static final String FIELD_PASSWORD_HINT = "At least 8 characters";
+    public static final String FIELD_CONFIRM_PASSWORD = "Confirm password";
+    public static final String FIELD_CURRENT_PASSWORD = "Current password";
+    public static final String FIELD_NEW_PASSWORD = "New password";
     public static final String FIELD_EMAIL_CODE = "Verification code";
+    public static final String ACTION_LOG_IN = "Log in";
+    public static final String ACTION_CREATE_ACCOUNT = "Create account";
+    public static final String ACTION_VERIFY_CREATE = "Verify & create account";
+    public static final String ACTION_FORGOT_PASSWORD = "Forgot password?";
+    public static final String ACTION_RESET_PASSWORD = "Reset password";
+    public static final String ACTION_SEND_RESET_CODE = "Send reset code";
+    public static final String ACTION_SIGN_IN_EMAIL_CODE = "Sign in with email code";
+    public static final String ACTION_BACK_TO_LOGIN = "Back to log in";
+    public static final String ACTION_CHANGE_EMAIL_STEP = "Change email";
     public static final String ACTION_EMAIL_CODE = "Email me a code";
     public static final String ACTION_SEND_NEW_CODE = "Send new code";
     public static final String ACTION_PASSKEY_SIGN_IN = "Sign in with passkey";
     public static final String ACTION_PASSKEY_CREATE = "Create account with passkey";
     public static final String ACTION_RECOVERY_CODE = "Use recovery code";
     public static final String ACTION_CONNECTION_CODE = "Use connection code";
+    public static final String ERROR_PASSWORD_SHORT = "Password must be at least 8 characters.";
+    public static final String ERROR_PASSWORD_MISMATCH = "Passwords do not match.";
+    public static final String ERROR_EMAIL_PASSWORD = "Enter your email and password.";
+    public static final String CREATING_ACCOUNT = "Creating account…";
+    public static final String VERIFYING_CODE = "Verifying code…";
+    public static final String RESETTING_PASSWORD = "Resetting password…";
+    public static final String SIGN_UP_BODY = "Create an account with your email and password. We will email a 6-digit code to verify your address.";
+    public static final String SIGN_UP_CODE_SENT = "We emailed a 6-digit verification code. Enter it to finish creating your account.";
+    public static final String RESET_BODY = "Enter your email and we will send a 6-digit code to reset your password.";
+    public static final String RESET_CODE_SENT = "If that email has an account, we sent a 6-digit reset code.";
+    public static final String OTP_BODY = "Get a one-time 6-digit sign-in code by email.";
+    public static final String PASSWORD_TITLE = "Password";
+    public static final String PASSWORD_SET_BODY = "Password is set. You can log in with your email and password.";
+    public static final String PASSWORD_NONE_BODY = "No password set yet. Add one to log in with email and password.";
+    public static final String ACTION_SET_PASSWORD = "Set password";
+    public static final String ACTION_CHANGE_PASSWORD = "Change password";
+    public static final String PASSWORD_SAVED = "Password saved.";
 
     public static final String SETUP_ACCESS_TITLE = "Enable phone access";
     public static final String ACTION_OPEN_DEV_OPTIONS = "Open Developer options";
@@ -208,7 +240,7 @@ public final class AppCopy {
     public static final String PAIR_REJECTED = "Code rejected. Open a new pairing code in Wireless debugging and try again.";
 
     // Setup: sign in and connection code
-    public static final String SIGN_IN_BODY = "Sign in to link this phone. A new email creates an account.";
+    public static final String SIGN_IN_BODY = "Log in with your Backstage email and password.";
     public static final String FIELD_EMAIL_CODE_HINT = "123456";
     public static final String SENDING_CODE = "Sending code…";
     public static final String EMAIL_CODE_SENT = "We emailed a 6-digit code. It expires in 10 minutes.";

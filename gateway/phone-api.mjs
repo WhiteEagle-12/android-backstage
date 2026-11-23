@@ -135,6 +135,7 @@ export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifa
   app.post('/work/phone/email/start',requireSession,async(req,res)=>{if(limited('email:'+req.phone.ownerId,10,600000))return res.status(429).json({error:'busy',message:'Too many codes. Wait a few minutes.'});try{res.json(await owners.startEmail(req.body?.email,{linkOwner:req.phone.ownerId}));}catch(e){ownerError(res,e);}});
   app.post('/work/phone/email/verify',requireSession,(req,res)=>{try{owners.verifyEmail(req.body?.email,req.body?.code,{expectedLinkOwner:req.phone.ownerId});res.json(owners.methods(req.phone.ownerId));}catch(e){ownerError(res,e);}});
   app.post('/work/phone/email/remove',requireSession,(req,res)=>{try{owners.removeEmail(req.phone.ownerId);res.json(owners.methods(req.phone.ownerId));}catch(e){ownerError(res,e);}});
+  app.post('/work/phone/password',requireSession,(req,res)=>{try{owners.setPassword(req.phone.ownerId,req.body?.password,{currentPassword:req.body?.currentPassword,requireCurrent:true});res.json(owners.methods(req.phone.ownerId));}catch(e){ownerError(res,e);}});
   app.post('/work/phone/recovery',requireSession,(req,res)=>{try{res.json({codes:owners.newRecoveryCodes(req.phone.ownerId)});}catch(e){ownerError(res,e);}});
   app.post('/work/phone/passkeys/remove',requireSession,(req,res)=>{try{owners.removePasskey(req.phone.ownerId,String(req.body?.id||''));res.json(owners.methods(req.phone.ownerId));}catch(e){ownerError(res,e);}});
   app.post('/work/phone/account/delete',requireSession,async(req,res)=>{

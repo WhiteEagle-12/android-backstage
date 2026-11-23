@@ -68,6 +68,29 @@ export function nativeSignInRoutes(app,{owners,connections,now=Date.now}) {
     return {ticket,code:pairing.code,expiresAt:new Date(row.expires).toISOString()};
   }
   const installationOk=v=>/^[A-Za-z0-9_-]{43}$/.test(v||'');
+  app.post('/work/native/signup/start',async(req,res)=>{
+    if(hitLimit(emailAttempts,'signup:'+req.ip,8,600000))return res.status(429).json({message:'Too many attempts. Wait a few minutes.'});
+    try{if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');res.json(await owners.startSignUp(req.body?.email,req.body?.password));}
+    catch(e){res.status(400).json({message:e.message});}
+  });
+  app.post('/work/native/signup/verify',async(req,res)=>{
+    try{if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');const ownerId=owners.verifySignUp(req.body?.email,req.body?.code);res.json(await enrol(ownerId,req.body.installation,req.body?.deviceName));}
+    catch(e){res.status(400).json({message:e.message});}
+  });
+  app.post('/work/native/login',async(req,res)=>{
+    if(hitLimit(emailAttempts,'login:'+req.ip,20,600000))return res.status(429).json({message:'Too many attempts. Wait a few minutes.'});
+    try{if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');const ownerId=owners.verifyPassword(req.body?.email,req.body?.password);res.json(await enrol(ownerId,req.body.installation,req.body?.deviceName));}
+    catch(e){res.status(400).json({message:e.message});}
+  });
+  app.post('/work/native/password/reset/start',async(req,res)=>{
+    if(hitLimit(emailAttempts,'reset:'+req.ip,8,600000))return res.status(429).json({message:'Too many attempts. Wait a few minutes.'});
+    try{if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');res.json(await owners.startPasswordReset(req.body?.email));}
+    catch(e){res.status(400).json({message:e.message});}
+  });
+  app.post('/work/native/password/reset/verify',async(req,res)=>{
+    try{if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');const ownerId=owners.verifyPasswordReset(req.body?.email,req.body?.code,req.body?.password);res.json(await enrol(ownerId,req.body.installation,req.body?.deviceName));}
+    catch(e){res.status(400).json({message:e.message});}
+  });
   app.post('/work/native/email/start',async(req,res)=>{
     if(hitLimit(emailAttempts,'email:'+req.ip,8,600000))return res.status(429).json({message:'Too many codes were requested. Wait a few minutes.'});
     try{if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');res.json(await owners.startEmail(req.body?.email));}
@@ -81,7 +104,7 @@ export function nativeSignInRoutes(app,{owners,connections,now=Date.now}) {
     try{if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');const ownerId=owners.verifyRecovery(req.body?.code);res.json(await enrol(ownerId,req.body.installation,req.body?.deviceName));}
     catch(e){res.status(400).json({message:e.message});}
   });
-  app.get('/work/native/methods',(_req,res)=>res.json({email:owners.emailAvailable(),passkey:true,recovery:true}));
+  app.get('/work/native/methods',(_req,res)=>res.json({password:true,email:owners.emailAvailable(),passkey:true,recovery:true}));
   app.post('/work/native/enroll',async(req,res)=>{
     const row=pending.get(req.body?.ticket);
     if(!row)return res.status(410).json({message:'Setup expired. Sign in again.'});

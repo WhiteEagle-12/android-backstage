@@ -7,7 +7,7 @@
   "homepage": "https://android-backstage.com",
   "repository": {
     "type": "git",
-    "url": "https://github.com/WhiteEagle-12/android-backstage.git",
+    "url": "git+https://github.com/WhiteEagle-12/android-backstage.git",
     "directory": "cli"
   },
   "engines": {
@@ -23,7 +23,7 @@
     "automation"
   ],
   "bin": {
-    "android-backstage": "./backstage.mjs"
+    "android-backstage": "backstage.mjs"
   },
   "files": [
     "*.mjs",

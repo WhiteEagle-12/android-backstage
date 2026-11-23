@@ -32,7 +32,7 @@ public final class AccountClient {
     public static final class Approval { public String clientName = "", clientOrigin = "", icon = "mcp"; }
     /** An agent asking for access, approved from a notification or the app. */
     public static final class Request { public String id = "", names = "", check = ""; public long expiresAt; }
-    public static final class Methods { public String email = ""; public boolean emailAvailable; public int recoveryLeft; public final List<String[]> passkeys = new ArrayList<>(); }
+    public static final class Methods { public String email = ""; public boolean emailAvailable, hasPassword; public int recoveryLeft; public final List<String[]> passkeys = new ArrayList<>(); }
     public static final class Update { public int versionCode; public String versionName = "", url = "", sha256 = ""; }
 
     private static String str(Map<String, Object> m, String key) { String v = Json.string(m, key); return v == null || "null".equals(v) ? "" : v; }
@@ -146,7 +146,7 @@ public final class AccountClient {
         Map<String, Object> m;
         try { m = Json.object(SimpleHttp.getOnce(base + "/phone/methods", 15000, token)); }
         catch (SimpleHttp.HttpException e) { if (e.status == 401) signOut(); throw e; }
-        Methods out = new Methods(); out.email = str(m, "email"); out.emailAvailable = Boolean.TRUE.equals(m.get("emailAvailable")); out.recoveryLeft = Json.integer(m, "recoveryCodesLeft", 0);
+        Methods out = new Methods(); out.email = str(m, "email"); out.emailAvailable = Boolean.TRUE.equals(m.get("emailAvailable")); out.hasPassword = Boolean.TRUE.equals(m.get("hasPassword")); out.recoveryLeft = Json.integer(m, "recoveryCodesLeft", 0);
         if (m.get("passkeys") instanceof List) for (Object row : (List<?>) m.get("passkeys")) if (row instanceof Map) {
             @SuppressWarnings("unchecked") Map<String, Object> k = (Map<String, Object>) row; out.passkeys.add(new String[]{str(k, "id"), str(k, "label")});
         }
@@ -155,6 +155,11 @@ public final class AccountClient {
     public void emailStart(String email) throws IOException { post("/phone/email/start", Json.mapOf("email", email)); }
     public void emailVerify(String email, String code) throws IOException { post("/phone/email/verify", Json.mapOf("email", email, "code", code)); }
     public void emailRemove() throws IOException { post("/phone/email/remove", Json.mapOf()); }
+    public void setPassword(String currentPassword, String newPassword) throws IOException {
+        Map<String, Object> body = Json.mapOf("password", newPassword);
+        if (currentPassword != null && !currentPassword.isEmpty()) body.put("currentPassword", currentPassword);
+        post("/phone/password", body);
+    }
     public List<String> newRecoveryCodes() throws IOException {
         List<String> out = new ArrayList<>(); Object codes = post("/phone/recovery", Json.mapOf()).get("codes");
         if (codes instanceof List) for (Object c : (List<?>) codes) out.add(String.valueOf(c)); return out;

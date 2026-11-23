@@ -37,6 +37,36 @@ final class PhoneSignIn {
         return name.isEmpty()?"phone":name;
     }
     interface Sent { void sent(); void failed(String message); }
+    /** Create account step 1: submit email + password and request a 6-digit verification OTP. */
+    static void signUpStart(Context context, String email, String password, Sent callback) {
+        Context app = context.getApplicationContext();
+        new Thread(() -> {
+            try { post("/signup/start", Json.mapOf("email", email, "password", password, "installation", installation(app))); callback.sent(); }
+            catch (SimpleHttp.HttpException e) { callback.failed(message(e, "Could not start sign-up. Try again.")); }
+            catch (Exception e) { callback.failed("Could not reach Backstage. Check your internet connection and try again."); }
+        }, "backstage-signup").start();
+    }
+    /** Create account step 2: verify the 6-digit OTP and enroll this phone. */
+    static void signUpVerify(Context context, String email, String code, Callback callback) {
+        verified(context, "/signup/verify", Json.mapOf("email", email, "code", code), callback);
+    }
+    /** Standard email + password login. */
+    static void passwordLogin(Context context, String email, String password, Callback callback) {
+        verified(context, "/login", Json.mapOf("email", email, "password", password), callback);
+    }
+    /** Forgot password step 1: request a 6-digit reset OTP. */
+    static void passwordResetStart(Context context, String email, Sent callback) {
+        Context app = context.getApplicationContext();
+        new Thread(() -> {
+            try { post("/password/reset/start", Json.mapOf("email", email, "installation", installation(app))); callback.sent(); }
+            catch (SimpleHttp.HttpException e) { callback.failed(message(e, "Could not send a reset code. Try again.")); }
+            catch (Exception e) { callback.failed("Could not reach Backstage. Check your internet connection and try again."); }
+        }, "backstage-reset").start();
+    }
+    /** Forgot password step 2: verify reset OTP, set new password, and enroll this phone. */
+    static void passwordResetVerify(Context context, String email, String code, String newPassword, Callback callback) {
+        verified(context, "/password/reset/verify", Json.mapOf("email", email, "code", code, "password", newPassword), callback);
+    }
     /** Email a sign-in code. A new address creates an account. */
     static void emailStart(Context context,String email,Sent callback) {
         Context app=context.getApplicationContext();

@@ -96,8 +96,8 @@ public final class AgentActivity extends Activity {
         volatile String message = "";
         volatile int revision;
         volatile boolean restartRequested;
-        String server = "", code = "", clientName = "", page = "main", email = "", emailCode = "";
-        boolean emailSent;
+        String server = "", code = "", clientName = "", page = "main", email = "", emailCode = "", password = "", confirmPassword = "", authMode = "login";
+        boolean emailSent, signupSent, resetSent;
         int tab = TAB_LIVE;
         void done(String text) { message = text; busy = false; revision++; }
     }
@@ -577,6 +577,11 @@ public final class AgentActivity extends Activity {
         k.body(form, m.email.isEmpty() ? (m.emailAvailable ? AppCopy.EMAIL_ADD_BODY : AppCopy.EMAIL_UNAVAILABLE) : String.format(AppCopy.EMAIL_CURRENT_FMT, m.email));
         if (m.emailAvailable) k.button(form, m.email.isEmpty() ? AppCopy.ACTION_ADD_EMAIL : AppCopy.ACTION_CHANGE_EMAIL, UiKit.SECONDARY, () -> { self[0].dismiss(); emailDialog(); });
         if (!m.email.isEmpty()) k.button(form, AppCopy.ACTION_REMOVE_EMAIL, UiKit.SECONDARY, () -> { self[0].dismiss(); accountAction(AppCopy.REMOVING, AccountClient::emailRemove, AppCopy.EMAIL_REMOVED); });
+        if (!m.email.isEmpty()) {
+            k.space(form, 14); k.title(form, AppCopy.PASSWORD_TITLE);
+            k.body(form, m.hasPassword ? AppCopy.PASSWORD_SET_BODY : AppCopy.PASSWORD_NONE_BODY);
+            k.button(form, m.hasPassword ? AppCopy.ACTION_CHANGE_PASSWORD : AppCopy.ACTION_SET_PASSWORD, UiKit.SECONDARY, () -> { self[0].dismiss(); passwordDialog(m.hasPassword); });
+        }
         k.space(form, 14); k.title(form, AppCopy.RECOVERY_CODES_TITLE);
         k.body(form, m.recoveryLeft > 0 ? String.format(java.util.Locale.getDefault(), AppCopy.RECOVERY_LEFT_FMT, m.recoveryLeft) : AppCopy.RECOVERY_NONE);
         k.button(form, m.recoveryLeft > 0 ? AppCopy.ACTION_REPLACE_RECOVERY : AppCopy.ACTION_CREATE_RECOVERY, UiKit.SECONDARY, () -> { self[0].dismiss(); newRecoveryCodes(); });
@@ -606,6 +611,30 @@ public final class AgentActivity extends Activity {
                     else { client.emailVerify(address, entered); ui.post(() -> { dialog.dismiss(); toast(AppCopy.EMAIL_ADDED); }); }
                 } catch (Exception e) { ui.post(() -> { status.setText(AccountClient.explain(e)); v.setEnabled(true); }); }
             }, "backstage-email").start();
+        }));
+        dialog.show();
+    }
+    private void passwordDialog(boolean hasCurrent) {
+        UiKit k = kit; LinearLayout form = k.form();
+        EditText current = hasCurrent ? k.field(form, AppCopy.FIELD_CURRENT_PASSWORD, "", "") : null;
+        if (current != null) { current.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD); current.setTypeface(android.graphics.Typeface.DEFAULT); }
+        EditText next = k.field(form, hasCurrent ? AppCopy.FIELD_NEW_PASSWORD : AppCopy.FIELD_PASSWORD, AppCopy.FIELD_PASSWORD_HINT, "");
+        next.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD); next.setTypeface(android.graphics.Typeface.DEFAULT);
+        EditText confirm = k.field(form, AppCopy.FIELD_CONFIRM_PASSWORD, AppCopy.FIELD_PASSWORD_HINT, "");
+        confirm.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD); confirm.setTypeface(android.graphics.Typeface.DEFAULT);
+        TextView status = k.body(form, "");
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(hasCurrent ? AppCopy.ACTION_CHANGE_PASSWORD : AppCopy.ACTION_SET_PASSWORD)
+                .setView(form).setPositiveButton(AppCopy.SAVE, null).setNegativeButton(AppCopy.CANCEL, null).create();
+        dialog.setOnShowListener(x -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            String cur = current == null ? null : current.getText().toString();
+            String pw = next.getText().toString(), cf = confirm.getText().toString();
+            if (pw.length() < 8) { status.setText(AppCopy.ERROR_PASSWORD_SHORT); return; }
+            if (!pw.equals(cf)) { status.setText(AppCopy.ERROR_PASSWORD_MISMATCH); return; }
+            v.setEnabled(false); final AccountClient client = accountClient;
+            new Thread(() -> {
+                try { client.setPassword(cur, pw); ui.post(() -> { dialog.dismiss(); toast(AppCopy.PASSWORD_SAVED); }); }
+                catch (Exception e) { ui.post(() -> { status.setText(AccountClient.explain(e)); v.setEnabled(true); }); }
+            }, "backstage-password").start();
         }));
         dialog.show();
     }
@@ -1071,6 +1100,44 @@ public final class AgentActivity extends Activity {
 
     // ---- Sign-in and linking ----
 
+    void passwordLogin() {
+        if (session.busy) return;
+        final Session state = session;
+        if (state.email.trim().isEmpty() || state.password.isEmpty()) { state.message = AppCopy.ERROR_EMAIL_PASSWORD; renderNow(); return; }
+        state.busy = true; state.message = AppCopy.SIGNING_IN; renderNow();
+        PhoneSignIn.passwordLogin(this, state.email.trim(), state.password, signInCallback(state));
+    }
+    void signUpStart() {
+        if (session.busy) return;
+        final Session state = session;
+        if (state.password.length() < 8) { state.message = AppCopy.ERROR_PASSWORD_SHORT; renderNow(); return; }
+        if (!state.signupSent && !state.password.equals(state.confirmPassword)) { state.message = AppCopy.ERROR_PASSWORD_MISMATCH; renderNow(); return; }
+        state.busy = true; state.message = AppCopy.CREATING_ACCOUNT; renderNow();
+        PhoneSignIn.signUpStart(this, state.email.trim(), state.password, new PhoneSignIn.Sent() {
+            public void sent() { state.signupSent = true; state.done(AppCopy.SIGN_UP_CODE_SENT); ui.post(() -> { if (!isDestroyed()) renderNow(); }); }
+            public void failed(String message) { state.done(message); ui.post(() -> { if (!isDestroyed()) renderNow(); }); }
+        });
+    }
+    void signUpVerify() {
+        if (session.busy) return;
+        final Session state = session; state.busy = true; state.message = AppCopy.VERIFYING_CODE; renderNow();
+        PhoneSignIn.signUpVerify(this, state.email.trim(), state.emailCode.trim(), signInCallback(state));
+    }
+    void passwordResetStart() {
+        if (session.busy) return;
+        final Session state = session; state.busy = true; state.message = AppCopy.SENDING_CODE; renderNow();
+        PhoneSignIn.passwordResetStart(this, state.email.trim(), new PhoneSignIn.Sent() {
+            public void sent() { state.resetSent = true; state.done(AppCopy.RESET_CODE_SENT); ui.post(() -> { if (!isDestroyed()) renderNow(); }); }
+            public void failed(String message) { state.done(message); ui.post(() -> { if (!isDestroyed()) renderNow(); }); }
+        });
+    }
+    void passwordResetVerify() {
+        if (session.busy) return;
+        final Session state = session;
+        if (state.password.length() < 8) { state.message = AppCopy.ERROR_PASSWORD_SHORT; renderNow(); return; }
+        state.busy = true; state.message = AppCopy.RESETTING_PASSWORD; renderNow();
+        PhoneSignIn.passwordResetVerify(this, state.email.trim(), state.emailCode.trim(), state.password, signInCallback(state));
+    }
     void emailCode() {
         if (session.busy) return;
         final Session state = session; state.busy = true; state.message = AppCopy.SENDING_CODE; renderNow();
@@ -1100,7 +1167,9 @@ public final class AgentActivity extends Activity {
                 current.relayUrl = result.relay; current.deviceToken = result.token;
                 current.deviceName = result.name == null ? "" : result.name; current.deviceId = result.deviceId == null ? "" : result.deviceId;
                 current.upsertLink(result.agentId, result.linkKey); current.save(app);
-                AgentConfig.setAccessEnabled(app, true); state.page = "main"; state.emailSent = false; state.emailCode = ""; state.done("");
+                AgentConfig.setAccessEnabled(app, true); state.page = "main"; state.authMode = "login";
+                state.emailSent = false; state.signupSent = false; state.resetSent = false;
+                state.emailCode = ""; state.password = ""; state.confirmPassword = ""; state.done("");
                 ui.post(() -> { if (!isDestroyed()) { config = AgentConfig.load(app); renderNow(); } });
             }
             public void failed(String message) { state.done(message); ui.post(() -> { if (!isDestroyed()) renderNow(); }); }

@@ -65,24 +65,100 @@ final class SetupFlow {
     private void connectScreen() {
         AgentActivity.Session s = a.session;
         if (SetupRules.sameServer(s.server, SetupRules.DEFAULT_RELAY) && s.code.isEmpty() && !"manual".equals(s.page)) {
-            heading(AppCopy.SIGN_IN_TITLE);
+            String mode = s.authMode == null || s.authMode.isEmpty() ? "login" : s.authMode;
+            heading("signup".equals(mode) ? AppCopy.SIGN_UP_TITLE : "reset".equals(mode) ? AppCopy.ACTION_RESET_PASSWORD : AppCopy.SIGN_IN_TITLE);
             LinearLayout account = k.card(root);
             if (PhoneSignIn.pending(a)) k.body(account, AppCopy.SIGN_IN_FINISHING);
-            k.body(account, AppCopy.SIGN_IN_BODY);
-            EditText email = k.field(account, AppCopy.FIELD_EMAIL, AppCopy.FIELD_EMAIL_HINT, s.email);
-            email.setEnabled(!s.busy);
-            email.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
-            UiKit.watch(email, value -> s.email = value);
-            if (s.emailSent) {
-                EditText code = k.field(account, AppCopy.FIELD_EMAIL_CODE, AppCopy.FIELD_EMAIL_CODE_HINT, s.emailCode);
-                code.setInputType(android.text.InputType.TYPE_CLASS_NUMBER); code.setEnabled(!s.busy);
-                UiKit.watch(code, value -> s.emailCode = value);
-                k.button(account, busyLabel(AppCopy.SIGN_IN_TITLE), UiKit.PRIMARY, guard(a::emailSignIn));
-                k.button(account, AppCopy.ACTION_SEND_NEW_CODE, UiKit.SECONDARY, guard(a::emailCode));
-            } else k.button(account, busyLabel(AppCopy.ACTION_EMAIL_CODE), UiKit.PRIMARY, guard(a::emailCode));
+            LinearLayout switcher = k.buttonRow(account);
+            k.rowButton(switcher, AppCopy.ACTION_LOG_IN, "login".equals(mode) ? UiKit.PRIMARY : UiKit.SECONDARY, guard(() -> {
+                s.authMode = "login"; s.emailSent = false; s.signupSent = false; s.resetSent = false; s.message = ""; a.renderNow();
+            }));
+            k.rowButton(switcher, AppCopy.ACTION_CREATE_ACCOUNT, "signup".equals(mode) ? UiKit.PRIMARY : UiKit.SECONDARY, guard(() -> {
+                s.authMode = "signup"; s.emailSent = false; s.signupSent = false; s.resetSent = false; s.message = ""; a.renderNow();
+            }));
+            k.space(account, 8);
+            if ("signup".equals(mode)) {
+                k.body(account, s.signupSent ? AppCopy.SIGN_UP_CODE_SENT : AppCopy.SIGN_UP_BODY);
+                EditText email = k.field(account, AppCopy.FIELD_EMAIL, AppCopy.FIELD_EMAIL_HINT, s.email);
+                email.setEnabled(!s.busy && !s.signupSent);
+                email.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+                UiKit.watch(email, value -> s.email = value);
+                if (!s.signupSent) {
+                    EditText pw = k.field(account, AppCopy.FIELD_PASSWORD, AppCopy.FIELD_PASSWORD_HINT, s.password);
+                    pw.setEnabled(!s.busy);
+                    pw.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                    pw.setTypeface(Typeface.DEFAULT);
+                    UiKit.watch(pw, value -> s.password = value);
+                    EditText confirm = k.field(account, AppCopy.FIELD_CONFIRM_PASSWORD, AppCopy.FIELD_PASSWORD_HINT, s.confirmPassword);
+                    confirm.setEnabled(!s.busy);
+                    confirm.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                    confirm.setTypeface(Typeface.DEFAULT);
+                    UiKit.watch(confirm, value -> s.confirmPassword = value);
+                    k.button(account, busyLabel(AppCopy.ACTION_CREATE_ACCOUNT), UiKit.PRIMARY, guard(a::signUpStart));
+                } else {
+                    EditText code = k.field(account, AppCopy.FIELD_EMAIL_CODE, AppCopy.FIELD_EMAIL_CODE_HINT, s.emailCode);
+                    code.setInputType(android.text.InputType.TYPE_CLASS_NUMBER); code.setEnabled(!s.busy);
+                    UiKit.watch(code, value -> s.emailCode = value);
+                    k.button(account, busyLabel(AppCopy.ACTION_VERIFY_CREATE), UiKit.PRIMARY, guard(a::signUpVerify));
+                    LinearLayout row = k.buttonRow(account);
+                    k.rowButton(row, AppCopy.ACTION_SEND_NEW_CODE, UiKit.SECONDARY, guard(a::signUpStart));
+                    k.rowButton(row, AppCopy.ACTION_CHANGE_EMAIL_STEP, UiKit.SECONDARY, guard(() -> { s.signupSent = false; s.emailCode = ""; s.message = ""; a.renderNow(); }));
+                }
+            } else if ("reset".equals(mode)) {
+                k.body(account, s.resetSent ? AppCopy.RESET_CODE_SENT : AppCopy.RESET_BODY);
+                EditText email = k.field(account, AppCopy.FIELD_EMAIL, AppCopy.FIELD_EMAIL_HINT, s.email);
+                email.setEnabled(!s.busy && !s.resetSent);
+                email.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+                UiKit.watch(email, value -> s.email = value);
+                if (!s.resetSent) {
+                    k.button(account, busyLabel(AppCopy.ACTION_SEND_RESET_CODE), UiKit.PRIMARY, guard(a::passwordResetStart));
+                } else {
+                    EditText code = k.field(account, AppCopy.FIELD_EMAIL_CODE, AppCopy.FIELD_EMAIL_CODE_HINT, s.emailCode);
+                    code.setInputType(android.text.InputType.TYPE_CLASS_NUMBER); code.setEnabled(!s.busy);
+                    UiKit.watch(code, value -> s.emailCode = value);
+                    EditText pw = k.field(account, AppCopy.FIELD_NEW_PASSWORD, AppCopy.FIELD_PASSWORD_HINT, s.password);
+                    pw.setEnabled(!s.busy);
+                    pw.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                    pw.setTypeface(Typeface.DEFAULT);
+                    UiKit.watch(pw, value -> s.password = value);
+                    k.button(account, busyLabel(AppCopy.ACTION_RESET_PASSWORD), UiKit.PRIMARY, guard(a::passwordResetVerify));
+                    k.button(account, AppCopy.ACTION_SEND_NEW_CODE, UiKit.SECONDARY, guard(a::passwordResetStart));
+                }
+                k.button(account, AppCopy.ACTION_BACK_TO_LOGIN, UiKit.QUIET, guard(() -> { s.authMode = "login"; s.resetSent = false; s.emailCode = ""; s.password = ""; s.message = ""; a.renderNow(); }));
+            } else if ("otp".equals(mode)) {
+                k.body(account, AppCopy.OTP_BODY);
+                EditText email = k.field(account, AppCopy.FIELD_EMAIL, AppCopy.FIELD_EMAIL_HINT, s.email);
+                email.setEnabled(!s.busy);
+                email.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+                UiKit.watch(email, value -> s.email = value);
+                if (s.emailSent) {
+                    EditText code = k.field(account, AppCopy.FIELD_EMAIL_CODE, AppCopy.FIELD_EMAIL_CODE_HINT, s.emailCode);
+                    code.setInputType(android.text.InputType.TYPE_CLASS_NUMBER); code.setEnabled(!s.busy);
+                    UiKit.watch(code, value -> s.emailCode = value);
+                    k.button(account, busyLabel(AppCopy.ACTION_LOG_IN), UiKit.PRIMARY, guard(a::emailSignIn));
+                    k.button(account, AppCopy.ACTION_SEND_NEW_CODE, UiKit.SECONDARY, guard(a::emailCode));
+                } else {
+                    k.button(account, busyLabel(AppCopy.ACTION_EMAIL_CODE), UiKit.PRIMARY, guard(a::emailCode));
+                }
+                k.button(account, AppCopy.ACTION_BACK_TO_LOGIN, UiKit.QUIET, guard(() -> { s.authMode = "login"; s.emailSent = false; s.emailCode = ""; s.message = ""; a.renderNow(); }));
+            } else {
+                k.body(account, AppCopy.SIGN_IN_BODY);
+                EditText email = k.field(account, AppCopy.FIELD_EMAIL, AppCopy.FIELD_EMAIL_HINT, s.email);
+                email.setEnabled(!s.busy);
+                email.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+                UiKit.watch(email, value -> s.email = value);
+                EditText pw = k.field(account, AppCopy.FIELD_PASSWORD, AppCopy.FIELD_PASSWORD_HINT, s.password);
+                pw.setEnabled(!s.busy);
+                pw.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                pw.setTypeface(Typeface.DEFAULT);
+                UiKit.watch(pw, value -> s.password = value);
+                k.button(account, busyLabel(AppCopy.ACTION_LOG_IN), UiKit.PRIMARY, guard(a::passwordLogin));
+                LinearLayout links = k.buttonRow(account);
+                k.rowButton(links, AppCopy.ACTION_FORGOT_PASSWORD, UiKit.QUIET, guard(() -> { s.authMode = "reset"; s.resetSent = false; s.password = ""; s.emailCode = ""; s.message = ""; a.renderNow(); }));
+                k.rowButton(links, AppCopy.ACTION_SIGN_IN_EMAIL_CODE, UiKit.QUIET, guard(() -> { s.authMode = "otp"; s.emailSent = false; s.emailCode = ""; s.message = ""; a.renderNow(); }));
+            }
             LinearLayout other = k.card(root);
             k.button(other, busyLabel(AppCopy.ACTION_PASSKEY_SIGN_IN), UiKit.SECONDARY, guard(() -> a.nativeSignIn(false)));
-            k.button(other, AppCopy.ACTION_PASSKEY_CREATE, UiKit.SECONDARY, guard(() -> a.nativeSignIn(true)));
             k.button(other, AppCopy.ACTION_RECOVERY_CODE, UiKit.QUIET, guard(a::recoveryDialog));
             k.button(other, AppCopy.ACTION_CONNECTION_CODE, UiKit.QUIET, guard(() -> { s.page = "manual"; a.renderNow(); }));
             return;
