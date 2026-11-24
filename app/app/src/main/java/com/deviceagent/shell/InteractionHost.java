@@ -274,23 +274,34 @@ public final class InteractionHost {
                 count=i+1;
                 send(manager,inject,setDisplay,plan,display,down,count,i==0?MotionEvent.ACTION_DOWN:MotionEvent.ACTION_POINTER_DOWN|(i<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),0);
             }
-            if(plan.holdMs>0)guard.pause(plan.holdMs);
-            long start=SystemClock.uptimeMillis();
-            while(fraction<1) {
-                guard.check();
-                fraction=Math.min(1,(SystemClock.uptimeMillis()-start)/(double)plan.durationMs);
-                send(manager,inject,setDisplay,plan,display,down,count,MotionEvent.ACTION_MOVE,fraction);
-                if(fraction<1)guard.pause(Math.min(16,Math.max(1,plan.durationMs-(SystemClock.uptimeMillis()-start))));
+            if(op.equals("long_press")) {
+                guard.pause((long)plan.holdMs + plan.durationMs);
+                fraction=1;
+            } else {
+                if(plan.holdMs>0)guard.pause(plan.holdMs);
+                long start=SystemClock.uptimeMillis();
+                while(fraction<1) {
+                    guard.check();
+                    fraction=Math.min(1,(SystemClock.uptimeMillis()-start)/(double)plan.durationMs);
+                    send(manager,inject,setDisplay,plan,display,down,count,MotionEvent.ACTION_MOVE,fraction,0);
+                    if(fraction<1)guard.pause(Math.min(16,Math.max(1,plan.durationMs-(SystemClock.uptimeMillis()-start))));
+                }
             }
             while(count>0) {
-                send(manager,inject,setDisplay,plan,display,down,count,count==1?MotionEvent.ACTION_UP:MotionEvent.ACTION_POINTER_UP|((count-1)<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),1);
+                send(manager,inject,setDisplay,plan,display,down,count,count==1?MotionEvent.ACTION_UP:MotionEvent.ACTION_POINTER_UP|((count-1)<<MotionEvent.ACTION_POINTER_INDEX_SHIFT),1,2);
                 count--;
             }
             finished=true;
             result=Json.mapOf("ok",true,"inputDelivered",true,"display",display,"pointers",plan.paths.size(),"durationMs",plan.durationMs,"holdMs",plan.holdMs);return result;
         } catch(Exception e){result=Json.mapOf("ok",false,"inputDelivered",count==0?false:null,"code",count==0&&e instanceof com.deviceagent.tools.InputNotSentException stopped?stopped.code:"input_outcome_unknown","error",count==0?"No gesture was sent. Check the session and try again.":"The gesture stopped before it finished. Observe this display before another input.");return result;} finally {
             boolean released=true;
-            if(!finished&&count>0)try{send(manager,inject,setDisplay,plan,display,down,count,MotionEvent.ACTION_CANCEL,fraction);}catch(Exception e){released=false;}
+            if(!finished&&count>0){
+                try{send(manager,inject,setDisplay,plan,display,down,count,MotionEvent.ACTION_CANCEL,fraction,2);}
+                catch(Exception syncErr){
+                    try{send(manager,inject,setDisplay,plan,display,down,count,MotionEvent.ACTION_CANCEL,fraction,0);}
+                    catch(Exception asyncErr){released=false;}
+                }
+            }
             if(result!=null)result.put("pointersReleased",released);
         }
     }
@@ -491,8 +502,12 @@ public final class InteractionHost {
         } finally {
             if(sentDown&&!finished){
                 MotionEvent cancel=MotionEvent.obtain(down,SystemClock.uptimeMillis(),MotionEvent.ACTION_CANCEL,x,y,0);
-                try { cancel.setSource(InputDevice.SOURCE_TOUCHSCREEN); setDisplay.invoke(cancel,display); inject.invoke(manager,cancel,2); }
-                catch(Exception ignored){} finally { cancel.recycle(); }
+                try {
+                    cancel.setSource(InputDevice.SOURCE_TOUCHSCREEN); setDisplay.invoke(cancel,display);
+                    if(!Boolean.TRUE.equals(inject.invoke(manager,cancel,2))) inject.invoke(manager,cancel,0);
+                }
+                catch(Exception ignored){try{inject.invoke(manager,cancel,0);}catch(Exception ignored2){}}
+                finally { cancel.recycle(); }
             }
         }
     }
@@ -529,6 +544,9 @@ public final class InteractionHost {
         if(!Boolean.TRUE.equals(inject.invoke(manager,event,2)))throw new IllegalStateException("Android rejected the key event");
     }
     private static void send(Object manager,Method inject,Method setDisplay,GesturePlan plan,int display,long down,int count,int action,double fraction) throws Exception {
+        send(manager,inject,setDisplay,plan,display,down,count,action,fraction,2);
+    }
+    private static void send(Object manager,Method inject,Method setDisplay,GesturePlan plan,int display,long down,int count,int action,double fraction,int mode) throws Exception {
         MotionEvent.PointerProperties[] properties=new MotionEvent.PointerProperties[count];
         MotionEvent.PointerCoords[] coords=new MotionEvent.PointerCoords[count];
         for(int i=0;i<count;i++) {
@@ -536,7 +554,7 @@ public final class InteractionHost {
             float[] point=plan.at(i,fraction); coords[i]=new MotionEvent.PointerCoords(); coords[i].x=point[0]; coords[i].y=point[1]; coords[i].pressure=1; coords[i].size=1;
         }
         MotionEvent event=MotionEvent.obtain(down,SystemClock.uptimeMillis(),action,count,properties,coords,0,0,1,1,0,0,InputDevice.SOURCE_TOUCHSCREEN,0);
-        try {setDisplay.invoke(event,display); if(!Boolean.TRUE.equals(inject.invoke(manager,event,2)))throw new IllegalStateException("Android rejected the gesture event");}
+        try {setDisplay.invoke(event,display); if(!Boolean.TRUE.equals(inject.invoke(manager,event,mode)))throw new IllegalStateException("Android rejected the gesture event");}
         finally {event.recycle();}
     }
 }

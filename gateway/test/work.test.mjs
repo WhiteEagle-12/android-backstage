@@ -76,6 +76,13 @@ test('real HTTP MCP initialization, tools and validated phone calls',async t=>{
  for(const args of [{},{display:0},{display:1,extra:'bad'}]) {const bad=await rpc('tools/call',{name:'android_observe',arguments:args});assert.equal(bad.result.isError,true);assert.equal(bad.result.structuredContent.inputDelivered,false);assert.ok(bad.result.structuredContent.example.sessionId);assert.ok(bad.result.structuredContent.issues.some(i=>i.field==='sessionId'));}
  const unknown=await rpc('tools/call',{name:'android_missing',arguments:{}});assert.equal(unknown.result.structuredContent.code,'unknown_tool');assert.equal(unknown.result.structuredContent.inputDelivered,false);
  const bad=await rpc('tools/call',{name:'android_push',arguments:{}});assert.equal(bad.result.isError,true);assert.equal(f.calls.length,1);
+ const badHold=await rpc('tools/call',{name:'android_tap',arguments:{sessionId:'session_'+'a'.repeat(32),x:100,y:200,holdMs:5000}});
+ assert.equal(badHold.result.isError,true);
+ assert.ok(badHold.result.structuredContent.issues.some(i=>i.field==='holdMs'));
+ assert.ok(!badHold.result.structuredContent.issues.some(i=>i.field==='requestId'),JSON.stringify(badHold.result.structuredContent));
+ const seqNorm=await rpc('tools/call',{name:'android_sequence',arguments:{sessionId:'session_'+'a'.repeat(32),steps:[{tool:'android_tap',arguments:{x:100,y:200}}]}});
+ assert.equal(seqNorm.result.isError,false,JSON.stringify(seqNorm.result));
+ assert.equal(f.calls.at(-1).args.steps[0].tool,'android.tap');
  const cross=await f.post('/work/mcp',{jsonrpc:'2.0',id:6,method:'tools/list'},{...headers,origin:'https://evil.example'});assert.equal(cross.status,403);
 });
 

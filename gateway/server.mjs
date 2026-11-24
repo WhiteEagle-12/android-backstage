@@ -91,6 +91,14 @@ export function normalizeToolCall(name, rawArgs = {}) {
     const { operation: sub, ...rest } = args || {};
     return { name: 'android_device', args: { operation: 'audio', ...(sub !== undefined ? { action: sub } : {}), ...rest } };
   }
+  if (name === 'android_sequence' && Array.isArray(args?.steps)) {
+    args.steps = args.steps.map(step => {
+      if (step && typeof step === 'object' && !Array.isArray(step) && typeof step.tool === 'string' && /^android_[a-z_]+$/.test(step.tool)) {
+        return { ...step, tool: 'android.' + step.tool.slice(8) };
+      }
+      return step;
+    });
+  }
   return { name, args };
 }
 
@@ -420,7 +428,16 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
       if (!validate) return asToolResult({outcome:'failed',code:'unknown_tool',inputDelivered:false,error:'Unknown tool. Refresh tools/list and use a listed tool name.'},true);
       if (args && typeof args === 'object' && !Array.isArray(args) && args.requestId === undefined && !validate(args)) {
         const auto = { ...args, requestId: 'auto_' + randomBytes(12).toString('hex') };
-        if (validate(auto)) args = auto;
+        if (validate(auto)) {
+          args = auto;
+        } else {
+          const autoErrors = validate.errors ? [...validate.errors] : [];
+          const requestIdForbidden = autoErrors.some(e =>
+            (e.keyword === 'additionalProperties' && e.params?.additionalProperty === 'requestId')
+            || (e.keyword === 'not' && e.schemaPath?.includes('/not'))
+          );
+          if (!requestIdForbidden) return asToolResult(invalidArguments(name, auto, autoErrors), true);
+        }
       }
       if (!validate(args)) return asToolResult(invalidArguments(name,args,validate.errors),true);
       const start = Date.now();

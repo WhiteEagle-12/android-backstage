@@ -706,7 +706,7 @@ public final class AccessibilityHost {
                 throw new IllegalStateException("Scroll up has no receipt");
             finished = true;
         } finally {
-            if (!finished) try { touchEvent(automation, setDisplay, display, x1, y1, down, android.view.MotionEvent.ACTION_CANCEL); } catch (Exception ignored) {}
+            if (!finished) cancelTouch(automation, setDisplay, display, x1, y1, down);
         }
     }
 
@@ -721,14 +721,21 @@ public final class AccessibilityHost {
             finished=true;
         } finally {
             // Cancellation cannot activate the control, even after a lost receipt.
-            if(!finished)try{touchEvent(automation,setDisplay,display,x,y,down,android.view.MotionEvent.ACTION_CANCEL);}catch(Exception ignored){}
+            if(!finished)cancelTouch(automation,setDisplay,display,x,y,down);
         }
     }
+    private static void cancelTouch(UiAutomation automation,Method setDisplay,int display,int x,int y,long down){
+        try{if(touchEvent(automation,setDisplay,display,x,y,down,android.view.MotionEvent.ACTION_CANCEL,true))return;}catch(Exception ignored){}
+        try{touchEvent(automation,setDisplay,display,x,y,down,android.view.MotionEvent.ACTION_CANCEL,false);}catch(Exception ignored){}
+    }
     private static boolean touchEvent(UiAutomation automation,Method setDisplay,int display,int x,int y,long down,int action) throws Exception {
+        return touchEvent(automation,setDisplay,display,x,y,down,action,true);
+    }
+    private static boolean touchEvent(UiAutomation automation,Method setDisplay,int display,int x,int y,long down,int action,boolean sync) throws Exception {
         android.view.MotionEvent event=android.view.MotionEvent.obtain(down,android.os.SystemClock.uptimeMillis(),action,x,y,0);
         try {
             event.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);setDisplay.invoke(event,display);
-            return automation.injectInputEvent(event,true);
+            return automation.injectInputEvent(event,sync);
         } finally {event.recycle();}
     }
 
