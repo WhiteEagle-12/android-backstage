@@ -6,7 +6,12 @@ import android.graphics.BitmapFactory;
 import android.os.SystemClock;
 import android.util.Base64;
 import android.view.Gravity;
+import android.view.HapticFeedbackConstants;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
+import android.view.animation.DecelerateInterpolator;
+import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -29,6 +34,7 @@ final class LiveTab extends TabPage {
     private final Map<String, TextView> thumbNotes = new HashMap<>();
     private final Map<String, Boolean> previewLoading = new HashMap<>();
     private final Map<String, Long> previewSeq = new HashMap<>();
+    private String activeDeckSessionId = "";
     private long lastPreviewAt;
     private TextView statusTitle, statusMeta, statusBody;
     private View statusDot;
@@ -75,7 +81,7 @@ final class LiveTab extends TabPage {
             for (Map<String, Object> c : confirmations) sig.append('|').append(DaemonClient.str(c, "confirmId"));
             put("confirm", sig.toString(), this::confirmSection);
         }
-        StringBuilder sig = new StringBuilder("screens|" + sessionsLoaded + "|" + a.daemonUp);
+        StringBuilder sig = new StringBuilder("screens|" + sessionsLoaded + "|" + a.daemonUp + "|" + activeDeckSessionId);
         for (Map<String, Object> s : sessions) sig.append('|').append(DaemonClient.str(s, "sessionId")).append(',')
                 .append(DaemonClient.str(s, "package")).append(',').append(DaemonClient.str(s, "mode")).append(',')
                 .append(DaemonClient.str(s, "recording")).append(',').append(DaemonClient.str(s, "blocked")).append(',')
@@ -185,79 +191,242 @@ final class LiveTab extends TabPage {
         a.daemon.post("/confirmations/decide", Json.mapOf("confirmId", confirmId, "decision", decision), (r, e) -> { });
     }
 
-    // ---- Active screens (full horizontal width) ----
+    // ---- Active screens (full width; stacked haptic card deck when 2+ screens run in parallel) ----
+
+    private int resolveDeckIndex() {
+        if (sessions.isEmpty()) { activeDeckSessionId = ""; return 0; }
+        for (int i = 0; i < sessions.size(); i++) {
+            if (activeDeckSessionId.equals(DaemonClient.str(sessions.get(i), "sessionId"))) return i;
+        }
+        activeDeckSessionId = DaemonClient.str(sessions.get(0), "sessionId");
+        return 0;
+    }
+
+    private void flipDeck(View hapticSource, int delta) {
+        if (sessions.size() < 2) return;
+        int idx = resolveDeckIndex();
+        int next = (idx + delta + sessions.size()) % sessions.size();
+        activeDeckSessionId = DaemonClient.str(sessions.get(next), "sessionId");
+        if (hapticSource != null) {
+            hapticSource.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+        }
+        render();
+    }
 
     private void screensSection(LinearLayout box) {
         thumbs.clear(); thumbNotes.clear(); previewSeq.clear();
-        k.section(box, AppCopy.SECTION_ACTIVE_SCREENS);
-        if (sessions.isEmpty()) { if (sessionsLoaded) k.empty(box, AppCopy.EMPTY_ACTIVE_SCREENS); return; }
-        int screenWidth = a.getResources().getDisplayMetrics().widthPixels;
-        for (Map<String, Object> s : sessions) {
-            String id = DaemonClient.str(s, "sessionId"), pkg = DaemonClient.str(s, "package");
-            boolean foreground = "foreground".equals(DaemonClient.str(s, "mode"));
-            boolean blocked = Boolean.TRUE.equals(s.get("blocked"));
-            boolean inControl = Boolean.TRUE.equals(s.get("userInControl"));
-            int display = (int) DaemonClient.num(s, "display");
-            String label = pkg.isEmpty() ? (foreground ? AppCopy.LABEL_MAIN_SCREEN : AppCopy.LABEL_PRIVATE_SCREEN) : a.appLabel(pkg);
-
-            LinearLayout card = k.card(box);
-            card.setPadding(k.dp(14), k.dp(14), k.dp(14), k.dp(14));
-            if (inControl) card.setBackground(k.shape(k.card, 14, k.amber));
-
-            // Header row: App name + live state pills
-            LinearLayout head = k.row();
-            LinearLayout titleCol = k.column();
-            k.title(titleCol, label);
-            if (!pkg.isEmpty()) {
-                TextView p = k.body(titleCol, pkg);
-                p.setTextSize(12); p.setPadding(0, k.dp(1), 0, 0);
-            }
-            head.addView(titleCol, new LinearLayout.LayoutParams(0, -2, 1));
-            if (inControl) k.pill(head, AppCopy.LABEL_IN_CONTROL_SHORT, k.amber, k.amberSoft);
-            else k.pill(head, foreground ? AppCopy.LABEL_MAIN_SCREEN : AppCopy.LABEL_AGENT_ACTIVE, k.green, k.greenSoft);
-            if (Boolean.TRUE.equals(s.get("recording"))) k.pill(head, AppCopy.LABEL_RECORDING, k.danger, k.dangerSoft);
-            card.addView(head, new LinearLayout.LayoutParams(-1, -2));
-
-            // Full-width live preview canvas (tap to open edge-to-edge live takeover viewer)
-            if (display > 0) {
-                long w = DaemonClient.num(s, "width"), h = DaemonClient.num(s, "height");
-                int availW = Math.max(k.dp(240), Math.min(screenWidth, k.dp(640)) - k.dp(56));
-                int maxH = Math.round(a.getResources().getDisplayMetrics().heightPixels * 0.56f);
-                int th = w > 0 && h > 0 ? (int) Math.min(maxH, availW * h / w) : Math.min(maxH, k.dp(420));
-                FrameLayout frame = new FrameLayout(a);
-                frame.setBackground(k.shape(k.canvas, 12, inControl ? k.amber : k.strokeStrong));
-                frame.setClipToOutline(true);
-                ImageView thumb = new ImageView(a);
-                thumb.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                thumb.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-                frame.addView(thumb, new FrameLayout.LayoutParams(-1, -1));
-                TextView note = k.text(null, blocked ? AppCopy.PREVIEW_HIDDEN_BLOCKED : AppCopy.PREVIEW_UNAVAILABLE, 13, k.muted, false);
-                note.setGravity(Gravity.CENTER); note.setPadding(k.dp(12), 0, k.dp(12), 0);
-                frame.addView(note, new FrameLayout.LayoutParams(-1, -1));
-                if (!blocked) {
-                    frame.setClickable(true); frame.setFocusable(true);
-                    frame.setOnClickListener(v -> openLive(id, display, pkg, inControl, "", "confirm", "", "", false));
-                    thumbs.put(id, thumb); thumbNotes.put(id, note);
-                }
-                LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, th);
-                fp.topMargin = k.dp(12);
-                card.addView(frame, fp);
-            }
-
-            // Full-width action row
-            LinearLayout actions = k.buttonRow(card);
-            if (!foreground && display > 0) {
-                if (inControl) {
-                    k.rowButton(actions, AppCopy.ACTION_TAKE_OVER, UiKit.AMBER, () -> openLive(id, display, pkg, true, "", "confirm", "", "", false));
-                    k.rowButton(actions, AppCopy.ACTION_HAND_BACK, UiKit.PRIMARY, () -> setTakeover(id, false));
-                } else {
-                    k.rowButton(actions, AppCopy.ACTION_TAKE_OVER, UiKit.PRIMARY, () -> openLive(id, display, pkg, false, "", "confirm", "", "", true));
-                    k.rowButton(actions, AppCopy.ACTION_WATCH, UiKit.SECONDARY, () -> openLive(id, display, pkg, false, "", "confirm", "", "", false));
-                }
-            }
-            k.rowButton(actions, AppCopy.ACTION_STOP, UiKit.DANGER, () -> stop(id));
+        if (sessions.isEmpty()) {
+            k.section(box, AppCopy.SECTION_ACTIVE_SCREENS);
+            if (sessionsLoaded) k.empty(box, AppCopy.EMPTY_ACTIVE_SCREENS);
+            return;
         }
+        int total = sessions.size();
+        int frontIdx = resolveDeckIndex();
+
+        // Header row: eyebrow + deck switcher controls when multiple screens are stacked
+        LinearLayout header = k.row();
+        header.setPadding(k.dp(2), k.dp(20), k.dp(2), k.dp(4));
+        TextView secLabel = k.text(null, AppCopy.SECTION_ACTIVE_SCREENS.toUpperCase(java.util.Locale.ROOT), 11, k.dim, false);
+        secLabel.setTypeface(android.graphics.Typeface.MONOSPACE);
+        secLabel.setLetterSpacing(0.12f);
+        secLabel.setAccessibilityHeading(true);
+        header.addView(secLabel, new LinearLayout.LayoutParams(0, -2, 1));
+        if (total > 1) {
+            k.pill(header, (frontIdx + 1) + " / " + total, k.green, k.greenSoft);
+            Button prev = deckArrowButton("‹", () -> flipDeck(header, -1));
+            Button next = deckArrowButton("›", () -> flipDeck(header, 1));
+            LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(k.dp(34), k.dp(30));
+            np.setMarginStart(k.dp(6));
+            header.addView(prev, new LinearLayout.LayoutParams(k.dp(34), k.dp(30)));
+            header.addView(next, np);
+        }
+        box.addView(header, new LinearLayout.LayoutParams(-1, -2));
+
+        if (total == 1) {
+            LinearLayout single = buildSessionCard(sessions.get(0), true);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+            lp.topMargin = k.dp(6);
+            box.addView(single, lp);
+            lastPreviewAt = 0;
+            return;
+        }
+
+        // Stacked card deck: up to 3 layered cards (back2, back1, front) with tactile swipe + haptics.
+        FrameLayout deck = new FrameLayout(a);
+        deck.setClipChildren(false);
+        deck.setClipToPadding(false);
+        int visibleStack = Math.min(3, total);
+        int bottomPad = k.dp(12 * (visibleStack - 1) + 4);
+        deck.setPadding(0, k.dp(6), 0, bottomPad);
+
+        View[] layers = new View[visibleStack];
+        for (int depth = visibleStack - 1; depth >= 0; depth--) {
+            int sIdx = (frontIdx + depth) % total;
+            boolean isFront = depth == 0;
+            LinearLayout card = buildSessionCard(sessions.get(sIdx), isFront);
+            float scale = 1f - depth * 0.045f;
+            float offsetY = k.dp(14 * depth);
+            card.setScaleX(scale);
+            card.setScaleY(scale);
+            card.setTranslationY(offsetY);
+            card.setAlpha(isFront ? 1f : (depth == 1 ? 0.72f : 0.45f));
+            card.setElevation(k.dp(8 - depth * 3));
+            if (!isFront) {
+                card.setClickable(false);
+                card.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
+            }
+            layers[depth] = card;
+            deck.addView(card, new FrameLayout.LayoutParams(-1, -2));
+        }
+
+        View frontCard = layers[0];
+        View nextCard = visibleStack > 1 ? layers[1] : null;
+        attachDeckSwipe(frontCard, nextCard);
+
+        box.addView(deck, new LinearLayout.LayoutParams(-1, -2));
         lastPreviewAt = 0;
+    }
+
+    private Button deckArrowButton(String glyph, Runnable action) {
+        Button b = k.buttonView(glyph, UiKit.SECONDARY);
+        b.setTextSize(16);
+        b.setMinHeight(k.dp(30)); b.setMinimumHeight(k.dp(30));
+        b.setPadding(0, 0, 0, 0);
+        b.setOnClickListener(v -> action.run());
+        return b;
+    }
+
+    private void attachDeckSwipe(View front, View nextCard) {
+        final float slop = ViewConfiguration.get(a).getScaledTouchSlop();
+        final float[] down = new float[2];
+        final boolean[] dragging = new boolean[1];
+        final boolean[] crossed = new boolean[1];
+        front.setOnTouchListener((v, ev) -> {
+            switch (ev.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN -> {
+                    down[0] = ev.getRawX();
+                    down[1] = ev.getRawY();
+                    dragging[0] = false;
+                    crossed[0] = false;
+                    return true;
+                }
+                case MotionEvent.ACTION_MOVE -> {
+                    float dx = ev.getRawX() - down[0];
+                    float dy = ev.getRawY() - down[1];
+                    if (!dragging[0] && Math.abs(dx) > slop && Math.abs(dx) > Math.abs(dy) * 1.15f) {
+                        dragging[0] = true;
+                        v.getParent().requestDisallowInterceptTouchEvent(true);
+                    }
+                    if (!dragging[0]) return false;
+                    v.setTranslationX(dx);
+                    v.setRotation(Math.max(-9f, Math.min(9f, dx / 44f)));
+                    float w = Math.max(1f, v.getWidth());
+                    float progress = Math.min(1f, Math.abs(dx) / (w * 0.28f));
+                    if (nextCard != null) {
+                        nextCard.setScaleX(0.955f + 0.045f * progress);
+                        nextCard.setScaleY(0.955f + 0.045f * progress);
+                        nextCard.setTranslationY(k.dp(14) * (1f - progress));
+                        nextCard.setAlpha(0.72f + 0.28f * progress);
+                    }
+                    boolean nowCrossed = progress >= 1f;
+                    if (nowCrossed != crossed[0]) {
+                        crossed[0] = nowCrossed;
+                        v.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+                    }
+                    return true;
+                }
+                case MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (!dragging[0]) return false;
+                    v.getParent().requestDisallowInterceptTouchEvent(false);
+                    float dx = ev.getRawX() - down[0];
+                    float threshold = Math.max(k.dp(72), v.getWidth() * 0.26f);
+                    if (ev.getActionMasked() == MotionEvent.ACTION_UP && Math.abs(dx) >= threshold) {
+                        int dir = dx < 0 ? 1 : -1;
+                        v.performHapticFeedback(HapticFeedbackConstants.CONFIRM);
+                        float exitX = (dx < 0 ? -1f : 1f) * (v.getWidth() + k.dp(48));
+                        v.animate().translationX(exitX).rotation(dx < 0 ? -12f : 12f).alpha(0f)
+                                .setDuration(170).setInterpolator(new DecelerateInterpolator())
+                                .withEndAction(() -> flipDeck(null, dir)).start();
+                    } else {
+                        v.animate().translationX(0f).rotation(0f).setDuration(180).setInterpolator(new DecelerateInterpolator()).start();
+                        if (nextCard != null) {
+                            nextCard.animate().scaleX(0.955f).scaleY(0.955f).translationY(k.dp(14)).alpha(0.72f).setDuration(180).start();
+                        }
+                    }
+                    dragging[0] = false;
+                    return true;
+                }
+                default -> { return false; }
+            }
+        });
+    }
+
+    private LinearLayout buildSessionCard(Map<String, Object> s, boolean registerPreview) {
+        int screenWidth = a.getResources().getDisplayMetrics().widthPixels;
+        String id = DaemonClient.str(s, "sessionId"), pkg = DaemonClient.str(s, "package");
+        boolean foreground = "foreground".equals(DaemonClient.str(s, "mode"));
+        boolean blocked = Boolean.TRUE.equals(s.get("blocked"));
+        boolean inControl = Boolean.TRUE.equals(s.get("userInControl"));
+        int display = (int) DaemonClient.num(s, "display");
+        String label = pkg.isEmpty() ? (foreground ? AppCopy.LABEL_MAIN_SCREEN : AppCopy.LABEL_PRIVATE_SCREEN) : a.appLabel(pkg);
+
+        LinearLayout card = k.card(null);
+        card.setPadding(k.dp(14), k.dp(14), k.dp(14), k.dp(14));
+        card.setBackground(k.shape(k.card, 14, inControl ? k.amber : k.strokeStrong));
+
+        // Header row: App name + live state pills
+        LinearLayout head = k.row();
+        LinearLayout titleCol = k.column();
+        k.title(titleCol, label);
+        if (!pkg.isEmpty()) {
+            TextView p = k.body(titleCol, pkg);
+            p.setTextSize(12); p.setPadding(0, k.dp(1), 0, 0);
+        }
+        head.addView(titleCol, new LinearLayout.LayoutParams(0, -2, 1));
+        if (inControl) k.pill(head, AppCopy.LABEL_IN_CONTROL_SHORT, k.amber, k.amberSoft);
+        else k.pill(head, foreground ? AppCopy.LABEL_MAIN_SCREEN : AppCopy.LABEL_AGENT_ACTIVE, k.green, k.greenSoft);
+        if (Boolean.TRUE.equals(s.get("recording"))) k.pill(head, AppCopy.LABEL_RECORDING, k.danger, k.dangerSoft);
+        card.addView(head, new LinearLayout.LayoutParams(-1, -2));
+
+        // Full-width live preview canvas (tap to open edge-to-edge live takeover viewer)
+        if (display > 0) {
+            long w = DaemonClient.num(s, "width"), h = DaemonClient.num(s, "height");
+            int availW = Math.max(k.dp(240), Math.min(screenWidth, k.dp(640)) - k.dp(56));
+            int maxH = Math.round(a.getResources().getDisplayMetrics().heightPixels * 0.52f);
+            int th = w > 0 && h > 0 ? (int) Math.min(maxH, availW * h / w) : Math.min(maxH, k.dp(400));
+            FrameLayout frame = new FrameLayout(a);
+            frame.setBackground(k.shape(k.canvas, 12, inControl ? k.amber : k.stroke));
+            frame.setClipToOutline(true);
+            ImageView thumb = new ImageView(a);
+            thumb.setScaleType(ImageView.ScaleType.FIT_CENTER);
+            thumb.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            frame.addView(thumb, new FrameLayout.LayoutParams(-1, -1));
+            TextView note = k.text(null, blocked ? AppCopy.PREVIEW_HIDDEN_BLOCKED : AppCopy.PREVIEW_UNAVAILABLE, 13, k.muted, false);
+            note.setGravity(Gravity.CENTER); note.setPadding(k.dp(12), 0, k.dp(12), 0);
+            frame.addView(note, new FrameLayout.LayoutParams(-1, -1));
+            if (!blocked && registerPreview) {
+                frame.setClickable(true); frame.setFocusable(true);
+                frame.setOnClickListener(v -> openLive(id, display, pkg, inControl, "", "confirm", "", "", false));
+                thumbs.put(id, thumb); thumbNotes.put(id, note);
+            }
+            LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, th);
+            fp.topMargin = k.dp(12);
+            card.addView(frame, fp);
+        }
+
+        // Full-width action row
+        LinearLayout actions = k.buttonRow(card);
+        if (!foreground && display > 0) {
+            if (inControl) {
+                k.rowButton(actions, AppCopy.ACTION_TAKE_OVER, UiKit.AMBER, () -> openLive(id, display, pkg, true, "", "confirm", "", "", false));
+                k.rowButton(actions, AppCopy.ACTION_HAND_BACK, UiKit.PRIMARY, () -> setTakeover(id, false));
+            } else {
+                k.rowButton(actions, AppCopy.ACTION_TAKE_OVER, UiKit.PRIMARY, () -> openLive(id, display, pkg, false, "", "confirm", "", "", true));
+                k.rowButton(actions, AppCopy.ACTION_WATCH, UiKit.SECONDARY, () -> openLive(id, display, pkg, false, "", "confirm", "", "", false));
+            }
+        }
+        k.rowButton(actions, AppCopy.ACTION_STOP, UiKit.DANGER, () -> stop(id));
+        return card;
     }
 
     private void openLive(
