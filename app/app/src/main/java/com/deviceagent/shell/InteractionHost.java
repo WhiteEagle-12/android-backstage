@@ -60,9 +60,16 @@ public final class InteractionHost {
                 var info=pm.getPackageArchiveInfo(Json.string(args,"path"),sigFlag);
                 if(info==null)throw new IllegalArgumentException("The APK could not be read");
                 String cert=certSha256(info);
+                long apkVersionCode=info.getLongVersionCode();
                 String installedCert="";
-                try{installedCert=certSha256(pm.getPackageInfo(info.packageName,sigFlag));}catch(Exception ignored){}
-                return Json.mapOf("ok",true,"package",info.packageName,"certSha256",cert,"installedCertSha256",installedCert);
+                long installedVersionCode=0L;
+                try{
+                    var installed=pm.getPackageInfo(info.packageName,sigFlag);
+                    installedCert=certSha256(installed);
+                    installedVersionCode=installed.getLongVersionCode();
+                }catch(Exception ignored){}
+                return Json.mapOf("ok",true,"package",info.packageName,"certSha256",cert,"installedCertSha256",installedCert,
+                        "versionCode",apkVersionCode,"installedVersionCode",installedVersionCode);
             }
             if(op.equals("device_control")){
                 if(!"status".equals(args.get("operation"))){if(!Integer.valueOf(0).equals(args.get("display")))throw new IllegalArgumentException("Device changes require a foreground session");try(var guard=inputGuard(0,args)){guard.check();try{return DeviceControls.handle(shellContext(),args);}catch(IllegalArgumentException e){throw e;}catch(Exception e){return Json.mapOf("ok",false,"inputDelivered",null,"code","input_outcome_unknown","error","Android did not confirm the device change. Read device_control status before trying again.");}}}

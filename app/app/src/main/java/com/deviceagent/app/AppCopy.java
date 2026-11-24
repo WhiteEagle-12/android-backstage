@@ -477,6 +477,22 @@ public final class AppCopy {
     public static final String SHARED_TOAST = "Shared to Backstage";
     public static final String SHARE_FAILED_TOAST = "Could not share. Open Backstage and try again.";
 
+    // Settings tab — manual in-app updates
+    public static final String SECTION_UPDATES = "App updates";
+    public static final String ACTION_CHECK_UPDATES = "Check for updates";
+    public static final String UPDATE_CHECKING = "Checking…";
+    public static final String UPDATE_UP_TO_DATE = "Up to date";
+    public static final String UPDATE_UP_TO_DATE_FMT = "You’re on the latest version (%s).";
+    public static final String UPDATE_AVAILABLE_FMT = "v%s ready";
+    public static final String UPDATE_TITLE = "Update available";
+    public static final String UPDATE_BODY_FMT = "Backstage %s is available. Verified against the release signing certificate and SHA-256 checksum before install.";
+    public static final String UPDATE_ACTION = "Update now";
+    public static final String UPDATE_OPEN_BROWSER = "Download in browser";
+    public static final String UPDATE_IN_PROGRESS = "Updating Backstage…";
+    public static final String UPDATE_RESTARTING = "Installing update. Reopen Backstage in about a minute.";
+    public static final String UPDATE_FAILED = "Could not start update. Make sure Backstage is connected and try again.";
+    public static final String UPDATE_CHECK_FAILED = "Could not check for updates. Check your internet connection.";
+
     public static String activeScreensLabel(int count) {
         return count == 1 ? "Active on 1 screen" : "Active on " + count + " screens";
     }

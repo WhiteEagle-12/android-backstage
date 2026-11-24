@@ -331,6 +331,23 @@ public final class ControlServer {
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "item", added)), session, false);
                 return;
             }
+            if ("POST".equals(req.method) && "/update".equals(req.path)) {
+                Map<String, Object> body = parseObject(req.body);
+                String url = Json.string(body, "url"), sha256 = Json.string(body, "sha256");
+                if (!isTrustedUpdateUrl(url)
+                        || sha256 == null || !sha256.matches("[a-f0-9]{64}")) {
+                    writeJson(sock, 400, "{\"error\":\"trusted https url and sha256 are required\"}", session, false);
+                    return;
+                }
+                writeJson(sock, 202, "{\"ok\":true,\"updating\":true}", session, false);
+                Thread t = new Thread(() -> {
+                    try { tools.selfUpdate(null, url, null, sha256, true); }
+                    catch (RuntimeException e) { DaemonLog.print("app update failed: " + e.getMessage()); }
+                }, "backstage-app-update");
+                t.setDaemon(false);
+                t.start();
+                return;
+            }
             if ("POST".equals(req.method) && "/shutdown".equals(req.path)) {
                 writeJson(sock, 200, "{\"ok\":true}", session, false);
                 try {
@@ -553,6 +570,23 @@ public final class ControlServer {
         return java.security.MessageDigest.isEqual(
                 expected.getBytes(StandardCharsets.UTF_8),
                 given.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /** Only allow official release hosts over HTTPS for in-app updates. */
+    public static boolean isTrustedUpdateUrl(String url) {
+        if (url == null || !url.startsWith("https://")) return false;
+        try {
+            java.net.URI u = java.net.URI.create(url);
+            String host = u.getHost();
+            if (host == null) return false;
+            String h = host.toLowerCase(java.util.Locale.US);
+            return h.equals("github.com")
+                    || h.equals("objects.githubusercontent.com")
+                    || h.equals("release-assets.githubusercontent.com")
+                    || h.equals("android-backstage.com")
+                    || h.equals("www.android-backstage.com")
+                    || h.equals("relay.android-backstage.com");
+        } catch (RuntimeException e) { return false; }
     }
 
     private static Map<String, Object> parseObject(String body) {

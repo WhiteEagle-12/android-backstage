@@ -33,6 +33,24 @@ public final class AccountClient {
     /** An agent asking for access, approved from a notification or the app. */
     public static final class Request { public String id = "", names = "", check = ""; public long expiresAt; }
     public static final class Methods { public String email = ""; public boolean emailAvailable, hasPassword; public int recoveryLeft; public final List<String[]> passkeys = new ArrayList<>(); }
+    public static final class Update { public int versionCode; public String versionName = "", url = "", sha256 = ""; }
+
+    /** Only allow official release hosts over HTTPS for in-app updates. */
+    public static boolean isTrustedUpdateUrl(String url) {
+        if (url == null || !url.startsWith("https://")) return false;
+        try {
+            java.net.URI u = java.net.URI.create(url);
+            String host = u.getHost();
+            if (host == null) return false;
+            String h = host.toLowerCase(java.util.Locale.US);
+            return h.equals("github.com")
+                    || h.equals("objects.githubusercontent.com")
+                    || h.equals("release-assets.githubusercontent.com")
+                    || h.equals("android-backstage.com")
+                    || h.equals("www.android-backstage.com")
+                    || h.equals("relay.android-backstage.com");
+        } catch (RuntimeException e) { return false; }
+    }
 
     private static String str(Map<String, Object> m, String key) { String v = Json.string(m, key); return v == null || "null".equals(v) ? "" : v; }
     private final String base; // e.g. https://relay.android-backstage.com/work
@@ -164,6 +182,17 @@ public final class AccountClient {
         if (codes instanceof List) for (Object c : (List<?>) codes) out.add(String.valueOf(c)); return out;
     }
     public void removePasskey(String id) throws IOException { post("/phone/passkeys/remove", Json.mapOf("id", id)); }
+
+    /** Fetch the latest published release metadata on explicit user request. Needs no sign-in. */
+    public Update latestApp() throws IOException {
+        Map<String, Object> m = Json.object(SimpleHttp.getOnce(base + "/app/latest", 15000, null));
+        Update u = new Update();
+        u.versionCode = Json.integer(m, "versionCode", 0);
+        u.versionName = str(m, "versionName");
+        u.url = str(m, "url");
+        u.sha256 = str(m, "sha256");
+        return u.versionCode > 0 && isTrustedUpdateUrl(u.url) && u.sha256.matches("[a-f0-9]{64}") ? u : null;
+    }
 
     /** A short human message for an API failure. */
     public static String explain(Exception e) {

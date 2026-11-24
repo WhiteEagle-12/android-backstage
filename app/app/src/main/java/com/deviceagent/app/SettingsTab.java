@@ -34,6 +34,15 @@ final class SettingsTab extends TabPage {
             row(card, AppCopy.ACTION_USB_COMMAND, null, a::showUsbCommand, true);
             row(card, AppCopy.ACTION_CONNECTION_DETAILS, null, a::showConnectionDetails, true);
             row(card, AppCopy.ACTION_DIAGNOSTIC_LOG, null, a::showDiagnosticLog, false);
+        });
+        String updateVal = a.updateStatus.isEmpty() ? "v" + BuildInfo.VERSION : a.updateStatus;
+        put("updates", "updates|" + a.checkingUpdate + "|" + updateVal + "|" + (a.availableUpdate == null ? 0 : a.availableUpdate.versionCode), box -> {
+            k.section(box, AppCopy.SECTION_UPDATES);
+            LinearLayout card = group(box);
+            row(card, AppCopy.ACTION_CHECK_UPDATES, updateVal, () -> {
+                if (a.availableUpdate != null && a.availableUpdate.versionCode > a.installedVersionCode()) a.showUpdateDialog(a.availableUpdate);
+                else a.checkForUpdates();
+            }, false);
             TextView version = k.body(box, AppCopy.APP_NAME + " " + BuildInfo.VERSION);
             version.setTextSize(12); version.setGravity(Gravity.CENTER); version.setPadding(0, k.dp(22), 0, k.dp(8));
         });

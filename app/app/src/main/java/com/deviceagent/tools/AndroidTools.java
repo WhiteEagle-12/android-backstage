@@ -1062,6 +1062,10 @@ public final class AndroidTools {
     }
 
     public Map<String, Object> selfUpdate(String path, String url, String fileKey, String sha256) {
+        return selfUpdate(path, url, fileKey, sha256, false);
+    }
+
+    public Map<String, Object> selfUpdate(String path, String url, String fileKey, String sha256, boolean requireUpgrade) {
         device.exec("mkdir -p " + ShellCommand.quote(Starter.DIR));
         String remote = Starter.UPDATE_APK;
         if (url != null && !url.isBlank()) {
@@ -1086,10 +1090,18 @@ public final class AndroidTools {
         }
         String apkCert = Json.string(info, "certSha256");
         String installedCert = Json.string(info, "installedCertSha256");
-        if (apkCert != null && !apkCert.isBlank() && installedCert != null && !installedCert.isBlank()
-                && !apkCert.equalsIgnoreCase(installedCert)) {
+        if (apkCert == null || apkCert.isBlank() || installedCert == null || installedCert.isBlank()
+                || !apkCert.equalsIgnoreCase(installedCert)) {
             device.exec("rm -f " + ShellCommand.quote(remote));
             throw new IllegalStateException("Refusing self-update: APK signing certificate does not match the installed app.");
+        }
+        if (requireUpgrade) {
+            long apkCode = info.get("versionCode") instanceof Number n ? n.longValue() : 0L;
+            long curCode = info.get("installedVersionCode") instanceof Number n ? n.longValue() : 0L;
+            if (apkCode <= 0L || curCode <= 0L || apkCode <= curCode) {
+                device.exec("rm -f " + ShellCommand.quote(remote));
+                throw new IllegalStateException("Refusing self-update: APK version " + apkCode + " is not newer than installed " + curCode);
+            }
         }
 
         // Stop taking relay jobs: anything started now would die with this process.

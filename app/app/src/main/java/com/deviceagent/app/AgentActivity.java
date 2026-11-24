@@ -89,6 +89,9 @@ public final class AgentActivity extends Activity {
     int accountVersion;
     private volatile long accountLoadedAt;
     private final AtomicBoolean accountLoading = new AtomicBoolean();
+    volatile AccountClient.Update availableUpdate;
+    volatile boolean checkingUpdate;
+    volatile String updateStatus = "";
 
     static final class Session {
         volatile boolean busy;
@@ -486,6 +489,68 @@ public final class AgentActivity extends Activity {
             ui.post(() -> { requests.removeIf(x -> x.id.equals(r.id)); accountVersion++; accountLoadedAt = 0; refreshAccount(true); });
             state.done(message);
         }, "backstage-decide").start();
+    }
+
+    long installedVersionCode() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).getLongVersionCode(); }
+        catch (Exception e) { return Long.MAX_VALUE; }
+    }
+
+    /** Manual, user-triggered check only (zero background polling). */
+    void checkForUpdates() {
+        if (checkingUpdate) return;
+        checkingUpdate = true;
+        updateStatus = AppCopy.UPDATE_CHECKING;
+        accountVersion++;
+        renderNow();
+        final String base = accountServer() ? config.relayUrl : SetupRules.DEFAULT_RELAY;
+        new Thread(() -> {
+            AccountClient.Update found = null;
+            String err = null;
+            try { found = new AccountClient(base).latestApp(); }
+            catch (Exception e) { err = AppCopy.UPDATE_CHECK_FAILED; }
+            final AccountClient.Update result = found;
+            final String error = err;
+            ui.post(() -> {
+                checkingUpdate = false;
+                if (error != null) {
+                    updateStatus = "";
+                    toast(error);
+                } else if (result != null && result.versionCode > installedVersionCode()) {
+                    availableUpdate = result;
+                    updateStatus = String.format(AppCopy.UPDATE_AVAILABLE_FMT, result.versionName);
+                    if (active && !isDestroyed()) showUpdateDialog(result);
+                } else {
+                    availableUpdate = null;
+                    updateStatus = AppCopy.UPDATE_UP_TO_DATE;
+                    toast(String.format(AppCopy.UPDATE_UP_TO_DATE_FMT, BuildInfo.VERSION));
+                }
+                accountVersion++;
+                renderNow();
+            });
+        }, "backstage-update-check").start();
+    }
+
+    void showUpdateDialog(AccountClient.Update update) {
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle(AppCopy.UPDATE_TITLE)
+                .setMessage(String.format(AppCopy.UPDATE_BODY_FMT, update.versionName))
+                .setNegativeButton(AppCopy.CANCEL, null);
+        if (daemonUp) {
+            b.setPositiveButton(AppCopy.UPDATE_ACTION, (d, w) -> installUpdate(update));
+        } else {
+            b.setPositiveButton(AppCopy.UPDATE_OPEN_BROWSER, (d, w) -> {
+                try { startActivity(new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(update.url))); }
+                catch (Exception e) { toast(AppCopy.UPDATE_FAILED); }
+            });
+        }
+        b.show();
+    }
+
+    void installUpdate(AccountClient.Update update) {
+        Session state = session; state.busy = true; state.message = AppCopy.UPDATE_IN_PROGRESS; renderNow();
+        daemon.post("/update", Json.mapOf("url", update.url, "sha256", update.sha256),
+                (r, e) -> { state.done(e == null ? AppCopy.UPDATE_RESTARTING : AppCopy.UPDATE_FAILED); renderNow(); });
     }
     void refreshAccount(boolean force) {
         if (!accountServer()) return;
