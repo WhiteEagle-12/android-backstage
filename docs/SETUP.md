@@ -67,7 +67,7 @@ once from any computer and the daemon starts exactly the same way.
 `backstage pair` wrote `config/backstage.json` for you:
 
 ```json
-{ "relayUrl": "https://relay.android-backstage.com", "apiKey": "bsk_...", "agentId": "agt_...",
+{ "relayUrl": "https://backstage.example.com", "apiKey": "bsk_...", "agentId": "agt_...",
   "device": "phone", "links": { "phone": { "deviceId": "dev_...", "linkKey": "..." } } }
 ```
 

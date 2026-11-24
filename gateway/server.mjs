@@ -1,5 +1,5 @@
 import express from 'express';
-import {createHash, randomBytes} from 'node:crypto';
+import {createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -123,7 +123,7 @@ const failure=(e)=>{
   return asToolResult({ok:false,code:'tool_failed',error:'The phone action did not finish. The phone may be offline, paused, or this connection may no longer have access. Do not retry a write unless its outcome is known.'},true);
 };
 
-export function createWorkApp({base,stateFile,approvalFile,connections,owners,artifacts,metadataReader,callTool,directFilesUrl=null,keepAlive,allowTestRedirect=false,zeroRetention=false,allowShell=process.env.BACKSTAGE_ALLOW_HOSTED_SHELL!=='0',audit=()=>{},now=Date.now}) {
+export function createWorkApp({base,stateFile,approvalFile,connections,owners,artifacts,metadataReader,callTool,directFilesUrl=null,keepAlive,allowTestRedirect=false,zeroRetention=false,allowShell=process.env.BACKSTAGE_ALLOW_HOSTED_SHELL!=='0',internalToken=process.env.RELAY_INTERNAL_TOKEN||process.env.RELAY_ADMIN_TOKEN||null,audit=()=>{},now=Date.now}) {
   if(zeroRetention&&stateFile)fs.rmSync(stateFile+'.requests',{recursive:true,force:true});
   const journal=createRequestJournal({directory:stateFile+'.requests',memoryOnly:zeroRetention,now,reconcile:async(grantId,name,args,jobId)=>{
     if(!connections?.active(grantId))return null;
@@ -171,8 +171,66 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
   app.use(express.json({limit:'128kb'})); app.use(express.urlencoded({extended:false,limit:'8kb'}));
   auth.routes(app);
   const nativeSignIn = (connections&&owners) ? nativeSignInRoutes(app,{connections,owners,now}) : null;
-  if(owners)ownerRoutes(app,{base,connections,owners,auth,artifacts,nativeSignIn,now});
-  if(connections&&owners)phoneRoutes(app,{connections,auth,owners,now,base,artifacts,nativeSignIn,appReleases:createAppReleases()});
+  const phoneApi = (connections&&owners) ? phoneRoutes(app,{connections,auth,owners,now,base,artifacts,nativeSignIn,appReleases:createAppReleases()}) : null;
+  if(owners)ownerRoutes(app,{base,connections,owners,auth,artifacts,nativeSignIn,phoneApi,now});
+
+  // Loopback-only internal admin routes (blocked by gateway/front.mjs externally; requires x-backstage-internal-key).
+  if (owners && internalToken) {
+    const expectedHash = createHash('sha256').update(String(internalToken)).digest();
+    const isLoopback = addr => addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1';
+    const requireInternalAdmin = (req, res, next) => {
+      if (!isLoopback(req.socket?.remoteAddress || '')) return res.status(403).json({ error: 'loopback_required' });
+      const given = String(req.headers['x-backstage-internal-key'] || '');
+      if (!given) return res.status(401).json({ error: 'unauthorized' });
+      const givenHash = createHash('sha256').update(given).digest();
+      if (!timingSafeEqual(givenHash, expectedHash)) return res.status(401).json({ error: 'unauthorized' });
+      next();
+    };
+    const resolveOwnerId = ref => {
+      const raw = String(ref || '').trim();
+      if (!raw) return null;
+      if (owners.exists(raw)) return raw;
+      return owners.ownerByEmail?.(raw) || null;
+    };
+    app.get('/work/internal/admin/owners', requireInternalAdmin, (_req, res) => {
+      const list = (owners.listOwners?.() || []).map(o => ({
+        ...o,
+        deviceCount: connections ? connections.devices(o.id).length : 0,
+        grantCount: connections ? connections.list(o.id).length : 0,
+      }));
+      res.json({ owners: list });
+    });
+    app.get('/work/internal/admin/owner/:ref', requireInternalAdmin, (req, res) => {
+      const ownerId = resolveOwnerId(req.params.ref);
+      if (!ownerId) return res.status(404).json({ error: 'owner_not_found' });
+      const methods = owners.methods(ownerId);
+      const devices = connections ? connections.devices(ownerId).map(d => ({ id: d.id, name: d.name, model: d.model || null, lastSeen: d.lastSeen || null })) : [];
+      const grants = connections ? connections.list(ownerId).map(g => ({ id: g.id, name: g.name || null, access: g.access, paused: !!g.paused, createdAt: g.createdAt })) : [];
+      res.json({ ownerId, methods, devices, grants });
+    });
+    app.post('/work/internal/admin/owner/:ref/revoke-grants', requireInternalAdmin, (req, res) => {
+      const ownerId = resolveOwnerId(req.params.ref);
+      if (!ownerId) return res.status(404).json({ error: 'owner_not_found' });
+      const grants = connections ? connections.list(ownerId).map(g => g.id) : [];
+      for (const gid of grants) { try { connections.revokeOwned(ownerId, gid); } catch {} }
+      auth?.revokeGrants?.(grants);
+      artifacts?.removeForGrants?.(grants);
+      auth?.purgeOwner?.(ownerId);
+      res.json({ ok: true, ownerId, revokedGrants: grants });
+    });
+    app.post('/work/internal/admin/owner/:ref/delete', requireInternalAdmin, async (req, res) => {
+      const ownerId = resolveOwnerId(req.params.ref);
+      if (!ownerId) return res.status(404).json({ error: 'owner_not_found' });
+      auth?.purgeOwner?.(ownerId);
+      await nativeSignIn?.purgeOwner?.(ownerId);
+      await phoneApi?.purgeOwner?.(ownerId);
+      const removed = connections ? await connections.removeAllForOwner(ownerId) : { grantIds: [], deviceIds: [] };
+      auth?.revokeGrants?.(removed.grantIds);
+      artifacts?.removeForGrants?.(removed.grantIds);
+      owners.deleteOwner(ownerId);
+      res.json({ ok: true, deleted: true, ownerId, removedDevices: removed.deviceIds, revokedGrants: removed.grantIds });
+    });
+  }
   app.get('/work/health', (req,res) => res.json({ok:true,service:'backstage-work',version:VERSION,toolContract:TOOL_CONTRACT}));
   app.options('/work/mcp',(req,res)=>{
     if(!req.headers.origin||!auth.registeredOrigin(req.headers.origin))return res.sendStatus(403);

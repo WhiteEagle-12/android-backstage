@@ -285,3 +285,152 @@ test("artifacts with R2 offloads pulled files to presigned 302 redirect and shre
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("POST /work/account/delete and /work/internal/admin wipe owner, devices, grants, artifacts, and relay links", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bs-del-e2e-"));
+  let server = null;
+  const relayDeletes = [];
+  const fakeFetch = async (url, init) => {
+    relayDeletes.push({ url, method: init?.method, auth: init?.headers?.Authorization });
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  try {
+    const codes = [];
+    const mailer = {
+      configured: () => true,
+      send: async (to, subject) => { codes.push({ to, code: subject.slice(0, 6) }); },
+    };
+    const internalToken = "test_internal_admin_key_1234567890";
+    const connections = createConnections({
+      directory: path.join(dir, "connections"),
+      relayUrl: "http://127.0.0.1:18420",
+      fetchImpl: fakeFetch,
+    });
+    const artifacts = createArtifacts({ directory: path.join(dir, "artifacts"), zeroRetention: true });
+    const owners = createOwners({
+      stateFile: path.join(dir, "owners.json"),
+      origin: "http://127.0.0.1",
+      mailer,
+    });
+    const app = createWorkApp({
+      base: "http://127.0.0.1/work",
+      stateFile: path.join(dir, "oauth.json"),
+      approvalFile: path.join(dir, "approval.json"),
+      connections,
+      owners,
+      artifacts,
+      internalToken,
+    });
+    server = await new Promise((resolve) => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+
+    // 1. Verify internal admin auth rejects missing / bad key
+    assert.equal((await fetch(`${base}/work/internal/admin/owners`)).status, 401);
+    assert.equal((await fetch(`${base}/work/internal/admin/owners`, { headers: { "x-backstage-internal-key": "wrong" } })).status, 401);
+
+    // 2. Seed Alice and test admin list/inspect/revoke-grants/delete
+    const idxA = codes.length;
+    await owners.startSignUp("alice-abuse@example.com", "strong-pass-123");
+    const aliceId = owners.verifySignUp("alice-abuse@example.com", codes[idxA].code);
+    const grantA = "grant_" + crypto.randomBytes(16).toString("hex");
+    fs.writeFileSync(path.join(dir, "connections", grantA + ".json"), JSON.stringify({
+      ownerId: aliceId, name: "Bot", clientId: "cli_1", access: "all", createdAt: new Date().toISOString(),
+    }));
+    const sha = crypto.createHash("sha256").update(Buffer.from("payload")).digest("hex");
+    const artA = artifacts.begin({ grantId: grantA, name: "x.bin", size: 7, sha256: sha });
+
+    const listRes = await fetch(`${base}/work/internal/admin/owners`, { headers: { "x-backstage-internal-key": internalToken } });
+    assert.equal(listRes.status, 200);
+    const listed = await listRes.json();
+    assert.ok(listed.owners.some((o) => o.id === aliceId && o.email === "alice-abuse@example.com" && o.grantCount === 1));
+
+    const inspectRes = await fetch(`${base}/work/internal/admin/owner/${encodeURIComponent("alice-abuse@example.com")}`, {
+      headers: { "x-backstage-internal-key": internalToken },
+    });
+    assert.equal(inspectRes.status, 200);
+    const inspected = await inspectRes.json();
+    assert.equal(inspected.ownerId, aliceId);
+    assert.equal(inspected.grants.length, 1);
+
+    // Revoke grants leaves owner intact but deletes grant & artifact
+    const revRes = await fetch(`${base}/work/internal/admin/owner/${encodeURIComponent("alice-abuse@example.com")}/revoke-grants`, {
+      method: "POST",
+      headers: { "x-backstage-internal-key": internalToken },
+    });
+    assert.equal(revRes.status, 200);
+    assert.deepEqual((await revRes.json()).revokedGrants, [grantA]);
+    assert.equal(owners.exists(aliceId), true);
+    assert.throws(() => artifacts.status(artA.artifactId, grantA), /Unknown or expired/);
+
+    // Admin delete removes owner completely
+    const delRes = await fetch(`${base}/work/internal/admin/owner/${encodeURIComponent(aliceId)}/delete`, {
+      method: "POST",
+      headers: { "x-backstage-internal-key": internalToken },
+    });
+    assert.equal(delRes.status, 200);
+    assert.equal(owners.exists(aliceId), false);
+    assert.equal(owners.ownerByEmail("alice-abuse@example.com"), null);
+
+    // 3. Verify self-service POST /work/account/delete cleans up owner, device + relay DELETE /v1/connection, grant, and artifact
+    const idxB = codes.length;
+    await owners.startSignUp("bob-self@example.com", "strong-pass-456");
+    const bobId = owners.verifySignUp("bob-self@example.com", codes[idxB].code);
+    let sessionCookieHeader = "";
+    owners.issue({ append: (k, v) => { if (k === "Set-Cookie") sessionCookieHeader = v.split(";")[0]; } }, bobId);
+    const grantB = "grant_" + crypto.randomBytes(16).toString("hex");
+    fs.writeFileSync(path.join(dir, "connections", grantB + ".json"), JSON.stringify({
+      ownerId: bobId, name: "Claude", clientId: "cli_2", access: "all", createdAt: new Date().toISOString(),
+    }));
+    // Seed a paired device in a fresh connections instance backed by the same dir so removeAllForOwner revokes it on the relay too
+    const devB = "phone_" + crypto.randomBytes(16).toString("hex");
+    fs.writeFileSync(path.join(dir, "connections", "devices.json"), JSON.stringify({
+      [devB]: { id: devB, ownerId: bobId, name: "Pixel Test", createdAt: new Date().toISOString() },
+    }));
+    fs.mkdirSync(path.join(dir, "connections", "phones"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "connections", "phones", devB + ".json"), JSON.stringify({
+      relayUrl: "http://127.0.0.1:18420",
+      apiKey: "bsc_test_revoke_token",
+      agentId: "agt_bob",
+      device: "phone",
+      links: { phone: { deviceId: "dev_bob", linkKey: crypto.randomBytes(32).toString("base64url") } },
+    }));
+    const connections2 = createConnections({ directory: path.join(dir, "connections"), relayUrl: "http://127.0.0.1:18420", fetchImpl: fakeFetch });
+    const app2 = createWorkApp({
+      base: "http://127.0.0.1/work",
+      stateFile: path.join(dir, "oauth2.json"),
+      approvalFile: path.join(dir, "approval2.json"),
+      connections: connections2,
+      owners,
+      artifacts,
+      internalToken,
+    });
+    const server2 = await new Promise((resolve) => { const s = app2.listen(0, "127.0.0.1", () => resolve(s)); });
+    const base2 = `http://127.0.0.1:${server2.address().port}`;
+    const artB = artifacts.begin({ grantId: grantB, name: "y.bin", size: 7, sha256: sha });
+    try {
+      const selfDel = await fetch(`${base2}/work/account/delete`, {
+        method: "POST",
+        headers: {
+          origin: "http://127.0.0.1",
+          cookie: sessionCookieHeader,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ confirm: "DELETE" }),
+      });
+      assert.equal(selfDel.status, 200);
+      assert.equal(owners.exists(bobId), false);
+      assert.equal(owners.ownerByEmail("bob-self@example.com"), null);
+      assert.equal(connections2.devices(bobId).length, 0);
+      assert.equal(fs.existsSync(path.join(dir, "connections", "phones", devB + ".json")), false);
+      assert.equal(fs.existsSync(path.join(dir, "connections", grantB + ".json")), false);
+      assert.throws(() => artifacts.status(artB.artifactId, grantB), /Unknown or expired/);
+      assert.ok(relayDeletes.some((r) => r.method === "DELETE" && r.url.endsWith("/v1/connection") && r.auth === "Bearer bsc_test_revoke_token"));
+    } finally {
+      await new Promise((r) => server2.close(r));
+    }
+    artifacts.close();
+  } finally {
+    await new Promise((r) => (server ? server.close(r) : r()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

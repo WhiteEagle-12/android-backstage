@@ -14,6 +14,9 @@ const relayAgent = new http.Agent({keepAlive:true,keepAliveMsecs:15000,maxSocket
 const workAgent = new http.Agent({keepAlive:true,keepAliveMsecs:15000,maxSockets:2048,maxFreeSockets:256});
 const front = http.createServer((req,res)=>{
   let pathname;try {pathname=new URL(req.url,'http://localhost').pathname;}catch{res.writeHead(400).end();return;}
+  if (pathname === '/work/internal' || pathname.startsWith('/work/internal/')) {
+    res.writeHead(404,{'content-type':'application/json'});res.end('{"error":"not_found"}');return;
+  }
   const work = pathname === '/.well-known/assetlinks.json' || pathname === '/work' || pathname.startsWith('/work/') || pathname === '/.well-known/oauth-authorization-server/work' || pathname === '/.well-known/oauth-protected-resource/work/mcp';
   // Cloudflare also answers plain HTTP for this hostname. Never let a token travel unencrypted: send browsers to HTTPS and refuse everything else.
   let scheme=String(req.headers['x-forwarded-proto']||'').split(',')[0].trim();

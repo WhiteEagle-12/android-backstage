@@ -307,6 +307,17 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
       state.owners[ownerId].recovery = state.owners[ownerId].recovery.filter(d => d !== digest); save();
       return ownerId;
     },
+    /** List all owners (non-secret metadata for local admin tooling). */
+    listOwners() {
+      return Object.entries(state.owners).map(([id, row]) => ({
+        id,
+        email: row.email || null,
+        createdAt: row.createdAt || null,
+        hasPassword: !!row.passwordHash,
+        passkeyCount: Object.values(state.credentials).filter(c => c.ownerId === id).length,
+        recoveryCodesLeft: (row.recovery || []).length,
+      }));
+    },
     /** Sign-in methods on the account, without secrets. */
     methods(ownerId) {
       const row = state.owners[ownerId] || {};

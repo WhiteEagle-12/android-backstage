@@ -1,0 +1,68 @@
+name: Device Compatibility Report
+description: Report how Android Backstage works on your phone model (helps build our device compatibility list).
+title: "[Device]: "
+labels: ["device-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing Android Backstage on your phone! Fill in the fields below so other users know what works on your device and OEM skin.
+        **Please never include connection codes, passwords, API keys, or private screenshots.**
+  - type: input
+    id: phone-model
+    attributes:
+      label: Phone model
+      description: Manufacturer and model name (e.g. Pixel 9 Pro, Galaxy S25 Ultra, OnePlus 13, RedMagic 10 Pro).
+      placeholder: "Samsung Galaxy S25 Ultra"
+    validations:
+      required: true
+  - type: input
+    id: android-version
+    attributes:
+      label: Android version & OEM skin
+      description: Android version plus OEM UI/ROM name and version.
+      placeholder: "Android 15 / One UI 7.0"
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: Android Backstage app version
+      placeholder: "2.0.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: connection-mode
+    attributes:
+      label: Connection mode
+      options:
+        - Hosted OAuth MCP (android-backstage.com)
+        - Self-hosted relay / Local E2EE CLI
+    validations:
+      required: true
+  - type: dropdown
+    id: pairing-outcome
+    attributes:
+      label: Wireless debugging pairing outcome
+      options:
+        - Worked on first try
+        - Worked after a workaround (describe below)
+        - Failed to pair
+    validations:
+      required: true
+  - type: checkboxes
+    id: features-tested
+    attributes:
+      label: What worked cleanly?
+      options:
+        - label: Private virtual display opens apps without touching the real screen
+        - label: Screen reading (`android_observe`) and taps/typing
+        - label: Reconnects automatically across Wi-Fi / 5G switches
+        - label: Blocked apps (Privacy Fence) refused access as expected
+        - label: Survives backgrounding / screen off without OEM killing the daemon
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes, quirks, or OEM workarounds
+      description: Any OEM-specific settings needed (e.g. battery optimization, "Disable permission monitoring", USB debugging security settings, etc.), or errors you hit.
+      placeholder: "Share any quirks or tips for other owners of this phone..."

@@ -4,20 +4,26 @@
  * Resend email alerts on UP -> DOWN and DOWN -> UP transitions (no spam).
  */
 const TARGETS = [
-  { id: "relay", label: "VM 1 Relay (/health)", url: "https://relay.android-backstage.com/health" },
-  { id: "work", label: "VM 2 Gateway (/work/health)", url: "https://relay.android-backstage.com/work/health" },
+  { id: "relay", label: "VM 1 Relay (/health)", url: "https://relay.android-backstage.com/health", kind: "json" },
+  { id: "work", label: "VM 2 Gateway (/work/health)", url: "https://relay.android-backstage.com/work/health", kind: "json" },
+  { id: "site", label: "Website (android-backstage.com)", url: "https://android-backstage.com/", kind: "html", contains: "Android Backstage" },
 ];
 
 const STATE_KEY = "monitor/uptime-state.json";
 
-async function probeOnce(url) {
+async function probeOnce(target) {
   const start = Date.now();
   try {
-    const res = await fetch(url, {
+    const res = await fetch(target.url, {
       headers: { "user-agent": "backstage-uptime-monitor/1.0" },
       signal: AbortSignal.timeout(10_000),
     });
     const ms = Date.now() - start;
+    if (target.kind === "html") {
+      const text = await res.text().catch(() => "");
+      if (res.ok && (!target.contains || text.includes(target.contains))) return { ok: true, status: res.status, ms };
+      return { ok: false, status: res.status, ms, error: res.ok ? "Missing expected marker" : `HTTP ${res.status}` };
+    }
     const body = await res.json().catch(() => null);
     if (res.ok && body?.ok === true) return { ok: true, status: res.status, ms };
     return { ok: false, status: res.status, ms, error: `HTTP ${res.status}` };
@@ -26,11 +32,11 @@ async function probeOnce(url) {
   }
 }
 
-async function probeWithRetry(url) {
-  const first = await probeOnce(url);
+async function probeWithRetry(target) {
+  const first = await probeOnce(target);
   if (first.ok) return first;
   await new Promise((r) => setTimeout(r, 4000));
-  return probeOnce(url);
+  return probeOnce(target);
 }
 
 async function sendAlert(env, subject, text) {
@@ -54,7 +60,7 @@ async function sendAlert(env, subject, text) {
 async function runCheck(env, notify = true) {
   const checks = {};
   for (const t of TARGETS) {
-    checks[t.id] = await probeWithRetry(t.url);
+    checks[t.id] = await probeWithRetry(t);
   }
   const nowIso = new Date().toISOString();
   const prevObj = env.STATE_BUCKET ? await env.STATE_BUCKET.get(STATE_KEY) : null;

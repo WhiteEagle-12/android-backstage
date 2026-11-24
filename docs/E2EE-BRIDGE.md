@@ -4,26 +4,34 @@ Android Backstage supports two ways to connect MCP clients (Claude, Cursor, Code
 
 | Mode | Best for | Who sees plaintext? | Setup |
 | --- | --- | --- | --- |
-| **Hosted MCP Gateway** (`/work/mcp`) | Zero-install OAuth from any cloud or desktop client | Phone + hosted gateway | Sign in in Backstage app and approve the agent |
-| **Zero-Knowledge E2EE Local Bridge** (`mcp-bridge`) | Privacy-strict local setups where the relay must never see plaintext | **Only your local machine and your phone** (SPAKE2 + AES-256-GCM) | Pair once with CLI, run one command |
+| **Hosted MCP Gateway** (`/work/mcp`) | Zero-install OAuth from any cloud or desktop client | Phone + hosted gateway (zero call-history retention) | Sign in in Backstage app and approve the agent |
+| **Self-Hosted Relay + Local E2EE Bridge** (`mcp-bridge`) | Privacy-strict setups where our hosted servers are never in the path | **Only your machine and your phone** (SPAKE2 + AES-256-GCM) | Run your own `relay/server.mjs`, pair once with CLI, run one command |
 
-## Quick Start: E2EE Local Bridge
+> **Note:** Our hosted relay at `relay.android-backstage.com` runs with `RELAY_ALLOW_PUBLIC_PAIR=0` (it serves signed-in hosted accounts only). To use the local E2EE CLI bridge, run your own open-source relay (`relay/server.mjs`) with `RELAY_ALLOW_PUBLIC_PAIR=1` (or with your own relay's API key from `RELAY_DATA_DIR/first-api-key.txt`).
 
-1. Pair your local machine directly with the phone (one time):
+## Quick Start: Self-Hosted E2EE Local Bridge
+
+1. Start your own relay (see [`docs/SETUP.md`](SETUP.md)):
 
 ```bash
-node cli/backstage.mjs pair --name phone
+RELAY_ALLOW_PUBLIC_PAIR=1 node relay/server.mjs
 ```
 
-Enter the printed link code in the Android Backstage app on your phone.
+2. Pair your local machine directly with the phone through your relay (one time):
 
-2. Print a ready-to-paste MCP client config:
+```bash
+node cli/backstage.mjs pair --relay-url https://your-relay.example --name phone
+```
+
+Enter the printed link code in the Android Backstage app on your phone (choose **Self-hosted relay**).
+
+3. Print a ready-to-paste MCP client config:
 
 ```bash
 ./scripts/backstage-e2ee-mcp.sh --device phone --print-config
 ```
 
-3. Or run the stdio MCP bridge directly:
+4. Or run the stdio MCP bridge directly:
 
 ```bash
 ./scripts/backstage-e2ee-mcp.sh --device phone

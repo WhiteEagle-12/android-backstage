@@ -217,4 +217,12 @@ export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifa
     if(limited('approval:'+req.phone.ownerId,20,600000))return res.status(429).json({error:'busy',message:'Too many attempts. Wait a few minutes.'});
     res.json({denied:auth.approvals.deny(req.body?.code)});
   });
+  return {
+    async purgeOwner(ownerId){
+      const cancels=[];
+      for(const [k,v] of adds)if(v.ownerId===ownerId){adds.delete(k);cancels.push(v.pairing?.cancel?.().catch(()=>{}));}
+      for(const [k,v] of sessions)if(v.ownerId===ownerId)sessions.delete(k);
+      await Promise.all(cancels);
+    }
+  };
 }

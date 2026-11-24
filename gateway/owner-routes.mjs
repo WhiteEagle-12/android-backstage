@@ -6,7 +6,7 @@ import {page,escape,scriptJSON} from './pages.mjs';
 import {connectionPage} from './connect-page.mjs';
 import {validDeviceName,ConnectionError} from './connections.mjs';
 
-export function ownerRoutes(app,{owners,connections,base,auth,artifacts=null,nativeSignIn=null,now=Date.now}) {
+export function ownerRoutes(app,{owners,connections,base,auth,artifacts=null,nativeSignIn=null,phoneApi=null,now=Date.now}) {
   const origin=new URL(base).origin,pending=new Map();
   const nonce=res=>{const n=crypto.randomBytes(24).toString('base64url');res.set('Content-Security-Policy',`default-src 'none'; script-src 'nonce-${n}' 'self'; style-src 'unsafe-inline'; img-src https://android-backstage.com; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'`);return n;};
   const safeReturn=value=>typeof value==='string'&&(/^\/work\/(account|enroll)(\?[A-Za-z0-9_=&%.-]{0,120})?$/.test(value)||/^\/work\/connect\/approve\?request=req_[a-f0-9]{32}$/.test(value)||value.startsWith('/work/authorize?'))?value:'/work/account';
@@ -247,6 +247,7 @@ document.getElementById('delete-account').onclick=async()=>{if(prompt('Type DELE
     const {grantIds}=await connections.removeAllForOwner(id);
     auth?.revokeGrants?.(grantIds);
     artifacts?.removeForGrants?.(grantIds);
+    await phoneApi?.purgeOwner?.(id);
     owners.deleteOwner(id,req,res);
     res.json({ok:true,deleted:true});
   });
