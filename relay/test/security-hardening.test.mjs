@@ -235,3 +235,22 @@ test("allowPublicPair=false blocks anonymous /v1/pair/connect while allowing aut
     assert.equal(badInternalKey.status, 403);
   });
 });
+
+test("relay store monotonic write version prevents stale async flush from clobbering sync key rotation", async () => {
+  const { createStore } = await import("../store.mjs");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bs-store-race-"));
+  try {
+    const store = createStore(dir, { flushMs: 5, log: { log() {}, warn() {} } });
+    // Trigger an async dirty write, then immediately do a synchronous key rotation before/during flush
+    store.createAccount({ name: "acct-race" });
+    const flushPromise = store.flush();
+    const rotated = store.rotateAccountKey("default");
+    await flushPromise;
+    // Reload from disk: rotated key MUST survive!
+    const reloaded = createStore(dir, { flushMs: 5, log: { log() {}, warn() {} } });
+    assert.equal(reloaded.accountByKey(rotated.apiKey)?.id, "default");
+    assert.equal(reloaded.accountByKey(store.firstApiKey), null);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

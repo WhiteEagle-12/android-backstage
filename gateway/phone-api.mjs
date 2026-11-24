@@ -125,7 +125,8 @@ export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifa
     res.json({requests:list});
   });
   app.post('/work/phone/requests/decide',requireSession,(req,res)=>{
-    const access=req.body?.allDevices===false&&Array.isArray(req.body?.devices)?req.body.devices.filter(x=>typeof x==='string').slice(0,20):'all';
+    const access=req.body?.allDevices===true?'all':Array.isArray(req.body?.devices)?req.body.devices.filter(x=>typeof x==='string').slice(0,20):[req.phone.deviceId];
+    if(Array.isArray(access)&&access.length===0)return res.status(400).json({error:'choose_device',message:'Pick at least one device or allow all.'});
     try{res.json(auth.requests.decide(req.body?.request,req.phone.ownerId,req.body?.allow===true,access));}catch(e){send(res,e);}
   });
 
@@ -212,7 +213,7 @@ export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifa
   });
   app.post('/work/phone/approvals/approve',requireSession,(req,res)=>{
     if(limited('approval:'+req.phone.ownerId,20,600000))return res.status(429).json({error:'busy',message:'Too many attempts. Wait a few minutes.'});
-    const access=req.body?.allDevices===true?'all':Array.isArray(req.body?.devices)?req.body.devices.filter(x=>typeof x==='string').slice(0,20):'all';
+    const access=req.body?.allDevices===true?'all':Array.isArray(req.body?.devices)?req.body.devices.filter(x=>typeof x==='string').slice(0,20):[req.phone.deviceId];
     if(Array.isArray(access)&&access.length===0)return res.status(400).json({error:'choose_device',message:'Pick at least one device or allow all.'});
     try{res.json(auth.approvals.approve(req.body?.code,req.phone.ownerId,access));}catch(e){send(res,e);}
   });

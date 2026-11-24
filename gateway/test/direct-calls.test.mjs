@@ -10,7 +10,7 @@ test('gateway calls use the phone direct route when it answers, the relay on loo
   t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
   const ownerId = 'owner_' + 'a'.repeat(43), deviceId = 'phone_' + 'b'.repeat(32);
   fs.mkdirSync(path.join(directory, 'phones'), {recursive: true});
-  fs.writeFileSync(path.join(directory, 'devices.json'), JSON.stringify({[deviceId]: {ownerId, name: 'Redmagic', createdAt: 1, linkedAt: 1}}));
+  fs.writeFileSync(path.join(directory, 'devices.json'), JSON.stringify({[deviceId]: {ownerId, name: 'TestPhone', createdAt: 1, linkedAt: 1}}));
   fs.writeFileSync(path.join(directory, 'phones', deviceId + '.json'), JSON.stringify({
     relayUrl: 'https://relay.example.com', apiKey: 'k', device: 'phone', agentId: 'agt_x', links: {phone: {deviceId: 'dev_1', linkKey: 'AA'}}}));
   const fetched = [], calls = [], routed = [];

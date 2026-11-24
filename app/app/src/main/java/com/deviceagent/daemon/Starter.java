@@ -201,6 +201,23 @@ public final class Starter {
             String deviceId,
             boolean keepUsbDebugging,
             boolean allowShell) {
+        return configJson(relayUrl, deviceToken, localToken, deviceName, agentVersion, apkPath, packageName, port, links, deviceId, keepUsbDebugging, allowShell, false);
+    }
+
+    public static String configJson(
+            String relayUrl,
+            String deviceToken,
+            String localToken,
+            String deviceName,
+            String agentVersion,
+            String apkPath,
+            String packageName,
+            int port,
+            List<DaemonConfig.Link> links,
+            String deviceId,
+            boolean keepUsbDebugging,
+            boolean allowShell,
+            boolean allowScreenOff) {
         DaemonConfig c = new DaemonConfig();
         c.relayUrl = empty(relayUrl);
         c.deviceToken = empty(deviceToken);
@@ -213,6 +230,7 @@ public final class Starter {
         c.port = port > 0 ? port : 18422;
         c.keepUsbDebugging = keepUsbDebugging;
         c.allowShell = allowShell;
+        c.allowScreenOff = allowScreenOff;
         if (links != null) c.links = new ArrayList<>(links);
         return c.toJson();
     }

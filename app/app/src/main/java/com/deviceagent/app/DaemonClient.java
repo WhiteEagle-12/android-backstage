@@ -42,7 +42,8 @@ final class DaemonClient {
             Map<String, Object> value = null; Exception error = null;
             try {
                 AgentConfig c = AgentConfig.load(app);
-                value = Json.object(SimpleHttp.getOnce(url(c, path), 2500, c.localToken));
+                String auth = com.deviceagent.crypto.LocalAuth.requestHeader(c.localToken, "GET", path, "");
+                value = Json.object(SimpleHttp.requestOnceWithHeaders("GET", url(c, path), null, 2500, Map.of("X-Backstage-Auth", auth)));
             } catch (Exception e) { error = e; }
             post(result, value, error);
         });
@@ -62,7 +63,9 @@ final class DaemonClient {
             Map<String, Object> value = null; Exception error = null;
             try {
                 AgentConfig c = AgentConfig.load(app);
-                String raw = SimpleHttp.postJsonOnce(url(c, path), Json.stringify(body == null ? Map.of() : body), 6000, c.localToken);
+                String payload = Json.stringify(body == null ? Map.of() : body);
+                String auth = com.deviceagent.crypto.LocalAuth.requestHeader(c.localToken, "POST", path, payload);
+                String raw = SimpleHttp.requestOnceWithHeaders("POST", url(c, path), payload, 6000, Map.of("X-Backstage-Auth", auth));
                 value = raw == null || raw.isBlank() ? Map.of() : Json.object(raw);
             } catch (Exception e) { error = e; }
             post(result, value, error);
@@ -77,7 +80,7 @@ final class DaemonClient {
                 AgentConfig c = AgentConfig.load(app);
                 conn = (HttpURLConnection) new URL(url(c, path)).openConnection();
                 conn.setConnectTimeout(1500); conn.setReadTimeout(3000);
-                conn.setRequestProperty("Authorization", "Bearer " + c.localToken);
+                conn.setRequestProperty("X-Backstage-Auth", com.deviceagent.crypto.LocalAuth.requestHeader(c.localToken, "GET", path, ""));
                 out.status = conn.getResponseCode();
                 out.frameSeq = parseLongHeader(conn.getHeaderField("X-Frame-Seq"));
                 out.sourceWidth = (int) parseLongHeader(conn.getHeaderField("X-Source-Width"));

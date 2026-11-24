@@ -7,5 +7,6 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test test/*.test.mjs"
-  }
+  },
+  "license": "FSL-1.1-ALv2"
 }

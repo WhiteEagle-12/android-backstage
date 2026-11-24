@@ -64,7 +64,7 @@ export const catalogue=strictCatalogue.map(t=>({...t,inputSchema:advertisedSchem
 export const TOOL_CONTRACT={version:VERSION,sha256:createHash('sha256').update(JSON.stringify(catalogue)).digest('hex')};
 const ajv=new Ajv({strict:false,allErrors:true});
 const validators=new Map(allStrictCatalogue.map(t=>[t.name,ajv.compile(t.inputSchema)]));
-export const SERVER_INSTRUCTIONS=PHONE_INSTRUCTIONS.replace(/\bandroid\./g,'android_')+'\nSafety: Always call android_confirm before irreversible actions (sending messages, posting, paying, or deleting).\nUploads: android_artifact begin -> android_install / android_file push -> android_artifact delete.';
+export const SERVER_INSTRUCTIONS=PHONE_INSTRUCTIONS.replace(/\bandroid\./g,'android_')+'\nSafety: Always call android_confirm before irreversible actions (sending messages, posting, paying, or deleting).\nPrivacy: Hosted MCP decrypts commands/results in gateway RAM to relay between this client and your phone (zero call-history retention); use the local E2EE bridge for zero-knowledge setups.\nUploads: android_artifact begin -> android_install / android_file push -> android_artifact delete.';
 
 /** Accept legacy pre-consolidation tool names seamlessly without advertising them in tools/list. */
 export function normalizeToolCall(name, rawArgs = {}) {
@@ -168,7 +168,7 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
   const app = express(); app.disable('x-powered-by');
   const trustProxy = process.env.BACKSTAGE_TRUST_PROXY || 'loopback';
   app.set('trust proxy', trustProxy.includes(',') ? trustProxy.split(',').map(s=>s.trim()).filter(Boolean) : trustProxy);
-  const auth = createAuth({base,stateFile,approvalFile,connections,owners,metadataReader,allowTestRedirect,now});
+  const auth = createAuth({base,stateFile,approvalFile,connections,owners,artifacts,metadataReader,allowTestRedirect,now});
   // Artifact bytes stream straight to disk; they must not meet the JSON body parser.
   app.put('/work/artifacts/:id',async(req,res)=>{
     if(!artifacts)return res.status(404).json({error:'artifacts_unavailable'});
@@ -285,6 +285,7 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
     const engine=name.replace('android_','android.');
     const {device:ref,...rest}=args;
     if(!connections)return callTool(engine,rest,grantId,{});
+    if(connections.isPaused?.(grantId))throw new ConnectionError('assistant_paused','The owner paused this assistant in Backstage. Ask them to resume it.');
     if(engine==='android.devices'&&rest.detail!=='debug')return {outcome:'succeeded',devices:(await connections.status(grantId)).map(({id,name,status,online,needsReconnect,model,lastSeen,lastError})=>({id,name,status,online,needsReconnect,model:model||null,...(lastSeen?{lastSeen}:{}),...(lastError?{lastError}:{})}))};
     const planInfo=ownerLimits(grantId);
     if(planInfo){
@@ -318,11 +319,12 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
     if(engine==='android.events'&&['list','webhook_set','webhook_clear'].includes(rest.operation)){
       const link=connections.linkConfig(device);
       if(!link)throw new ConnectionError('device_link_revoked','Reconnect this device in Backstage.');
+      const relayDeviceId=link.links?.[link.device]?.deviceId||device.id;
       const relayBase=(connections.transportFor?.(link)||link.relayUrl).replace(/\/$/,'');
       const hdrs={authorization:'Bearer '+link.apiKey,'content-type':'application/json'};
       let url,method='GET',body;
       if(rest.operation==='list'){
-        const q=new URLSearchParams({device:device.id});
+        const q=new URLSearchParams({device:relayDeviceId});
         if(rest.since!=null)q.set('since',String(rest.since));
         if(rest.limit!=null)q.set('limit',String(rest.limit));
         url=`${relayBase}/v1/events?${q}`;
@@ -334,6 +336,8 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
       const r=await fetch(url,{method,headers:hdrs,body,signal:AbortSignal.timeout(10000)});
       const data=await r.json().catch(()=>({error:'invalid relay reply'}));
       if(!r.ok)throw new ConnectionError('events_failed',data.error||`HTTP ${r.status}`);
+      if(rest.operation==='webhook_set')connections.setWebhookOwner?.(device.id,grantId);
+      if(rest.operation==='webhook_clear')connections.setWebhookOwner?.(device.id,null);
       return {outcome:'succeeded',...data,device:{id:device.id,name:device.name}};
     }
     const send=async(tool,input)=>({...await (callTool?callTool(tool,input,grantId,{device}):connections.call(tool,input,grantId,{device})),device:{id:device.id,name:device.name}});

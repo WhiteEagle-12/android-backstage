@@ -33,6 +33,8 @@ public final class DaemonConfig {
     public boolean keepUsbDebugging = false;
     /** Opt-in: allow raw android.shell commands on this device (bypasses blocked apps). */
     public boolean allowShell = false;
+    /** Opt-in: allow agent tasks to run while the phone's physical screen is off or locked. */
+    public boolean allowScreenOff = false;
     /** Absolute path of the json file this was loaded from (or will be written to). */
     public String configPath = DEFAULT_PATH;
     /** Linked agents: {@code [{agentId, linkKey, lastCallCounter, resultCounter}]}. */
@@ -80,6 +82,7 @@ public final class DaemonConfig {
         c.allowLanDirect = Boolean.TRUE.equals(obj.get("allowLanDirect"));
         c.keepUsbDebugging = Boolean.TRUE.equals(obj.get("keepUsbDebugging"));
         c.allowShell = Boolean.TRUE.equals(obj.get("allowShell"));
+        c.allowScreenOff = Boolean.TRUE.equals(obj.get("allowScreenOff"));
         c.links = parseLinks(obj.get("links"));
         if (obj.get("revokedLinks") instanceof List) for (Object x : (List<?>)obj.get("revokedLinks")) c.revokedLinks.add(String.valueOf(x));
         if (obj.get("blockedPackages") instanceof List) for (Object x : (List<?>)obj.get("blockedPackages")) c.blockedPackages.add(String.valueOf(x));
@@ -102,6 +105,7 @@ public final class DaemonConfig {
         if (allowLanDirect) m.put("allowLanDirect", true);
         if (keepUsbDebugging) m.put("keepUsbDebugging", true);
         if (allowShell) m.put("allowShell", true);
+        if (allowScreenOff) m.put("allowScreenOff", true);
         List<Map<String, Object>> linkRows = new ArrayList<>();
         if (links != null) {
             for (Link link : links) {

@@ -34,7 +34,7 @@ const DESTRUCTIVE_TOOLS = new Set(['android.shell', 'android.install', 'android.
 const OPEN_WORLD_TOOLS = new Set(['android.open', 'android.file', 'android.install', 'android.events', 'android.shell']);
 export function toolAnnotations(name, readOnly = false) {
   const dotName = String(name || '').replace(/^android_/, 'android.');
-  const ro = Boolean(readOnly) || ['android.observe', 'android.wait', 'android.packages', 'android.logs', 'android.devices', 'android.job_status', 'android.personal'].includes(dotName);
+  const ro = Boolean(readOnly) || ['android.observe', 'android.wait', 'android.packages', 'android.logs', 'android.devices', 'android.job_status'].includes(dotName);
   return {
     readOnlyHint: ro,
     destructiveHint: ro ? false : DESTRUCTIVE_TOOLS.has(dotName),

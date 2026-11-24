@@ -8,8 +8,10 @@ export function writePrivateJson(file, data) {
   try { fs.writeFileSync(fd, JSON.stringify(data, null, 2) + '\n'); fs.fsyncSync(fd); }
   finally { fs.closeSync(fd); }
   fs.renameSync(tmp, file);
-  const parent = fs.openSync(path.dirname(file), 'r');
-  try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
+  if (process.platform !== 'win32') {
+    const parent = fs.openSync(path.dirname(file), 'r');
+    try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
+  }
 }
 
 /** Non-blocking atomic JSON write (temp file + rename, 0600) for coalesced background persistence. */

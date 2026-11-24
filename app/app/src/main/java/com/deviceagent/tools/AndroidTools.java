@@ -34,6 +34,7 @@ public final class AndroidTools {
     private final PendingConfirmations confirmations = new PendingConfirmations();
     private final SharedInbox inbox;
     private volatile boolean allowShell;
+    private volatile boolean allowScreenOff;
     private volatile java.util.function.Consumer<Map<String, Object>> eventEmitter;
     private volatile Runnable eventRulesChanged;
     private TaskResources taskResources;
@@ -92,7 +93,7 @@ public final class AndroidTools {
     }
 
     private void requireDisplayAllowed(int display) {
-        if (privacyFence.count() == 0) return;
+        if (!privacyFence.isEnforced()) return;
         String comp = focusComponent(display);
         if (comp != null && !comp.isBlank()) {
             privacyFence.requireComponentAllowed(comp);
@@ -112,7 +113,7 @@ public final class AndroidTools {
     }
 
     private void requireIntentTargetAllowed(String action, String data, String pkg, String component) {
-        if (privacyFence.count() == 0) return;
+        if (!privacyFence.isEnforced()) return;
         if (pkg != null && !pkg.isBlank()) privacyFence.requireAllowed(pkg);
         if (component != null && !component.isBlank()) privacyFence.requireComponentAllowed(component);
         if ((pkg != null && !pkg.isBlank()) || (component != null && !component.isBlank())) return;
@@ -156,6 +157,7 @@ public final class AndroidTools {
         this.configPath = configPath == null || configPath.isBlank() ? Starter.CONFIG_PATH : configPath;
         this.daemonConfig = config;
         this.allowShell = config != null && config.allowShell;
+        this.allowScreenOff = config != null && config.allowScreenOff;
         this.privacyFence = new PrivacyFence(config);
         Path baseDir = java.nio.file.Paths.get(this.configPath).getParent();
         this.timeline = new ActivityTimeline(baseDir == null ? null : baseDir.resolve("timeline.json"));
@@ -312,6 +314,7 @@ public final class AndroidTools {
         }
         try{
             ToolCatalog.validate(name,args);
+            requireScreenAllowed(name,args);
             if(name.equals("android.device")&&"audio".equals(args.get("operation"))){args.put("_owner",owner);args.put("_configPath",configPath);}
             if(PrimitiveArguments.TOOLS.contains(name))PrimitiveArguments.validate(name,args);
             if(name.equals("android.sequence")){var check=new LinkedHashMap<>(args);check.putIfAbsent("display",0);LocalSequence.validate(check);}
@@ -681,10 +684,41 @@ public final class AndroidTools {
         return this.allowShell;
     }
 
+    public boolean allowScreenOff() {
+        return allowScreenOff;
+    }
+
+    public synchronized boolean setAllowScreenOff(boolean enabled) {
+        this.allowScreenOff = enabled;
+        if (daemonConfig != null) {
+            daemonConfig.allowScreenOff = enabled;
+            try { daemonConfig.save(); } catch (Exception ignored) {}
+        }
+        return this.allowScreenOff;
+    }
+
+    private void requireScreenAllowed(String name, Map<String, Object> args) {
+        if (allowScreenOff) return;
+        if ("android.devices".equals(name) || "android.maintenance".equals(name)) return;
+        if ("android.task".equals(name) && Set.of("list", "finish").contains(args.get("operation"))) return;
+        if ("android.events".equals(name) && "rules".equals(args.get("operation"))) return;
+        Map<String, Object> state;
+        try {
+            state = device.interaction("screen_state", Map.of());
+        } catch (RuntimeException ignored) {
+            return;
+        }
+        if (state == null || !Boolean.TRUE.equals(state.get("ok"))) return;
+        if (Boolean.FALSE.equals(state.get("screenOn")) || Boolean.TRUE.equals(state.get("locked"))) {
+            throw new InputNotSentException("screen_off_blocked",
+                    "Phone screen is off or locked. Unlock your phone, or turn on 'Work while screen is off' in Backstage Settings.");
+        }
+    }
+
     public Map<String, Object> shell(String command) {
         if (command == null || command.isBlank()) throw new IllegalArgumentException("command is required");
         if (!allowShell) {
-            throw new InputNotSentException("shell_disabled", "Shell commands are off on this phone. Turn on Allow shell commands in Android Backstage Settings.");
+            throw new InputNotSentException("shell_disabled", "Command-line access is off on this phone. Turn on Allow command-line access in Android Backstage Settings.");
         }
         ProcessResult process=device.exec(command);
         Map<String,Object> result=resultMap(process);
@@ -812,14 +846,14 @@ public final class AndroidTools {
             privacyFence.requireAllowed(packageName);
         }
         List<Map<String, Object>> list = collectCrashes(packageName, max <= 0 ? 5 : max, since);
-        if (privacyFence.count() > 0) {
+        if (privacyFence.isEnforced()) {
             list.removeIf(c -> isBlockedRecord(c));
         }
         return Json.mapOf("ok", true, "count", list.size(), "crashes", list, "package", packageName, "since", since);
     }
 
     private boolean isBlockedRecord(Map<String, Object> record) {
-        if (record == null || privacyFence.count() == 0) return false;
+        if (record == null || !privacyFence.isEnforced()) return false;
         for (String key : List.of("package", "process")) {
             Object v = record.get(key);
             if (v instanceof String s && !s.isBlank()) {
@@ -1351,14 +1385,14 @@ public final class AndroidTools {
         if (packageName != null && !packageName.isBlank()) {
             privacyFence.requireAllowed(packageName);
         }
-        StringBuilder cmd = new StringBuilder("logcat -d -v threadtime");
-        if (maxLines > 0) cmd.append(" -t ").append(maxLines);
+        int clampedLines = Math.max(1, Math.min(maxLines <= 0 ? 80 : maxLines, 2000));
+        StringBuilder cmd = new StringBuilder("logcat -d -v threadtime -t ").append(clampedLines);
         if (packageName != null && !packageName.isBlank()) cmd.append(" | grep -- ").append(ShellCommand.quote(packageName));
         ProcessResult result = device.exec(cmd.toString());
         String[] raw = result.stdoutText().isEmpty() ? new String[0] : result.stdoutText().split("\\R");
         List<String> filtered;
-        if (privacyFence.count() > 0) {
-            List<String> blocked = privacyFence.list();
+        if (privacyFence.isEnforced()) {
+            List<String> blocked = privacyFence.allBlocked();
             filtered = new ArrayList<>(raw.length);
             for (String line : raw) {
                 boolean hide = false;
@@ -1373,7 +1407,7 @@ public final class AndroidTools {
         Map<String, Object> out = resultMap(result);
         out.put("lines", filtered);
         out.put("count", filtered.size());
-        if (privacyFence.count() > 0) out.put("stdout", String.join("\n", filtered));
+        if (privacyFence.isEnforced()) out.put("stdout", String.join("\n", filtered));
         return out;
     }
 
@@ -1540,6 +1574,8 @@ public final class AndroidTools {
         if (local == null || local.isBlank() || remote == null || remote.isBlank()) {
             throw new IllegalArgumentException("local and remote paths are required");
         }
+        FileChunks.requireSafePath(local);
+        FileChunks.requireSafePath(remote);
         device.push(local, remote);
         return Json.mapOf("ok", true, "local", local, "remote", remote);
     }
@@ -1588,9 +1624,11 @@ public final class AndroidTools {
         if (url == null || url.isBlank() || remote == null || remote.isBlank()) {
             throw new IllegalArgumentException("url and remote are required");
         }
-        if (!remote.startsWith("/data/local/tmp/") && !remote.startsWith("/sdcard/")) {
+        String normalizedRemote = java.nio.file.Paths.get(remote).toAbsolutePath().normalize().toString().replace('\\', '/');
+        if (!normalizedRemote.startsWith("/data/local/tmp/") && !normalizedRemote.startsWith("/sdcard/")) {
             throw new IllegalArgumentException("remote must be under /data/local/tmp or /sdcard");
         }
+        FileChunks.requireSafePath(remote);
         stageDownload(url, remote, fileKey, sha256, false);
         long bytes = 0;
         try { bytes = Files.size(java.nio.file.Paths.get(remote)); } catch (Exception ignored) {}
@@ -1744,7 +1782,7 @@ public final class AndroidTools {
         }
         ProcessResult res = device.exec("logcat -b events -d -v threadtime -t 500", 8_000L);
         Map<String, Object> parsed = DevDiagnostics.parseAnrs(res.stdoutText(), packageName, Math.max(1, Math.min(50, max)));
-        if (privacyFence.count() > 0 && parsed.get("anrs") instanceof List<?> rows) {
+        if (privacyFence.isEnforced() && parsed.get("anrs") instanceof List<?> rows) {
             List<Map<String, Object>> clean = new ArrayList<>();
             for (Object row : rows) {
                 if (row instanceof Map<?, ?> m && !isBlockedRecord((Map<String, Object>) m)) {

@@ -229,13 +229,18 @@ final class ActivityTab extends TabPage {
             toast(error == null ? AppCopy.BLOCKED_SAVED : AppCopy.BLOCKED_SAVE_FAILED);
             if (error == null) blocked = DaemonClient.strings(reply, "packages");
             load(BLOCKED);
+            a.renderNow();
         });
     }
+
+    int blockedCount() { return blocked.size(); }
+
+    void refreshBlockedForTour() { load(BLOCKED); }
 
     private static final class App { String pkg, label; Drawable icon; }
 
     /** Searchable multi-select of launchable apps; loads labels and icons off the main thread. */
-    private void blockedPicker() {
+    void blockedPicker() {
         final Set<String> chosen = new HashSet<>(blocked);
         new Thread(() -> {
             PackageManager pm = a.getPackageManager();

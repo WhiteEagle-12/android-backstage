@@ -12,7 +12,7 @@ export function writePrivateJson(file, data) {
   try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
 }
 
-export async function writePrivateJsonAsync(file, data) {
+export async function writePrivateJsonAsync(file, data, { shouldCommit = null } = {}) {
   const dir = path.dirname(file);
   await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
   const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
@@ -24,5 +24,10 @@ export async function writePrivateJsonAsync(file, data) {
   } finally {
     await fh.close();
   }
+  if (shouldCommit && !shouldCommit()) {
+    await fs.promises.rm(tmp, { force: true }).catch(() => {});
+    return false;
+  }
   await fs.promises.rename(tmp, file);
+  return true;
 }

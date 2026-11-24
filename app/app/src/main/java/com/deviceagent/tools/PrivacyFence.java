@@ -17,14 +17,18 @@ import java.util.concurrent.CopyOnWriteArraySet;
 public final class PrivacyFence {
     private static volatile PrivacyFence active;
     private final DaemonConfig config;
+    private final String selfPackage;
     private final Set<String> blocked = new CopyOnWriteArraySet<>();
 
     public PrivacyFence(DaemonConfig config) {
         this.config = config;
+        String pkg = config != null && config.packageName != null && !config.packageName.isBlank()
+                ? config.packageName.trim() : com.deviceagent.app.BuildInfo.DEFAULT_PACKAGE;
+        this.selfPackage = normalize(pkg);
         if (config != null && config.blockedPackages != null) {
-            for (String pkg : config.blockedPackages) {
-                String clean = normalize(pkg);
-                if (!clean.isEmpty()) blocked.add(clean);
+            for (String p : config.blockedPackages) {
+                String clean = normalize(p);
+                if (!clean.isEmpty() && !clean.equals(this.selfPackage)) blocked.add(clean);
             }
         }
         active = this;
@@ -39,9 +43,20 @@ public final class PrivacyFence {
         return fence != null && fence.isBlocked(pkg);
     }
 
+    public boolean isEnforced() {
+        return !selfPackage.isEmpty() || !blocked.isEmpty();
+    }
+
     public boolean isBlocked(String pkg) {
         String clean = normalize(pkg);
-        return !clean.isEmpty() && blocked.contains(clean);
+        if (clean.isEmpty()) return false;
+        return (!selfPackage.isEmpty() && selfPackage.equals(clean)) || blocked.contains(clean);
+    }
+
+    public List<String> allBlocked() {
+        Set<String> all = new TreeSet<>(blocked);
+        if (!selfPackage.isEmpty()) all.add(selfPackage);
+        return Collections.unmodifiableList(new ArrayList<>(all));
     }
 
     public String packageOfComponent(String component) {

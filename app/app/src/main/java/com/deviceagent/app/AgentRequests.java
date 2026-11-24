@@ -72,15 +72,17 @@ public final class AgentRequests {
         Notification.Builder builder = new Notification.Builder(app, InvitationNotifier.CHANNEL)
                 .setSmallIcon(R.drawable.ic_notification)
                 .setContentTitle(r.names + " wants access")
-                .setContentText("Check that your computer shows " + r.check + ".")
+                .setContentText("Code " + r.check + " · Open Backstage to review.")
                 .setStyle(new Notification.BigTextStyle().bigText("Check that your computer shows " + r.check
-                        + ". Allowing gives access to apps and commands on all your devices. You can pause or remove it in Backstage."))
+                        + ". Open Backstage to allow access on this phone, or tap Deny if you did not ask for this."))
                 .setContentIntent(open)
                 .setCategory(Notification.CATEGORY_MESSAGE)
                 .setAutoCancel(false);
         if (r.expiresAt > 0) builder.setTimeoutAfter(Math.max(1_000, r.expiresAt - System.currentTimeMillis()));
         builder.addAction(action(app, r.id, false, "Deny"));
-        builder.addAction(action(app, r.id, true, "Allow"));
+        Notification.Action.Builder review = new Notification.Action.Builder(null, "Review", open);
+        if (Build.VERSION.SDK_INT >= 31) review.setAuthenticationRequired(true);
+        builder.addAction(review.build());
         nm.notify(notificationId(r.id), builder.build());
     }
 

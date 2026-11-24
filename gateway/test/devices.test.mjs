@@ -83,7 +83,7 @@ async function harness(t,{url,dataDir}) {
 test('one agent uses two named devices; nothing is substituted when a device is missing, ambiguous or offline',async t=>withRelay(async ctx=>{
   const h=await harness(t,ctx);
   const codex=await h.register('http://localhost:1455/callback','Codex');
-  const {phone:phoneA,token}=await h.enrollFirst(codex,'NX809J');
+  const {phone:phoneA,token}=await h.enrollFirst(codex,'PixelTest');
   const phoneB=await h.enroll('?name=tablet','SM-T870');
   await phoneA.online();await phoneB.online();
   const listed=await h.call(token,'android_devices',{});assert.ok(!listed.isError,JSON.stringify(listed.structuredContent));
@@ -92,7 +92,7 @@ test('one agent uses two named devices; nothing is substituted when a device is 
   const tablet=listed.structuredContent.devices.find(d=>d.name==='tablet');
   const byName=await h.call(token,'android_packages',{device:'tablet',package:'com.example'},phoneB,()=>({ok:true,value:'SM-T870'}));assert.equal(byName.structuredContent.value,'SM-T870');
   const byId=await h.call(token,'android_packages',{device:tablet.id,package:'com.example'},phoneB,()=>({ok:true,value:'SM-T870'}));assert.equal(byId.structuredContent.value,'SM-T870');
-  const other=await h.call(token,'android_packages',{device:'Phone',package:'com.example'},phoneA,()=>({ok:true,value:'NX809J'}));assert.equal(other.structuredContent.value,'NX809J');
+  const other=await h.call(token,'android_packages',{device:'Phone',package:'com.example'},phoneA,()=>({ok:true,value:'PixelTest'}));assert.equal(other.structuredContent.value,'PixelTest');
   assert.equal(phoneA.received.length,1);assert.equal(phoneB.received.length,2);
   const unnamed=await h.call(token,'android_packages',{package:'com.example'});assert.equal(unnamed.isError,true);assert.equal(unnamed.structuredContent.code,'device_required');assert.equal(unnamed.structuredContent.devices.length,2);
   const unknown=await h.call(token,'android_packages',{device:'watch',package:'com.example'});assert.equal(unknown.structuredContent.code,'unknown_device');
@@ -116,7 +116,7 @@ async function withRelayOffline(ctx,phone,fn) {
 
 test('MCP retry recovers a saved encrypted task result without creating a second task',async t=>withRelay(async ctx=>{
  const h=await harness(t,ctx),client=await h.register('http://localhost:1455/callback','Codex');
- const {phone,token}=await h.enrollFirst(client,'NX809J');await phone.online();
+ const {phone,token}=await h.enrollFirst(client,'PixelTest');await phone.online();
  const connections=h.connections(),send=connections.call.bind(connections);
  connections.call=async(...args)=>{await send(...args);throw Object.assign(Error('response lost after execution'),{jobId:phone.received.at(-1).id});};
  const args={device:'phone',requestId:'late-task-result'};
@@ -131,7 +131,7 @@ test('MCP retry recovers a saved encrypted task result without creating a second
 test('two assistants: per-device access, separate credentials, revocation and removal leave the rest working, all across restart',async t=>withRelay(async ctx=>{
   const h=await harness(t,ctx);
   const chatgpt=await h.register('https://chatgpt.com/connector_platform_oauth_redirect','ChatGPT'),cursor=await h.register('https://cursor.com/oauth/callback','Cursor');
-  const {phone:phoneA,token:chatToken}=await h.enrollFirst(chatgpt,'NX809J');
+  const {phone:phoneA,token:chatToken}=await h.enrollFirst(chatgpt,'PixelTest');
   const phoneB=await h.enroll('?name=tablet','SM-T870');await phoneA.online();await phoneB.online();
   const all=Object.entries(JSON.parse(fs.readFileSync(path.join(h.directory,'devices.json'))));const idA=all.find(([,d])=>d.name==='phone')[0],idB=all.find(([,d])=>d.name==='tablet')[0];
   // Cursor may use only the tablet.
@@ -141,7 +141,7 @@ test('two assistants: per-device access, separate credentials, revocation and re
   // Single accessible device: no device argument needed, and it is still the right one.
   const implicit=await h.call(cursorToken,'android_packages',{package:'com.example'},phoneB,()=>({ok:true,value:'SM-T870'}));assert.equal(implicit.structuredContent.value,'SM-T870');
   // ChatGPT (first assistant) keeps every device; its calls to the phone use the phone’s link, not the tablet’s.
-  const chatPhone=await h.call(chatToken,'android_packages',{device:'phone',package:'com.example'},phoneA,()=>({ok:true,value:'NX809J'}));assert.equal(chatPhone.structuredContent.value,'NX809J');
+  const chatPhone=await h.call(chatToken,'android_packages',{device:'phone',package:'com.example'},phoneA,()=>({ok:true,value:'PixelTest'}));assert.equal(chatPhone.structuredContent.value,'PixelTest');
   const chatTablet=await h.call(chatToken,'android_packages',{device:'tablet',package:'com.example'},phoneB,()=>({ok:true,value:'SM-T870'}));assert.equal(chatTablet.structuredContent.value,'SM-T870');
   // Links are per device; grants hold no keys.
   const links=fs.readdirSync(path.join(h.directory,'phones')).filter(f=>f.endsWith('.json'));assert.equal(links.length,2);
@@ -151,7 +151,7 @@ test('two assistants: per-device access, separate credentials, revocation and re
   const grants=h.connections().list(JSON.parse(fs.readFileSync(path.join(h.directory,'devices.json')))[idA].ownerId);
   const cursorGrant=grants.find(g=>g.name==='Cursor');assert.deepEqual(cursorGrant.access,[idB]);
   assert.equal((await h.post('/work/account/access',{grantId:cursorGrant.id,allDevices:true})).status,200);
-  const widened=await h.call(cursorToken,'android_packages',{device:'phone',package:'com.example'},phoneA,()=>({ok:true,value:'NX809J'}));assert.equal(widened.structuredContent.value,'NX809J');
+  const widened=await h.call(cursorToken,'android_packages',{device:'phone',package:'com.example'},phoneA,()=>({ok:true,value:'PixelTest'}));assert.equal(widened.structuredContent.value,'PixelTest');
   // Restart: devices, grants, access and links all survive.
   await h.restart();await phoneA.online();await phoneB.online();
   const afterRestart=await h.call(cursorToken,'android_packages',{device:'tablet',package:'com.example'},phoneB,()=>({ok:true,value:'SM-T870'}));assert.equal(afterRestart.structuredContent.value,'SM-T870');
@@ -159,13 +159,13 @@ test('two assistants: per-device access, separate credentials, revocation and re
   // Revoke ChatGPT: Cursor and both devices are untouched.
   const chatGrant=grants.find(g=>g.name==='ChatGPT');assert.equal((await h.post('/work/account/revoke',{grantId:chatGrant.id})).status,200);
   assert.equal((await h.post('/work/mcp',{jsonrpc:'2.0',id:9,method:'tools/list'},{Authorization:'Bearer '+chatToken})).status,401);
-  const still=await h.call(cursorToken,'android_packages',{device:'phone',package:'com.example'},phoneA,()=>({ok:true,value:'NX809J'}));assert.equal(still.structuredContent.value,'NX809J');
+  const still=await h.call(cursorToken,'android_packages',{device:'phone',package:'com.example'},phoneA,()=>({ok:true,value:'PixelTest'}));assert.equal(still.structuredContent.value,'PixelTest');
   assert.equal(fs.readdirSync(path.join(h.directory,'phones')).filter(f=>f.endsWith('.json')).length,2);
   // Remove the tablet: the phone keeps working for Cursor; the tablet is gone from its list and its link is deleted.
   assert.equal((await h.post('/work/account/devices/remove',{deviceId:idB})).status,200);
   assert.ok(!fs.existsSync(path.join(h.directory,'phones',idB+'.json')));
   const gone=await h.call(cursorToken,'android_packages',{device:'tablet',package:'com.example'});assert.equal(gone.structuredContent.code,'unknown_device');
-  const kept=await h.call(cursorToken,'android_packages',{device:'phone',package:'com.example'},phoneA,()=>({ok:true,value:'NX809J'}));assert.equal(kept.structuredContent.value,'NX809J');
+  const kept=await h.call(cursorToken,'android_packages',{device:'phone',package:'com.example'},phoneA,()=>({ok:true,value:'PixelTest'}));assert.equal(kept.structuredContent.value,'PixelTest');
   assert.deepEqual((await h.call(cursorToken,'android_devices',{})).structuredContent.devices.map(d=>d.name),['phone']);
 }));
 
@@ -198,7 +198,7 @@ test('the saved single-phone enrollment and its grants migrate in place and surv
 });
 
 test('task ownership and compact action receipts travel unchanged to the selected phone',async t=>withRelay(async ctx=>{
- const h=await harness(t,ctx);const client=await h.register('http://localhost:1455/callback','Codex');const {phone,token}=await h.enrollFirst(client,'NX809J');await phone.online();
+ const h=await harness(t,ctx);const client=await h.register('http://localhost:1455/callback','Codex');const {phone,token}=await h.enrollFirst(client,'PixelTest');await phone.online();
  const sessionId='session_'+'a'.repeat(32);
  const started=await h.call(token,'android_task_begin',{},phone,call=>{assert.equal(call.name,'android.task_begin');assert.ok(call.arguments.requestId);return {outcome:'succeeded',sessionId,display:3,leaseExpiresAt:123};});assert.equal(started.structuredContent.sessionId,sessionId);
  const seen=await h.call(token,'android_observe',{sessionId,image:'always'},phone,call=>{assert.equal(call.arguments.sessionId,sessionId);return {outcome:'succeeded',observation:'o',image:{mime:'image/png',pngBase64:'YWJj',displayId:3,width:100,height:50,sourceWidth:200,sourceHeight:100,screenshotId:'shot'}};});assert.equal(seen.content.find(c=>c.type==='image').data,'YWJj');
@@ -211,7 +211,7 @@ test('task ownership and compact action receipts travel unchanged to the selecte
 test('a build travels privately: upload with integrity check, encrypted staging, install on the named phone; failures are distinct',async t=>withRelay(async ctx=>{
   const h=await harness(t,ctx);
   const codex=await h.register('http://localhost:1455/callback','Codex');
-  const {phone,token}=await h.enrollFirst(codex,'NX809J');await phone.online();
+  const {phone,token}=await h.enrollFirst(codex,'PixelTest');await phone.online();
   const apk=crypto.randomBytes(3*1024*1024+17),sha256=crypto.createHash('sha256').update(apk).digest('hex');
   const begun=await h.call(token,'android_artifact_begin',{name:'app-debug.apk',size:apk.length,sha256});
   const {artifactId,uploadToken,uploadUrl}=begun.structuredContent;assert.match(artifactId,/^art_/);assert.equal(uploadUrl,base+'/artifacts/'+artifactId);
@@ -274,7 +274,7 @@ test('a build travels privately: upload with integrity check, encrypted staging,
 test('a phone that dropped its link is reported, reconnects under the same device ID and keeps every grant',async t=>withRelay(async ctx=>{
   const h=await harness(t,ctx);
   const codex=await h.register('http://localhost:1455/callback','Codex'),cursor=await h.register('https://cursor.com/oauth/callback','Cursor');
-  const {phone,token}=await h.enrollFirst(codex,'NX809J');await phone.online();
+  const {phone,token}=await h.enrollFirst(codex,'PixelTest');await phone.online();
   const cursorToken=await h.consent(cursor,{approve:true,allDevices:true});
   const [deviceId]=Object.keys(JSON.parse(fs.readFileSync(path.join(h.directory,'devices.json'))));
   const before=JSON.parse(fs.readFileSync(path.join(h.directory,'phones',deviceId+'.json')));
@@ -285,10 +285,10 @@ test('a phone that dropped its link is reported, reconnects under the same devic
   const account=await (await h.get('/work/account')).text();assert.match(account,/Needs reconnecting/);assert.match(account,new RegExp('/work/enroll\\?device='+deviceId));
   assert.equal((await h.get('/work/enroll?device=phone_'+'0'.repeat(32))).status,404);
   // Reconnect: a fresh pairing replaces the link behind the same ID.
-  const replacement=await h.enroll('?device='+deviceId,'NX809J');await replacement.online();
+  const replacement=await h.enroll('?device='+deviceId,'PixelTest');await replacement.online();
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(h.directory,'devices.json')))),[deviceId]);
   const after=JSON.parse(fs.readFileSync(path.join(h.directory,'phones',deviceId+'.json')));assert.notEqual(after.links.phone.linkKey,before.links.phone.linkKey);assert.notEqual(after.apiKey,before.apiKey);
-  for(const tok of [token,cursorToken]){const ok=await h.call(tok,'android_packages',{device:'phone',package:'com.example'},replacement,()=>({ok:true,value:'NX809J'}));assert.equal(ok.structuredContent.value,'NX809J');}
+  for(const tok of [token,cursorToken]){const ok=await h.call(tok,'android_packages',{device:'phone',package:'com.example'},replacement,()=>({ok:true,value:'PixelTest'}));assert.equal(ok.structuredContent.value,'PixelTest');}
   assert.equal((await h.call(token,'android_devices',{})).structuredContent.devices[0].status,'online');
   assert.equal(h.connections().list(JSON.parse(fs.readFileSync(path.join(h.directory,'devices.json')))[deviceId].ownerId).length,2,'both grants survive the reconnect');
   // Job status lookups go through the current link.
@@ -298,7 +298,7 @@ test('a phone that dropped its link is reported, reconnects under the same devic
 test('the phone app manages the account: link-key session, devices, assistants, add-device code and OAuth approval typed on the phone',async t=>withRelay(async ctx=>{
   const h=await harness(t,ctx);
   const codex=await h.register('http://127.0.0.1:1455/callback','Codex');
-  const {phone}=await h.enrollFirst(codex,'NX809J');
+  const {phone}=await h.enrollFirst(codex,'PixelTest');
   const api=(route,body,token)=>fetch(h.endpoint+route,{method:'POST',headers:{'Content-Type':'application/json',origin,...(token?{Authorization:'Bearer '+token}:{})},body:JSON.stringify(body)}).then(async r=>({status:r.status,body:await r.json()}));
   // A phone that is not linked cannot start.
   assert.equal((await api('/work/phone/challenge',{agentId:'agt_nobody_nobody_nobody'})).status,404);
@@ -342,7 +342,7 @@ test('the phone app manages the account: link-key session, devices, assistants, 
   view=await account();const cursorGrant=view.assistants.find(a=>a.name==='Cursor'),codexGrant=view.assistants.find(a=>a.name==='Codex');
   assert.equal((await api('/work/phone/assistants/access',{grantId:cursorGrant.id,allDevices:true},token)).body.access,'all');
   assert.equal((await api('/work/phone/assistants/remove',{grantId:codexGrant.id},token)).status,200);
-  const ok=await h.call(cursorToken,'android_packages',{device:'my phone',package:'com.example'},phone,()=>({ok:true,value:'NX809J'}));assert.ok(!ok.isError,JSON.stringify(ok.structuredContent));
+  const ok=await h.call(cursorToken,'android_packages',{device:'my phone',package:'com.example'},phone,()=>({ok:true,value:'PixelTest'}));assert.ok(!ok.isError,JSON.stringify(ok.structuredContent));
   view=await account();assert.deepEqual(view.assistants.map(a=>a.name),['Cursor']);
   // Denying a code ends that approval.
   const page2=await fetch(h.endpoint+'/work/authorize?'+params,{redirect:'manual'});const html2=await page2.text();const code2=/data-approval="([A-Z2-9]{4}-[A-Z2-9]{4})"/.exec(html2)[1],ticket2=/ticket="([^"]+)"/.exec(html2)[1];
@@ -357,7 +357,7 @@ test('the phone app manages the account: link-key session, devices, assistants, 
 test('write calls auto-generate unique requestId when omitted while preserving explicit idempotency',async t=>withRelay(async ctx=>{
   const h=await harness(t,ctx);
   const codex=await h.register('http://localhost:1455/callback','Codex');
-  const {phone,token}=await h.enrollFirst(codex,'NX809J');await phone.online();
+  const {phone,token}=await h.enrollFirst(codex,'PixelTest');await phone.online();
   const seen=[];
   const postMcp=(name,args)=>h.post('/work/mcp',{jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}},{Authorization:'Bearer '+token,Accept:'application/json, text/event-stream'});
   // Two write calls without requestId both succeed with distinct auto_* IDs (no request_id_conflict).

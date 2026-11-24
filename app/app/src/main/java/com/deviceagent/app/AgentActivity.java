@@ -129,6 +129,8 @@ public final class AgentActivity extends Activity {
 
     @Override protected void onCreate(Bundle saved) {
         super.onCreate(saved);
+        // Prevent screenshots or screen-recording apps from capturing recovery codes, sign-in codes, or local keys.
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
         config = AgentConfig.load(this);
         Object retained = getLastNonConfigurationInstance();
         session = retained instanceof Session ? (Session) retained : new Session();
@@ -142,7 +144,7 @@ public final class AgentActivity extends Activity {
         }
         kit = new UiKit(this);
         daemon = new DaemonClient(this);
-        StartScripts.write(this, config);
+        StartScripts.cleanup(this);
         if (saved == null) importLink(getIntent());
         if (saved == null) focusConfirmFrom(getIntent());
         buildShell();
@@ -244,12 +246,57 @@ public final class AgentActivity extends Activity {
 
     // ---- Shell ----
 
-    boolean shellMode() { return config.hasAssistant() && "main".equals(session.page) && (config.paired || daemonUp); }
+    boolean shellMode() { return config.hasAssistant() && "main".equals(session.page) && (config.paired || daemonUp) && config.optionalTourDone; }
 
     private String screenKey() {
         return session.page + ":" + config.hasAssistant() + ":" + config.paired + ":" + (config.lastPairPort > 0)
                 + ":" + isDevOptionsOn() + ":" + isWirelessOn() + ":" + (daemonUp && !config.paired)
-                + ":" + isIgnoringBatteryOptimizations() + ":" + areNotificationsEnabled();
+                + ":" + isIgnoringBatteryOptimizations() + ":" + areNotificationsEnabled()
+                + ":" + config.optionalTourDone + ":" + config.allowScreenOff + ":" + config.keepUsbDebugging
+                + ":" + config.allowShell + ":" + locationState() + ":" + blockedAppsCount();
+    }
+
+    void openOptionalTour() {
+        session.page = "optional";
+        if (tabs != null && tabs[TAB_ACTIVITY] instanceof ActivityTab at) at.refreshBlockedForTour();
+        renderNow();
+    }
+
+    void finishOptionalTour() {
+        AgentConfig.setOptionalTourDone(this, true);
+        config = AgentConfig.load(this);
+        session.page = "main";
+        renderNow();
+    }
+
+    void toggleScreenOff(boolean enabled) {
+        AgentConfig.setAllowScreenOff(this, enabled);
+        config = AgentConfig.load(this);
+        daemon.post("/screen-off-access", Json.mapOf("enabled", enabled), (reply, error) -> {});
+        renderNow();
+    }
+
+    void toggleOffWifi(boolean enabled) {
+        AgentConfig.setKeepUsbDebugging(this, enabled);
+        config = AgentConfig.load(this);
+        renderNow();
+        if (config.accessEnabled && daemonUp) restartConnection();
+    }
+
+    void toggleAllowShell(boolean enabled) {
+        AgentConfig.setAllowShell(this, enabled);
+        config = AgentConfig.load(this);
+        daemon.post("/shell-access", Json.mapOf("enabled", enabled), (reply, error) -> {});
+        renderNow();
+    }
+
+    int blockedAppsCount() {
+        return (tabs != null && tabs[TAB_ACTIVITY] instanceof ActivityTab at) ? at.blockedCount() : 0;
+    }
+
+    void openBlockedPickerFromTour() {
+        if (!daemonUp) { toast(AppCopy.DAEMON_UNAVAILABLE); return; }
+        if (tabs != null && tabs[TAB_ACTIVITY] instanceof ActivityTab at) at.blockedPicker();
     }
 
     private void buildShell() {
@@ -1132,7 +1179,9 @@ public final class AgentActivity extends Activity {
         new Thread(() -> {
             try {
                 AgentConfig c = AgentConfig.load(app);
-                SimpleHttp.postJsonOnce(local(c, "/configure"), Json.stringify(Json.mapOf("permit", Json.mapOf("agentId", id, "mode", mode, "package", pkg, "expiresAt", System.currentTimeMillis() + 900000L))), 4000, c.localToken);
+                String payload = Json.stringify(Json.mapOf("permit", Json.mapOf("agentId", id, "mode", mode, "package", pkg, "expiresAt", System.currentTimeMillis() + 900000L)));
+                String auth = com.deviceagent.crypto.LocalAuth.requestHeader(c.localToken, "POST", "/configure", payload);
+                SimpleHttp.requestOnceWithHeaders("POST", local(c, "/configure"), payload, 4000, Map.of("X-Backstage-Auth", auth));
                 String name = AgentConfig.connectionName(app, id);
                 state.done(String.format(mode.equals("qa") ? AppCopy.PERMIT_SET_QA_FMT : mode.equals("paused") ? AppCopy.PERMIT_SET_PAUSED_FMT : AppCopy.PERMIT_SET_FULL_FMT, name));
             } catch (Exception e) { state.done(AppCopy.PERMIT_NOT_CHANGED); }
@@ -1262,7 +1311,8 @@ public final class AgentActivity extends Activity {
                 // Saving a verified link succeeds even before Android startup is authorized.
                 boolean acknowledged = true;
                 try {
-                    if (SetupRules.isCurrentDaemon(Json.object(SimpleHttp.getOnce(local(current, "/health"), 1500, null))))
+                    Map<String, Object> h = ConnectionRecovery.verifiedHealth(current.daemonPort, current.localToken, 1500);
+                    if (h != null && SetupRules.isCurrentDaemon(h))
                         configure(current, result.agentId, result.linkKey, null);
                 } catch (java.net.ConnectException ignored) { /* Not started yet; startup reads the saved link. */ }
                 catch (Exception e) { acknowledged = false; }
@@ -1314,7 +1364,10 @@ public final class AgentActivity extends Activity {
             app.stopService(new Intent(app, AgentService.class));
             try {
                 AgentConfig c = AgentConfig.load(app);
-                if (!ConnectionRecovery.foreignService(c.daemonPort)) SimpleHttp.postJsonOnce(local(c, "/shutdown"), "{}", 4000, c.localToken);
+                if (!ConnectionRecovery.foreignService(c.daemonPort, c.localToken)) {
+                    String auth = com.deviceagent.crypto.LocalAuth.requestHeader(c.localToken, "POST", "/shutdown", "{}");
+                    SimpleHttp.requestOnceWithHeaders("POST", local(c, "/shutdown"), "{}", 4000, Map.of("X-Backstage-Auth", auth));
+                }
                 state.done(AppCopy.PAUSE_REQUESTED);
             } catch (java.net.ConnectException e) { state.done(AppCopy.PAUSE_DONE); }
             catch (Exception e) { state.done(AppCopy.PAUSE_UNCONFIRMED); }
@@ -1330,7 +1383,7 @@ public final class AgentActivity extends Activity {
             try {
                 app.stopService(new Intent(app, AgentService.class));
                 AgentConfig c = AgentConfig.load(app);
-                if (ConnectionRecovery.foreignService(c.daemonPort)) {
+                if (ConnectionRecovery.foreignService(c.daemonPort, c.localToken)) {
                     AgentConfig.savePort(app, ConnectionRecovery.availablePort(c.daemonPort));
                     AgentConfig.setAccessEnabled(app, true);
                     state.restartRequested = true; state.page = "main";
@@ -1343,8 +1396,10 @@ public final class AgentActivity extends Activity {
                     state.done(AppCopy.RESTART_NEEDS_WIRELESS);
                     return;
                 }
-                try { SimpleHttp.postJsonOnce(local(c, "/shutdown"), "{}", 4000, c.localToken); }
-                catch (java.net.ConnectException ignored) { }
+                try {
+                    String auth = com.deviceagent.crypto.LocalAuth.requestHeader(c.localToken, "POST", "/shutdown", "{}");
+                    SimpleHttp.requestOnceWithHeaders("POST", local(c, "/shutdown"), "{}", 4000, Map.of("X-Backstage-Auth", auth));
+                } catch (java.net.ConnectException ignored) { }
                 // Wait for the old helper to exit before requesting a fresh start.
                 boolean down = false;
                 for (int i = 0; i < 20; i++) {
@@ -1378,28 +1433,33 @@ public final class AgentActivity extends Activity {
             int confirmCount = 0;
             Map<String, Object> permissions = null;
             try {
-                Map<String, Object> h = Json.object(SimpleHttp.getOnce("http://127.0.0.1:" + port + "/health", 1200, null));
-                present = ConnectionRecovery.isBackstage(h); conflict = !present; up = SetupRules.isCurrentDaemon(h); online = SetupRules.relayConnected(h);
-                Object usbObj = h.get("usbUnlockedFunctions");
-                if (usbObj != null) usbFns = String.valueOf(usbObj);
-                Object wifiObj = h.get("wifi");
-                if (wifiObj != null) wifiNow = String.valueOf(wifiObj);
-                if (h.get("pendingConfirmations") instanceof Number) confirmCount = ((Number) h.get("pendingConfirmations")).intValue();
-                Object relayObj = h.get("relay");
-                if (relayObj instanceof Map) {
-                    Object err = ((Map<?, ?>) relayObj).get("lastError");
-                    if (err != null) lastErr = String.valueOf(err);
+                AgentConfig cur = AgentConfig.load(app);
+                Map<String, Object> h = ConnectionRecovery.verifiedHealth(port, cur.localToken, 1200);
+                present = h != null; conflict = h == null;
+                if (h != null) {
+                    up = SetupRules.isCurrentDaemon(h); online = SetupRules.relayConnected(h);
+                    Object usbObj = h.get("usbUnlockedFunctions");
+                    if (usbObj != null) usbFns = String.valueOf(usbObj);
+                    Object wifiObj = h.get("wifi");
+                    if (wifiObj != null) wifiNow = String.valueOf(wifiObj);
+                    if (h.get("pendingConfirmations") instanceof Number) confirmCount = ((Number) h.get("pendingConfirmations")).intValue();
+                    Object relayObj = h.get("relay");
+                    if (relayObj instanceof Map) {
+                        Object err = ((Map<?, ?>) relayObj).get("lastError");
+                        if (err != null) lastErr = String.valueOf(err);
+                    }
+                    Object installed = h.get("linkedAgents");
+                    if (!(installed instanceof List)) online = false;
+                    else for (DaemonConfig.Link link : cur.links)
+                        if (!((List<?>) installed).contains(link.agentId)) online = false;
                 }
-                Object installed = h.get("linkedAgents");
-                if (!(installed instanceof List)) online = false;
-                else for (DaemonConfig.Link link : AgentConfig.load(app).links)
-                    if (!((List<?>) installed).contains(link.agentId)) online = false;
             } catch (java.net.ConnectException ignored) { }
             catch (Exception e) { unknown = true; }
             if (up && readPermits) {
                 try {
                     AgentConfig current = AgentConfig.load(app);
-                    Map<String, Object> reply = Json.object(SimpleHttp.getOnce(local(current, "/session"), 1200, current.localToken));
+                    String auth = com.deviceagent.crypto.LocalAuth.requestHeader(current.localToken, "GET", "/session", "");
+                    Map<String, Object> reply = Json.object(SimpleHttp.requestOnceWithHeaders("GET", local(current, "/session"), null, 1200, Map.of("X-Backstage-Auth", auth)));
                     Object found = reply.get("permits");
                     if (found instanceof Map) {
                         @SuppressWarnings("unchecked") Map<String, Object> cast = (Map<String, Object>) found;
@@ -1615,10 +1675,15 @@ public final class AgentActivity extends Activity {
     }
     private static String local(AgentConfig c, String path) { return "http://127.0.0.1:" + c.daemonPort + path; }
     private static void configure(AgentConfig c, String agent, String key, String forget) throws Exception {
+        if (ConnectionRecovery.verifiedHealth(c.daemonPort, c.localToken, 2000) == null) {
+            throw new IllegalStateException("Local daemon identity check failed");
+        }
         Map<String, Object> body = Json.mapOf("relayUrl", c.relayUrl, "deviceToken", c.deviceToken, "deviceName", c.deviceName, "deviceId", c.deviceId);
         if (agent != null) body.put("addLink", Json.mapOf("agentId", agent, "linkKey", key));
         if (forget != null) body.put("forgetAgent", forget);
-        SimpleHttp.postJsonOnce(local(c, "/configure"), Json.stringify(body), 4000, c.localToken);
+        String payload = Json.stringify(body);
+        String auth = com.deviceagent.crypto.LocalAuth.requestHeader(c.localToken, "POST", "/configure", payload);
+        SimpleHttp.requestOnceWithHeaders("POST", local(c, "/configure"), payload, 4000, Map.of("X-Backstage-Auth", auth));
     }
 
     // ---- Settings actions ----
@@ -1638,6 +1703,7 @@ public final class AgentActivity extends Activity {
     }
     void copyLocalToken() { copy(config.localToken, true); toast(AppCopy.TOKEN_COPIED); }
     void showUsbCommand() {
+        StartScripts.write(this, config);
         String cmd = StartScripts.oneLiner(this);
         showTextWithCopy(AppCopy.ACTION_USB_COMMAND, AppCopy.USB_COMMAND_BODY + "\n\n" + cmd, cmd);
     }

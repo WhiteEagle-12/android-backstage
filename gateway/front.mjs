@@ -13,8 +13,9 @@ const relay = await createRelay({port:relayPort,host:relayHost,zeroRetention});
 const relayAgent = new http.Agent({keepAlive:true,keepAliveMsecs:15000,maxSockets:2048,maxFreeSockets:256});
 const workAgent = new http.Agent({keepAlive:true,keepAliveMsecs:15000,maxSockets:2048,maxFreeSockets:256});
 const front = http.createServer((req,res)=>{
-  let pathname;try {pathname=new URL(req.url,'http://localhost').pathname;}catch{res.writeHead(400).end();return;}
-  if (pathname === '/work/internal' || pathname.startsWith('/work/internal/')) {
+  let pathname,decodedPath;try {pathname=new URL(req.url,'http://localhost').pathname;decodedPath=decodeURIComponent(pathname);}catch{res.writeHead(400).end();return;}
+  const lowerRaw=pathname.toLowerCase(),lowerDecoded=decodedPath.toLowerCase();
+  if (lowerRaw === '/work/internal' || lowerRaw.startsWith('/work/internal/') || lowerDecoded === '/work/internal' || lowerDecoded.startsWith('/work/internal/')) {
     res.writeHead(404,{'content-type':'application/json'});res.end('{"error":"not_found"}');return;
   }
   const work = pathname === '/.well-known/assetlinks.json' || pathname === '/work' || pathname.startsWith('/work/') || pathname === '/.well-known/oauth-authorization-server/work' || pathname === '/.well-known/oauth-protected-resource/work/mcp';
@@ -26,6 +27,8 @@ const front = http.createServer((req,res)=>{
     res.writeHead(400,{'content-type':'application/json'});res.end('{"error":"https_required"}');return;
   }
   const headers={...req.headers};
+  delete headers['x-backstage-internal-key'];
+  delete headers['x-backstage-owner'];
   // Cloudflare overwrites this header; the front listener is loopback-only.
   // Never trust an arbitrary client-supplied forwarding chain.
   headers['x-forwarded-for']=net.isIP(req.headers['cf-connecting-ip']||'')?req.headers['cf-connecting-ip']:req.socket.remoteAddress;

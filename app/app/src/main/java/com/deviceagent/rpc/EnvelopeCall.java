@@ -105,6 +105,9 @@ public final class EnvelopeCall {
         if (expiry <= System.currentTimeMillis() || expiry > System.currentTimeMillis() + 660_000L)
             return sealedError(store, env.from, deviceId, id, "call expired or invalid deadline");
         String name = Json.string(call, "name");
+        String subOwner = Json.string(call, "subOwner");
+        String owner = (subOwner != null && !subOwner.isBlank() && subOwner.length() <= 128)
+                ? env.from + ":" + subOwner : env.from;
         Object rawArgs = call.get("arguments");
         Map<String, Object> args = rawArgs instanceof Map ? (Map<String, Object>) rawArgs : Map.of();
         try {
@@ -118,7 +121,7 @@ public final class EnvelopeCall {
                 long queueMs=(System.nanoTime()-queuedAt)/1_000_000;
                 java.util.function.Supplier<Object> runTool = () -> {
                     try(var deadlineScope=com.deviceagent.tools.ActionDeadline.until(expiry)){
-                    Map<String,Object> result=tools.callOwned(name,args,env.from);
+                    Map<String,Object> result=tools.callOwned(name,args,owner);
                     if(Boolean.TRUE.equals(args.get("timing"))||Boolean.TRUE.equals(args.get("diagnostics"))){Map<String,Object> timing=new LinkedHashMap<>();if(result.get("timing") instanceof Map<?,?> m)m.forEach((k,v)->timing.put(k.toString(),v));timing.put("deviceQueueMs",queueMs);result.put("timing",timing);}
                     return result;
                     }
@@ -127,7 +130,7 @@ public final class EnvelopeCall {
                     try { response = Json.mapOf("result", runTool.get()); }
                     catch (RuntimeException e) { response = Json.mapOf("error", Json.mapOf("message", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())); }
                 } else {
-                    response = store.journal.execute(env.from, args.get("requestId") instanceof String requestId ? requestId : id instanceof String ? (String)id : null, name, args, runTool);
+                    response = store.journal.execute(owner, args.get("requestId") instanceof String requestId ? requestId : id instanceof String ? (String)id : null, name, args, runTool);
                 }
             }
             response = new LinkedHashMap<>(response);

@@ -7,7 +7,7 @@ Android Backstage supports two ways to connect MCP clients (Claude, Cursor, Code
 | **Hosted MCP Gateway** (`/work/mcp`) | Zero-install OAuth from any cloud or desktop client | Phone + hosted gateway (zero call-history retention) | Sign in in Backstage app and approve the agent |
 | **Self-Hosted Relay + Local E2EE Bridge** (`mcp-bridge`) | Privacy-strict setups where our hosted servers are never in the path | **Only your machine and your phone** (SPAKE2 + AES-256-GCM) | Run your own `relay/server.mjs`, pair once with CLI, run one command |
 
-> **Note:** Our hosted relay at `relay.android-backstage.com` runs with `RELAY_ALLOW_PUBLIC_PAIR=0` (it serves signed-in hosted accounts only). To use the local E2EE CLI bridge, run your own open-source relay (`relay/server.mjs`) with `RELAY_ALLOW_PUBLIC_PAIR=1` (or with your own relay's API key from `RELAY_DATA_DIR/first-api-key.txt`).
+> **Note:** Our hosted relay at `relay.android-backstage.com` runs with `RELAY_ALLOW_PUBLIC_PAIR=0` (it serves signed-in hosted accounts only). To use the local E2EE CLI bridge, run your own source-available relay (`relay/server.mjs`, `FSL-1.1-ALv2`) with `RELAY_ALLOW_PUBLIC_PAIR=1` (or with your own relay's API key from `RELAY_DATA_DIR/first-api-key.txt`).
 
 ## Quick Start: Self-Hosted E2EE Local Bridge
 
@@ -23,7 +23,7 @@ RELAY_ALLOW_PUBLIC_PAIR=1 node relay/server.mjs
 node cli/backstage.mjs pair --relay-url https://your-relay.example --name phone
 ```
 
-Enter the printed link code in the Android Backstage app on your phone (choose **Self-hosted relay**).
+Enter the printed link code in the Android Backstage app on your phone (**Use connection code → Change server → Connect**).
 
 3. Print a ready-to-paste MCP client config:
 

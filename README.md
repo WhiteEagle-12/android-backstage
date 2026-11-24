@@ -2,7 +2,7 @@
 
 Let an AI agent operate your real Android phone on a hidden virtual display while you keep using it.
 
-Android Backstage is one APK and one lightweight Node relay. The APK pairs once with your phone's own Wireless debugging and runs a `shell`-user (`uid 2000`) daemon that drives UIs on a **private headless virtual display**, reads compact accessibility trees, records MP4 clips, installs APKs, and enforces an on-device **Privacy Fence** that hard-blocks banking apps, password vaults, and gallery apps.
+Android Backstage is one APK and one lightweight Node relay. The APK pairs once with your phone's own Wireless debugging and runs a `shell`-user (`uid 2000`) daemon that drives UIs on a **private headless virtual display**, reads compact accessibility trees, records MP4 clips, installs APKs, and enforces an on-device **Privacy Fence** so any sensitive apps you block (banking, password vaults, galleries, etc.) stay off-limits to agents.
 
 No root. No Shizuku. No USB cable. No PC required. Works over Wi-Fi and 5G cellular.
 
@@ -38,7 +38,7 @@ gemini mcp add --transport http android-backstage https://relay.android-backstag
 
 3. **Approve:** Enter your Backstage email, check the digits on your phone, and tap **Allow**.
 
-> **Privacy note:** On the hosted MCP path, the gateway holds your device link keys and decrypts commands/results to relay them to cloud assistants (the blind relay and Cloudflare only see ciphertext envelopes for phone traffic). On-device blocked apps are always enforced inside the phone daemon.
+> **Privacy note:** On the hosted MCP path, the gateway holds vault-sealed device link keys and decrypts commands/results in memory to forward them to cloud assistants (Cloudflare terminates TLS on assistant↔gateway traffic, and the blind relay forwards opaque ciphertext envelopes for phone calls). For zero-knowledge E2EE where only your machine and phone hold keys, use the Local E2EE Bridge below. On-device blocked apps are always enforced inside the phone daemon (note that enabling optional developer shell access bypasses Blocked apps).
 
 ### 2. Self-Hosted Relay & Zero-Knowledge Local Bridge
 

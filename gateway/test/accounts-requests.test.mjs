@@ -17,13 +17,13 @@ test('sign-up creates a verified account, and email codes sign in existing accou
   // Unknown address does not create an account or send an email via sign-in OTP
   await owners.startEmail('nobody@example.com');assert.equal(box.sent.length,0);
   // Explicit sign-up creates the account with password + verified email
-  await owners.startSignUp('Gavin@Example.com','correct-password-1');assert.equal(box.sent[0].to,'gavin@example.com');
-  assert.throws(()=>owners.verifySignUp('gavin@example.com','000000'===box.sent[0].code?'111111':'000000'),/not right/);
-  const id=owners.verifySignUp('gavin@example.com',box.sent[0].code);assert.ok(id.startsWith('owner_'));
-  assert.throws(()=>owners.verifySignUp('gavin@example.com',box.sent[0].code),/expired/);
+  await owners.startSignUp('Alex@Example.com','correct-password-1');assert.equal(box.sent[0].to,'alex@example.com');
+  assert.throws(()=>owners.verifySignUp('alex@example.com','000000'===box.sent[0].code?'111111':'000000'),/not right/);
+  const id=owners.verifySignUp('alex@example.com',box.sent[0].code);assert.ok(id.startsWith('owner_'));
+  assert.throws(()=>owners.verifySignUp('alex@example.com',box.sent[0].code),/expired/);
   // Existing account can still sign in with a single-use email code
-  await owners.startEmail('gavin@example.com');assert.equal(owners.verifyEmail('gavin@example.com',box.sent[1].code),id,'the same address signs in to the same account');
-  assert.equal(owners.methods(id).email,'gavin@example.com');
+  await owners.startEmail('alex@example.com');assert.equal(owners.verifyEmail('alex@example.com',box.sent[1].code),id,'the same address signs in to the same account');
+  assert.equal(owners.methods(id).email,'alex@example.com');
   await assert.rejects(owners.startEmail('not-an-email'),/valid email/);
 });
 test('wrong codes are limited and new addresses cannot take another account email',async t=>{
@@ -87,19 +87,19 @@ test('request names and proof are validated',t=>{
 test('new computer request with email pushes straight to phone without browser login or email enumeration',async t=>{
   const dir=tmp(t),grants=[];
   const connections={authorize(ownerId,clientId,clientName,access){grants.push({ownerId,clientId,clientName,access});return 'grant_'+grants.length;},active:()=>true};
-  const owners={owner:()=>null,ownerByEmail:e=>String(e||'').toLowerCase()==='gavin@example.com'?'owner_g':null};
+  const owners={owner:()=>null,ownerByEmail:e=>String(e||'').toLowerCase()==='alex@example.com'?'owner_a':null};
   const auth=createAuth({base,stateFile:path.join(dir,'auth.json'),connections,owners});
   const p1=proof(),p2=proof();
-  const waiting=auth.requests.wait('owner_g',2000);
-  const known=auth.requests.create({names:['Claude Code','Codex'],challenge:p1.challenge,email:'Gavin@Example.com'});
+  const waiting=auth.requests.wait('owner_a',2000);
+  const known=auth.requests.create({names:['Claude Code','Codex'],challenge:p1.challenge,email:'Alex@Example.com'});
   await waiting;
   assert.equal(known.ownerKnown,true);
-  assert.deepEqual(auth.requests.pending('owner_g').map(r=>r.names),[['Claude Code','Codex']]);
+  assert.deepEqual(auth.requests.pending('owner_a').map(r=>r.names),[['Claude Code','Codex']]);
   // Unknown email returns identical shape without revealing whether an account exists.
   const unknown=auth.requests.create({names:['Claude Code'],challenge:p2.challenge,email:'nobody@example.com'});
   assert.equal(unknown.ownerKnown,true);
-  assert.equal(auth.requests.pending('owner_g').length,1);
-  auth.requests.decide(known.request,'owner_g',true);
+  assert.equal(auth.requests.pending('owner_a').length,1);
+  auth.requests.decide(known.request,'owner_a',true);
   const done=auth.requests.poll(known.request,p1.verifier);
   assert.equal(done.connections.length,2);
   assert.equal(auth.requests.statusPublic(known.request).state,'approved');

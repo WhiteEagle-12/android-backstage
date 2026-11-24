@@ -269,10 +269,32 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,rela
     else if(args?.sessionId&&['session_expired','session_unavailable','display_unavailable'].includes(result?.code))row.sessions.delete(args.sessionId);
     else if(args?.sessionId&&row.sessions.has(args.sessionId)&&result?.leaseExpiresAt)row.sessions.get(args.sessionId).leaseExpiresAt=result.leaseExpiresAt;
   }
-  async function callLink(target,name,args){
+  async function callLink(target,name,args,opts={}){
     const filePath=linkPath(target);const config=readLinkConfig(target);
     if(!config)throw new ConnectionError('device_link_revoked',`"${target.name}" has no working link.`);
-    return call({...config,...linkIoHooks(target),file:config,filePath,directUrl:null,transportRelayUrl:transportFor(config)},name,args,{});
+    return call({...config,...linkIoHooks(target),file:config,filePath,directUrl:null,transportRelayUrl:transportFor(config)},name,args,{...(opts.subOwner?{subOwner:opts.subOwner}:{})});
+  }
+  function clearWebhooksForGrant(grantId,{keepDeviceIds=null}={}) {
+    let changed=false;
+    const tasks=[];
+    for(const [deviceId,row] of Object.entries(devices)){
+      if(row.webhookGrantId!==grantId)continue;
+      if(keepDeviceIds&&keepDeviceIds.has(deviceId))continue;
+      delete row.webhookGrantId;
+      changed=true;
+      let config=null;try{config=readPhoneFile(deviceId);}catch{}
+      if(config?.relayUrl&&config?.apiKey){
+        tasks.push(fetchImpl(relayBase(config)+'/v1/events/webhooks',{method:'DELETE',headers:{Authorization:'Bearer '+config.apiKey},signal:AbortSignal.timeout(5000)}).catch(()=>{}));
+      }
+    }
+    if(changed)saveDevices();
+    return Promise.all(tasks);
+  }
+  function setWebhookOwner(deviceId,grantId) {
+    if(!devices[deviceId])return;
+    if(grantId)devices[deviceId].webhookGrantId=grantId;
+    else delete devices[deviceId].webhookGrantId;
+    saveDevices();
   }
 
   return {
@@ -365,25 +387,30 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,rela
     /** A paused assistant keeps its access but every phone command is refused until resumed. */
     setPaused(ownerId,grantId,paused) {
       const row=readGrant(grantId);if(!row||row.ownerId!==ownerId)throw new ConnectionError('access_revoked','Connection not found');
-      if(paused)row.paused=true;else delete row.paused;writeGrant(grantId,row);return !!row.paused;
+      if(paused){row.paused=true;void clearWebhooksForGrant(grantId);}else delete row.paused;writeGrant(grantId,row);return !!row.paused;
     },
+    isPaused:id=>{try{return Boolean(readGrant(id)?.paused);}catch{return false;}},
+    setWebhookOwner,
+    clearWebhooksForGrant,
     /** End every screen an assistant has open, on its behalf. */
     async stopWork(ownerId,grantId) {
       const row=readGrant(grantId);if(!row||row.ownerId!==ownerId)throw new ConnectionError('access_revoked','Connection not found');
       const open=[...(work.get(grantId)?.sessions.values()||[])];let stopped=0;
-      for(const session of open){try{const device=devices[session.deviceId]?{...publicDevice(session.deviceId,devices[session.deviceId])}:null;if(!device)continue;await callLink(device,'android.task_finish',{sessionId:session.sessionId,requestId:'stop-'+crypto.randomBytes(8).toString('hex')});stopped++;}catch{}work.get(grantId)?.sessions.delete(session.sessionId);}
+      for(const session of open){try{const device=devices[session.deviceId]?{...publicDevice(session.deviceId,devices[session.deviceId])}:null;if(!device)continue;await callLink(device,'android.task_finish',{sessionId:session.sessionId,requestId:'stop-'+crypto.randomBytes(8).toString('hex')},{subOwner:grantId});stopped++;}catch{}work.get(grantId)?.sessions.delete(session.sessionId);}
       return stopped;
     },
     setAccess(ownerId,grantId,access) {
       const row=readGrant(grantId);if(!row||row.ownerId!==ownerId)throw new ConnectionError('access_revoked','Connection not found');
-      row.access=normalizeAccess(ownerId,access);writeGrant(grantId,row);return row.access;
+      row.access=normalizeAccess(ownerId,access);writeGrant(grantId,row);
+      if(Array.isArray(row.access))void clearWebhooksForGrant(grantId,{keepDeviceIds:new Set(row.access)});
+      return row.access;
     },
     revokeOwned(ownerId,id) {
       if(!this.list(ownerId).some(row=>row.id===id))throw new ConnectionError('access_revoked','Connection not found');
       this.revoke(id);
     },
     active,
-    revoke(id) {writePrivateJson(grantFile(id)+'.revoked',{revoked:true});fs.rmSync(grantFile(id),{force:true});},
+    revoke(id) {void clearWebhooksForGrant(id);writePrivateJson(grantFile(id)+'.revoked',{revoked:true});fs.rmSync(grantFile(id),{force:true});},
     accessible:accessibleDevices,
     resolve:resolveDevice,
     // ---- enrolment ---------------------------------------------------------
@@ -445,7 +472,8 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,rela
         routes.set(target.id,directUrl?'direct':'relay');
         // Host environment credentials must never be resolved into a user's link.
         const result=await call({...config,...linkIoHooks(target),file:config,filePath,directUrl:null,transportRelayUrl:transportFor(config)},name,args,{
-          authorize:()=>{if(!active(grantId))throw new ConnectionError('access_revoked','This assistant’s access was removed.');},
+          authorize:()=>{if(!active(grantId))throw new ConnectionError('access_revoked','This assistant’s access was removed.');if(readGrant(grantId)?.paused)throw new ConnectionError('assistant_paused','The owner paused this assistant in Backstage. Ask them to resume it.');},
+          subOwner:grantId,
           directUrl,
           onRoute:(route,why)=>{routes.set(target.id,route==='relay'&&directUrl?'relay_after_direct':route);if(route==='relay'&&directUrl){directRoutes?.failed(target.id);log(`${target.name}: ${name} fell back to the relay (${why})`);}}});
         if(target.id&&devices[target.id]?.needsReconnect)markLink(target.id,{needsReconnect:false,lastError:null});

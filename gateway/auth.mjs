@@ -11,7 +11,29 @@ const approvalCode=()=>{const b=crypto.randomBytes(8);let out='';for(let i=0;i<8
 export const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const equals = (a, b) => typeof a === 'string' && typeof b === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 const escape = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-export function createAuth({ base, stateFile, approvalFile, connections, owners, metadataReader=fetchClientMetadata, allowTestRedirect = false, now = Date.now }) {
+const RESERVED_BRAND_ORIGINS = [
+  { match: /\b(chatgpt|openai)\b/i, origins: ['https://chatgpt.com', 'https://chat.openai.com'] },
+  { match: /\b(claude|anthropic)\b/i, origins: ['https://claude.ai', 'https://console.anthropic.com'] },
+  { match: /\bcursor\b/i, origins: ['https://cursor.com', 'https://cursor.sh'] },
+  { match: /\b(gemini|google)\b/i, origins: ['https://gemini.google.com', 'https://aistudio.google.com'] },
+];
+const isLoopbackRedirect = uri => { try { return ['localhost','127.0.0.1','[::1]'].includes(new URL(uri).hostname); } catch { return false; } };
+function sanitizeRegisteredName(rawName, redirects) {
+  const clean = typeof rawName === 'string' ? rawName.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 60) : '';
+  const name = clean || 'Assistant';
+  const nonLoopback = (redirects || []).filter(u => !isLoopbackRedirect(u));
+  if (!nonLoopback.length) return name;
+  for (const brand of RESERVED_BRAND_ORIGINS) {
+    if (brand.match.test(name)) {
+      const allMatch = nonLoopback.every(u => { try { return brand.origins.includes(new URL(u).origin); } catch { return false; } });
+      if (!allMatch) {
+        try { return new URL(nonLoopback[0]).hostname; } catch { return 'Assistant'; }
+      }
+    }
+  }
+  return name;
+}
+export function createAuth({ base, stateFile, approvalFile, connections, owners, artifacts = null, metadataReader=fetchClientMetadata, allowTestRedirect = false, now = Date.now }) {
   const resource = base + '/mcp';
   const policy = (redirect, nonce) => `default-src 'none'; style-src 'unsafe-inline';${nonce ? " script-src 'nonce-"+nonce+"'; connect-src 'self';" : ''} form-action 'self'${redirect ? ' '+redirect : ''}; frame-ancestors 'none'`;
   let state = { clients: {}, codes: {}, access: {}, refresh: {} };
@@ -101,7 +123,7 @@ export function createAuth({ base, stateFile, approvalFile, connections, owners,
       if (Object.keys(state.clients).length >= 10000) pruneClients(true);
       if (Object.keys(state.clients).length >= 10000) return fail(res,'registration_limit',429);
       const id = random(), secret = method === 'none' ? null : random();
-      state.clients[id] = {name:typeof b.client_name === 'string' ? b.client_name.replace(/[\x00-\x1f\x7f]/g,'').slice(0,60) : 'Assistant',redirects:b.redirect_uris,secret:secret ? digest(secret) : null, method, createdAt: now(), lastUsedAt: now()}; save();
+      state.clients[id] = {name:sanitizeRegisteredName(b.client_name, b.redirect_uris),redirects:b.redirect_uris,secret:secret ? digest(secret) : null, method, createdAt: now(), lastUsedAt: now()}; save();
       res.status(201).json({client_id:id,...(secret ? {client_secret:secret,client_secret_expires_at:0} : {}),redirect_uris:b.redirect_uris,token_endpoint_auth_method:method,grant_types:['authorization_code','refresh_token'],response_types:['code']});
     });
     app.get('/work/authorize', async (req,res) => {
@@ -121,7 +143,9 @@ export function createAuth({ base, stateFile, approvalFile, connections, owners,
         const nonce=random(),ticket=random(),code=approvalCode();
         res.set('Content-Security-Policy',policy(q.redirect_uri,nonce));
         const clientOrigin=new URL(q.redirect_uri).origin;
-        pending.set(ticket,{ip:req.ip,clientId:q.client_id,clientName:clientOrigin==='https://chatgpt.com'?'ChatGPT':client.name,clientOrigin,ownerId:null,phone:true,code,redirect:q.redirect_uri,challenge:q.code_challenge,state:q.state,expires:now()+600000});
+        const verifiedChatGpt=Boolean(client.metadata)&&clientOrigin==='https://chatgpt.com'&&new URL(q.client_id).origin==='https://chatgpt.com';
+        const displayName=verifiedChatGpt?'ChatGPT':(client.name||'Assistant');
+        pending.set(ticket,{ip:req.ip,clientId:q.client_id,clientName:displayName,clientOrigin,verified:Boolean(client.metadata),ownerId:null,phone:true,code,redirect:q.redirect_uri,challenge:q.code_challenge,state:q.state,expires:now()+600000});
         const passkeyUrl='/work/sign-in?return_to='+encodeURIComponent(req.originalUrl+(req.originalUrl.includes('?')?'&':'?')+'passkey=1');
         return res.type('html').send(phoneApprovalPage({base,ticket,nonce,code,clientName:pending.get(ticket).clientName,clientOrigin,passkeyUrl}));
       }
@@ -164,6 +188,7 @@ form.addEventListener('submit',async event=>{
       const ownerId=owners?.ownerByEmail?.(req.body?.email);
       // Anti-enumeration: always return a 6-digit check value whether or not the address has an account.
       if(!ownerId)return res.json({sent:true,check:String(crypto.randomInt(100000,1000000))});
+      if(hitRate('phone-send-owner:'+ownerId,5,600000))return res.json({sent:true,check:String(crypto.randomInt(100000,1000000))});
       try{res.json({sent:true,...connectionRequests.forOAuth(req.body?.ticket,ownerId)});}catch(e){fail(res,e.message);}
     });
     app.post('/work/authorize', async (req,res) => {
@@ -242,6 +267,7 @@ form.addEventListener('submit',async event=>{
       if (grantId) {
         for (const key of ['codes','access','refresh']) for (const [id,row] of Object.entries(state[key])) if (row.grantId===grantId) delete state[key][id];
         connections?.revoke(grantId);
+        artifacts?.removeForGrants?.([grantId]);
       } else for (const key of ['access','refresh']) if (state[key][hash]?.clientId === clientId) delete state[key][hash];
       save(); res.sendStatus(200);
     });
@@ -262,8 +288,8 @@ form.addEventListener('submit',async event=>{
     req.backstageClient = row.clientId;
     req.backstageClientName = (Object.hasOwn(state.clients,row.clientId) && state.clients[row.clientId].name) || 'An assistant'; next();
   }
-  /** Grant behind a live access token, or null. Used by non-MCP routes such as artifact uploads. */
-  const grantForToken=token=>liveAccess(token)?.grantId||null;
+  /** Grant behind a live, unpaused access token, or null. Used by non-MCP routes such as artifact uploads. */
+  const grantForToken=token=>{const row=liveAccess(token);return row&&!connections?.isPaused?.(row.grantId)?row.grantId:null;};
   const findApproval=code=>{prune();const clean=String(code||'').toUpperCase().replace(/[^A-Z0-9]/g,'');for(const [ticket,row] of pending)if(row.phone&&!row.denied&&!row.grantId&&row.code.replace('-','')===clean)return [ticket,row];return [null,null];};
   /** Approvals the phone app completes: preview by code, then approve with a device choice or deny. */
   const approvals={
@@ -384,7 +410,8 @@ form.addEventListener('submit',async event=>{
       if(requests.size>=512)throw new ConnectionError('busy','Try again later.');
       if([...requests.values()].filter(r=>r.ownerId===ownerId&&!r.decision&&r.expires>now()).length>=5)throw new ConnectionError('busy','Too many pending requests for this account. Approve or deny one on your phone first.');
       const id='req_'+crypto.randomBytes(16).toString('hex');
-      const row={id,ownerId,clients:[{clientId:oauth.clientId,name:oauth.clientName}],oauthTicket:ticket,check:String(crypto.randomInt(100000,1000000)),createdAt:now(),expires:Math.min(oauth.expires,now()+600000),decision:null};
+      const label=oauth.verified?oauth.clientName:`${oauth.clientName} (${oauth.clientOrigin})`;
+      const row={id,ownerId,clients:[{clientId:oauth.clientId,name:label}],oauthTicket:ticket,check:String(crypto.randomInt(100000,1000000)),createdAt:now(),expires:Math.min(oauth.expires,now()+600000),decision:null};
       requests.set(id,row);wakeOwner(ownerId);return {check:row.check};
     },
     decide(id,ownerId,allow,access='all'){

@@ -108,6 +108,16 @@ public final class InteractionHost {
             if(op.equals("notification"))return notifications.handle(shellContext(),args);
             if(op.equals("clipboard"))return clipboard(args);
             if(op.equals("screen_control"))return screenControl(args);
+            if(op.equals("screen_state")){
+                var shell=shellContext();
+                var dm=shell.getSystemService(DisplayManager.class);
+                var pm=shell.getSystemService(android.os.PowerManager.class);
+                var km=shell.getSystemService(android.app.KeyguardManager.class);
+                var d0=dm==null?null:dm.getDisplay(0);
+                boolean screenOn=(d0==null||d0.getState()==android.view.Display.STATE_ON)&&(pm==null||pm.isInteractive());
+                boolean locked=km!=null&&km.isDeviceLocked();
+                return Json.mapOf("ok",true,"screenOn",screenOn,"locked",locked);
+            }
             if(op.equals("screen_capture"))return screenCapture(args);
             if(op.equals("app_label")){String pkg=Json.string(args,"package");var pm=shellContext().getPackageManager();return Json.mapOf("ok",true,"label",pm.getApplicationLabel(pm.getApplicationInfo(pkg,0)).toString());}
             if(op.equals("location")) {

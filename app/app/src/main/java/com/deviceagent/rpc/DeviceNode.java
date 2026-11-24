@@ -231,8 +231,25 @@ public final class DeviceNode {
     private void deliverPending(java.nio.file.Path file) throws IOException {
         if (!java.nio.file.Files.exists(file)) return;
         String body = new String(java.nio.file.Files.readAllBytes(file), java.nio.charset.StandardCharsets.UTF_8);
-        try { SimpleHttp.postJsonOnce(relayUrl+"/v1/device/result",body,RESULT_TIMEOUT_MS,token); }
-        catch (SimpleHttp.HttpException e) { if(e.status!=404) throw e; }
+        try {
+            SimpleHttp.postJsonOnce(relayUrl + "/v1/device/result", body, RESULT_TIMEOUT_MS, token);
+        } catch (SimpleHttp.HttpException e) {
+            if (e.status == 400 || e.status == 413) {
+                // Unrecoverable oversized or rejected payload: never poison-pill the queue forever.
+                DaemonLog.print("dropping unsendable result (HTTP " + e.status + ") from " + file.getFileName());
+                try {
+                    String jobId = Json.string(Json.object(body), "id");
+                    if (jobId != null && !jobId.isBlank()) {
+                        String fallback = Json.stringify(Json.mapOf(
+                                "id", jobId,
+                                "error", Json.mapOf("message", "Result exceeded relay size limit (HTTP " + e.status + "). Narrow the command or output.")));
+                        SimpleHttp.postJsonOnce(relayUrl + "/v1/device/result", fallback, RESULT_TIMEOUT_MS, token);
+                    }
+                } catch (Exception ignored) { }
+            } else if (e.status != 404) {
+                throw e;
+            }
+        }
         java.nio.file.Files.deleteIfExists(file);
     }
 

@@ -13,7 +13,7 @@
 #   BACKSTAGE_BACKUP_DEST=/mnt/usb/backstage        # or user@host:/srv/backstage (rsync over ssh)
 #   BACKSTAGE_BACKUP_KEEP=14                         # copies to keep at a directory destination
 #
-# Restoring: openssl enc -d -aes-256-cbc -pbkdf2 -pass file:~/.config/android-backstage/backup.key -in <file> | tar -xz -C <dir>
+# Restoring: openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass file:~/.config/android-backstage/backup.key -in <file> | tar -xz -C <dir>
 # Keep a copy of backup.key somewhere safe and separate from the backups; without it they are unreadable.
 # A restored copy is a snapshot: device links and grants revoked after the snapshot must not be silently revived.
 set -euo pipefail

@@ -21,15 +21,19 @@ final class SettingsTab extends TabPage {
             row(card, AppCopy.ACTION_MANAGE_BROWSER, AppCopy.SUB_MANAGE_BROWSER, null, a::openAccountPage, false);
         });
         String location = a.locationState();
-        put("options", "options|" + location + "|" + a.config.keepUsbDebugging + "|" + a.config.allowShell, box -> {
+        put("options", "options|" + location + "|" + a.config.allowScreenOff + "|" + a.config.keepUsbDebugging + "|" + a.config.allowShell, box -> {
             k.section(box, AppCopy.SECTION_OPTIONS);
             LinearLayout card = group(box);
+            row(card, AppCopy.ACTION_ALLOW_SCREEN_OFF, AppCopy.SUB_ALLOW_SCREEN_OFF,
+                    a.config.allowScreenOff ? AppCopy.STATE_ON : AppCopy.STATE_OFF, this::screenOffDialog, true);
             row(card, LocationProvider.allowed(a) ? AppCopy.ACTION_MANAGE_LOCATION : AppCopy.ACTION_ALLOW_LOCATION,
                     AppCopy.SUB_LOCATION, location, a::locationAccess, true);
             row(card, AppCopy.ACTION_STAY_ONLINE_OFF_WIFI, AppCopy.SUB_STAY_ONLINE_OFF_WIFI,
                     a.config.keepUsbDebugging ? AppCopy.STATE_ON : AppCopy.STATE_OFF, this::offWifiDialog, true);
             row(card, AppCopy.ACTION_ALLOW_SHELL, AppCopy.SUB_ALLOW_SHELL,
-                    a.config.allowShell ? AppCopy.STATE_ON : AppCopy.STATE_OFF, this::shellDialog, false);
+                    a.config.allowShell ? AppCopy.STATE_ON : AppCopy.STATE_OFF, this::shellDialog, true);
+            row(card, AppCopy.ACTION_OPTIONAL_TOUR, AppCopy.SUB_OPTIONAL_TOUR,
+                    null, a::openOptionalTour, false);
         });
         String updateVal = a.updateStatus.isEmpty() ? "v" + BuildInfo.VERSION : a.updateStatus;
         put("updates", "updates|" + a.checkingUpdate + "|" + updateVal + "|" + (a.availableUpdate == null ? 0 : a.availableUpdate.versionCode), box -> {
@@ -58,16 +62,27 @@ final class SettingsTab extends TabPage {
         end();
     }
 
+    private void screenOffDialog() {
+        boolean next = !a.config.allowScreenOff;
+        new android.app.AlertDialog.Builder(a)
+                .setTitle(AppCopy.ACTION_ALLOW_SCREEN_OFF)
+                .setMessage(AppCopy.ALLOW_SCREEN_OFF_BODY)
+                .setPositiveButton(next ? AppCopy.ACTION_TURN_ON : AppCopy.ACTION_TURN_OFF, (d, w) -> {
+                    a.toggleScreenOff(next);
+                    render();
+                })
+                .setNegativeButton(AppCopy.CANCEL, null)
+                .show();
+    }
+
     private void offWifiDialog() {
         boolean next = !a.config.keepUsbDebugging;
         new android.app.AlertDialog.Builder(a)
                 .setTitle(AppCopy.ACTION_STAY_ONLINE_OFF_WIFI)
                 .setMessage(AppCopy.OFF_WIFI_BODY)
                 .setPositiveButton(next ? AppCopy.ACTION_TURN_ON : AppCopy.ACTION_TURN_OFF, (d, w) -> {
-                    AgentConfig.setKeepUsbDebugging(a, next);
-                    a.config = AgentConfig.load(a);
+                    a.toggleOffWifi(next);
                     render();
-                    if (a.config.accessEnabled) a.restartConnection();
                 })
                 .setNegativeButton(AppCopy.CANCEL, null)
                 .show();
@@ -79,10 +94,8 @@ final class SettingsTab extends TabPage {
                 .setTitle(AppCopy.ACTION_ALLOW_SHELL)
                 .setMessage(AppCopy.ALLOW_SHELL_BODY)
                 .setPositiveButton(next ? AppCopy.ACTION_TURN_ON : AppCopy.ACTION_TURN_OFF, (d, w) -> {
-                    AgentConfig.setAllowShell(a, next);
-                    a.config = AgentConfig.load(a);
+                    a.toggleAllowShell(next);
                     render();
-                    a.daemon.post("/shell-access", com.deviceagent.tools.Json.mapOf("enabled", next), (reply, error) -> {});
                 })
                 .setNegativeButton(AppCopy.CANCEL, null)
                 .show();

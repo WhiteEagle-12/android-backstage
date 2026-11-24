@@ -68,7 +68,14 @@ public final class SimpleHttp {
     /** Pairing credentials belong only to the server the user approved. */
     public static String requestNoRedirect(String method, String url, String json, int timeoutMs, String bearerToken)
             throws IOException {
-        return requestInternal(method, url, json, timeoutMs, bearerToken, 1, false, null);
+        return requestInternal(method, url, json, timeoutMs, bearerToken, 1, false, null, null);
+    }
+
+    /** Single attempt with custom request headers (used for local daemon HMAC auth). */
+    public static String requestOnceWithHeaders(
+            String method, String url, String json, int timeoutMs, java.util.Map<String, String> extraHeaders)
+            throws IOException {
+        return requestInternal(method, url, json, timeoutMs, null, 1, false, null, extraHeaders);
     }
 
     private static String requestInternal(
@@ -80,6 +87,20 @@ public final class SimpleHttp {
             int attempts,
             boolean followRedirects,
             Set<HttpURLConnection> activeConns)
+            throws IOException {
+        return requestInternal(method, url, json, timeoutMs, bearerToken, attempts, followRedirects, activeConns, null);
+    }
+
+    private static String requestInternal(
+            String method,
+            String url,
+            String json,
+            int timeoutMs,
+            String bearerToken,
+            int attempts,
+            boolean followRedirects,
+            Set<HttpURLConnection> activeConns,
+            java.util.Map<String, String> extraHeaders)
             throws IOException {
         IOException last = null;
         int max = Math.max(1, attempts);
@@ -98,6 +119,11 @@ public final class SimpleHttp {
                 conn.setRequestProperty("Connection", "close");
                 if (bearerToken != null && !bearerToken.isBlank()) {
                     conn.setRequestProperty("Authorization", "Bearer " + bearerToken);
+                }
+                if (extraHeaders != null) {
+                    for (java.util.Map.Entry<String, String> h : extraHeaders.entrySet()) {
+                        if (h.getKey() != null && h.getValue() != null) conn.setRequestProperty(h.getKey(), h.getValue());
+                    }
                 }
                 if (json != null) {
                     conn.setDoOutput(true);

@@ -39,6 +39,8 @@ public final class ControlServer {
     private Thread thread;
     private ServerSocket server;
     private java.util.concurrent.ExecutorService pool;
+    private java.util.concurrent.ExecutorService watchPool;
+    private final java.util.concurrent.atomic.AtomicInteger activeWatchers = new java.util.concurrent.atomic.AtomicInteger();
     private int port = PORT;
     private volatile java.util.function.Supplier<Map<String, Object>> extraHealth = Map::of;
 
@@ -86,13 +88,18 @@ public final class ControlServer {
             return false;
         }
         pool = new java.util.concurrent.ThreadPoolExecutor(
-                2, 16, 30L, java.util.concurrent.TimeUnit.SECONDS,
-                new java.util.concurrent.ArrayBlockingQueue<>(32),
+                4, 24, 30L, java.util.concurrent.TimeUnit.SECONDS,
+                new java.util.concurrent.ArrayBlockingQueue<>(64),
                 r -> {
                     Thread t = new Thread(r, "backstage-inbound-req");
                     t.setDaemon(true);
                     return t;
                 });
+        watchPool = java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
+            Thread t = new Thread(r, "backstage-inbound-watch");
+            t.setDaemon(true);
+            return t;
+        });
         thread = new Thread(this::run, "backstage-inbound");
         thread.setDaemon(true);
         thread.start();
@@ -112,6 +119,10 @@ public final class ControlServer {
             pool.shutdownNow();
             pool = null;
         }
+        if (watchPool != null) {
+            watchPool.shutdownNow();
+            watchPool = null;
+        }
         if (thread != null) thread.interrupt();
     }
 
@@ -129,11 +140,16 @@ public final class ControlServer {
                     }
                     try {
                         exec.execute(() -> {
-                            try (Socket s = sock) {
-                                handle(s);
+                            boolean handedOff = false;
+                            try {
+                                handedOff = handle(sock);
                             } catch (IOException ignored) {
                             } catch (Throwable e) {
                                 DaemonLog.print("inbound handler crashed", e);
+                            } finally {
+                                if (!handedOff) {
+                                    try { sock.close(); } catch (IOException ignored) {}
+                                }
                             }
                         });
                     } catch (java.util.concurrent.RejectedExecutionException e) {
@@ -147,7 +163,7 @@ public final class ControlServer {
         }
     }
 
-    private void handle(Socket sock) throws IOException {
+    private boolean handle(Socket sock) throws IOException {
         sock.setTcpNoDelay(true);
         InputStream in = new java.io.BufferedInputStream(sock.getInputStream(), 16 * 1024);
         boolean first = true;
@@ -158,71 +174,90 @@ public final class ControlServer {
             try {
                 req = readRequest(in);
             } catch (java.net.SocketTimeoutException e) {
-                return;
+                return false;
             }
-            if (req == null) return;
+            if (req == null) return false;
             boolean keepAlive = !"close".equalsIgnoreCase(req.header("connection"));
             if (req.tooLarge) {
                 writeJson(sock, 413, "{\"error\":\"payload too large\"}", null, false);
-                return;
+                return false;
             }
             String session = req.header("mcp-session-id");
             if (session == null || session.isBlank()) session = UUID.randomUUID().toString();
 
             if ("OPTIONS".equals(req.method)) {
                 write(sock, 204, "application/json", new byte[0], session, !keepAlive);
-                if (!keepAlive) return;
+                if (!keepAlive) return false;
                 continue;
             }
 
             if ("GET".equals(req.method) && "/health".equals(req.path)) {
                 // Other devices on the network (and the PC's direct route) see only identity and liveness.
-                writeJson(sock, 200, sock.getInetAddress().isLoopbackAddress() ? healthJson() : publicHealthJson(), session, keepAlive);
-                if (!keepAlive) return;
+                writeJson(sock, 200, sock.getInetAddress().isLoopbackAddress() ? healthJson(req.header("x-backstage-challenge")) : publicHealthJson(), session, keepAlive);
+                if (!keepAlive) return false;
                 continue;
             }
 
             if ("POST".equals(req.method) && "/call".equals(req.path)) {
                 sock.setSoTimeout(640_000);
-                if (!handleCall(sock, req, session, keepAlive)) return;
+                if (!handleCall(sock, req, session, keepAlive)) return false;
                 continue;
             }
 
             // Administration is app-local even when encrypted /call is exposed on LAN.
             if (!sock.getInetAddress().isLoopbackAddress() || !authorized(req)) {
                 writeJson(sock, 401, "{\"error\":\"unauthorized\"}", session, false);
-                return;
+                return false;
             }
 
-            // The app holds this open; it closes the moment this process dies, so the app relaunches at once.
+            // The app holds this open on a dedicated watch pool so it never starves normal requests.
             if ("GET".equals(req.method) && "/watch".equals(req.path)) {
-                handleWatch(sock);
-                return;
+                java.util.concurrent.ExecutorService wp = watchPool;
+                if (wp == null || activeWatchers.incrementAndGet() > 4) {
+                    activeWatchers.decrementAndGet();
+                    writeJson(sock, 429, "{\"error\":\"too many watchers\"}", session, false);
+                    return false;
+                }
+                try {
+                    wp.execute(() -> {
+                        try (Socket ws = sock) {
+                            handleWatch(ws);
+                        } catch (IOException ignored) {
+                        } finally {
+                            activeWatchers.decrementAndGet();
+                        }
+                    });
+                    return true;
+                } catch (java.util.concurrent.RejectedExecutionException e) {
+                    activeWatchers.decrementAndGet();
+                    writeJson(sock, 429, "{\"error\":\"too many watchers\"}", session, false);
+                    return false;
+                }
             }
             if ("GET".equals(req.method) && "/session".equals(req.path)) {
                 writeJson(sock, 200, Json.stringify(Json.mapOf("agents", links.agentIds(), "permits", links.permits.snapshot())), session, keepAlive);
-                if (!keepAlive) return;
+                if (!keepAlive) return false;
                 continue;
             }
             if ("POST".equals(req.method) && "/configure".equals(req.path)) {
                 handleConfigure(sock, req, session);
-                return;
+                return false;
             }
             if ("POST".equals(req.method) && "/reconnect".equals(req.path)) {
                 Map<String, Object> status = daemon.reconnect();
                 status.put("linkedAgents", links.agentIds());
                 writeJson(sock, 200, Json.stringify(status), session, false);
-                return;
+                return false;
             }
             if ("POST".equals(req.method) && "/fix-usb-config".equals(req.path)) {
                 boolean fixed = com.deviceagent.shell.SystemBinders.clearUsbScreenUnlockedFunctions();
                 String now = com.deviceagent.shell.SystemBinders.usbScreenUnlockedFunctions();
                 writeJson(sock, fixed ? 200 : 500, Json.stringify(Json.mapOf("ok", fixed, "usbUnlockedFunctions", now)), session, false);
-                return;
+                return false;
             }
             if ("GET".equals(req.method) && "/blocked-apps".equals(req.path)) {
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "packages", tools.privacyFence().list())), session, keepAlive);
-                if (!keepAlive) return;
+                if (!keepAlive) return false;
                 continue;
             }
             if ("POST".equals(req.method) && "/blocked-apps".equals(req.path)) {
@@ -233,37 +268,48 @@ public final class ControlServer {
                 }
                 List<String> saved = tools.privacyFence().set(pkgs);
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "packages", saved)), session, false);
-                return;
+                return false;
             }
             if ("GET".equals(req.method) && "/shell-access".equals(req.path)) {
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "enabled", tools.allowShell())), session, keepAlive);
-                if (!keepAlive) return;
+                if (!keepAlive) return false;
                 continue;
             }
             if ("POST".equals(req.method) && "/shell-access".equals(req.path)) {
                 Map<String, Object> body = parseObject(req.body);
                 boolean saved = tools.setAllowShell(Boolean.TRUE.equals(body.get("enabled")));
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "enabled", saved)), session, false);
-                return;
+                return false;
+            }
+            if ("GET".equals(req.method) && "/screen-off-access".equals(req.path)) {
+                writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "enabled", tools.allowScreenOff())), session, keepAlive);
+                if (!keepAlive) return false;
+                continue;
+            }
+            if ("POST".equals(req.method) && "/screen-off-access".equals(req.path)) {
+                Map<String, Object> body = parseObject(req.body);
+                boolean saved = tools.setAllowScreenOff(Boolean.TRUE.equals(body.get("enabled")));
+                writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "enabled", saved)), session, false);
+                return false;
             }
             if ("GET".equals(req.method) && "/timeline".equals(req.path)) {
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "entries", tools.timeline().recent(100))), session, keepAlive);
-                if (!keepAlive) return;
+                if (!keepAlive) return false;
                 continue;
             }
             if ("POST".equals(req.method) && "/timeline/clear".equals(req.path)) {
                 tools.timeline().clear();
                 writeJson(sock, 200, "{\"ok\":true}", session, false);
-                return;
+                return false;
             }
             if ("GET".equals(req.method) && "/sessions".equals(req.path)) {
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "sessions", tools.listAllSessions())), session, keepAlive);
-                if (!keepAlive) return;
+                if (!keepAlive) return false;
                 continue;
             }
             if ("GET".equals(req.method) && "/preview".equals(req.path)) {
                 handlePreview(sock, req, session, keepAlive);
-                if (!keepAlive) return;
+                if (!keepAlive) return false;
                 continue;
             }
             if ("POST".equals(req.method) && "/session/takeover".equals(req.path)) {
@@ -273,7 +319,7 @@ public final class ControlServer {
                 String confirmId = Json.string(body, "confirmId");
                 Map<String, Object> res = tools.setUserTakeoverAdmin(sid, active, confirmId);
                 writeJson(sock, Boolean.TRUE.equals(res.get("ok")) ? 200 : 400, Json.stringify(res), session, keepAlive);
-                if (!keepAlive) return;
+                if (!keepAlive) return false;
                 continue;
             }
             if ("POST".equals(req.method) && "/session/input".equals(req.path)) {
@@ -282,7 +328,7 @@ public final class ControlServer {
                 Integer disp = body.get("displayId") instanceof Number n ? n.intValue() : null;
                 Map<String, Object> res = tools.userInputAdmin(sid, disp, body);
                 writeJson(sock, Boolean.TRUE.equals(res.get("ok")) ? 200 : 400, Json.stringify(res), session, keepAlive);
-                if (!keepAlive) return;
+                if (!keepAlive) return false;
                 continue;
             }
             if ("POST".equals(req.method) && "/session/handoff".equals(req.path)) {
@@ -290,34 +336,34 @@ public final class ControlServer {
                 Integer disp = body.get("displayId") instanceof Number n ? n.intValue() : null;
                 Map<String, Object> res = tools.handoffSessionAdmin(Json.string(body, "sessionId"), disp);
                 writeJson(sock, Boolean.TRUE.equals(res.get("ok")) ? 200 : 400, Json.stringify(res), session, false);
-                return;
+                return false;
             }
             if ("POST".equals(req.method) && "/session/stop".equals(req.path)) {
                 Map<String, Object> body = parseObject(req.body);
                 String sid = Json.string(body, "sessionId");
                 if (sid == null || sid.isBlank()) {
                     writeJson(sock, 400, "{\"error\":\"sessionId is required\"}", session, false);
-                    return;
+                    return false;
                 }
                 Map<String, Object> res = tools.stopSessionAdmin(sid);
                 writeJson(sock, Boolean.TRUE.equals(res.get("ok")) ? 200 : 400, Json.stringify(res), session, false);
-                return;
+                return false;
             }
             if ("GET".equals(req.method) && "/confirmations".equals(req.path)) {
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "confirmations", tools.confirmations().list(true))), session, keepAlive);
-                if (!keepAlive) return;
+                if (!keepAlive) return false;
                 continue;
             }
             if ("POST".equals(req.method) && "/confirmations/decide".equals(req.path)) {
                 Map<String, Object> body = parseObject(req.body);
                 boolean ok = tools.decideConfirmationAdmin(Json.string(body, "confirmId"), Json.string(body, "decision"));
                 writeJson(sock, ok ? 200 : 404, Json.stringify(Json.mapOf("ok", ok)), session, keepAlive);
-                if (!keepAlive) return;
+                if (!keepAlive) return false;
                 continue;
             }
             if ("GET".equals(req.method) && "/inbox".equals(req.path)) {
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "items", tools.inbox().list(50))), session, keepAlive);
-                if (!keepAlive) return;
+                if (!keepAlive) return false;
                 continue;
             }
             if ("POST".equals(req.method) && "/inbox".equals(req.path)) {
@@ -329,7 +375,7 @@ public final class ControlServer {
                         Json.string(body, "mimeType"), Json.string(body, "sourceApp"), files);
                 tools.emitEvent(Json.mapOf("type", "share_received", "payload", added));
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "item", added)), session, false);
-                return;
+                return false;
             }
             if ("POST".equals(req.method) && "/update".equals(req.path)) {
                 Map<String, Object> body = parseObject(req.body);
@@ -337,7 +383,7 @@ public final class ControlServer {
                 if (!isTrustedUpdateUrl(url)
                         || sha256 == null || !sha256.matches("[a-f0-9]{64}")) {
                     writeJson(sock, 400, "{\"error\":\"trusted https url and sha256 are required\"}", session, false);
-                    return;
+                    return false;
                 }
                 writeJson(sock, 202, "{\"ok\":true,\"updating\":true}", session, false);
                 Thread t = new Thread(() -> {
@@ -346,7 +392,7 @@ public final class ControlServer {
                 }, "backstage-app-update");
                 t.setDaemon(false);
                 t.start();
-                return;
+                return false;
             }
             if ("POST".equals(req.method) && "/shutdown".equals(req.path)) {
                 writeJson(sock, 200, "{\"ok\":true}", session, false);
@@ -359,12 +405,13 @@ public final class ControlServer {
                     t.setDaemon(false);
                     t.start();
                 }
-                return;
+                return false;
             }
 
             writeJson(sock, 404, "{\"error\":\"not found\"}", session, false);
-            return;
+            return false;
         }
+        return false;
     }
 
     private boolean handleCall(Socket sock, HttpReq req, String session, boolean keepAlive) throws IOException {
@@ -504,7 +551,7 @@ public final class ControlServer {
         return Json.stringify(out);
     }
 
-    private String healthJson() {
+    private String healthJson(String challenge) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("ok", true);
         out.put("service", "backstage");
@@ -513,6 +560,8 @@ public final class ControlServer {
         out.put("uid", android.os.Process.myUid());
         out.put("pid", android.os.Process.myPid());
         out.put("uptimeMs", System.currentTimeMillis() - startedAt);
+        String proof = com.deviceagent.crypto.LocalAuth.daemonProof(config.localToken, challenge);
+        if (!proof.isEmpty()) out.put("proof", proof);
         Map<String, Object> relay = new LinkedHashMap<>();
         if (daemon != null) {
             relay.put("url", daemon.relayUrl());
@@ -561,6 +610,11 @@ public final class ControlServer {
     private boolean authorized(HttpReq req) {
         String expected = config.localToken == null ? "" : config.localToken;
         if (expected.isEmpty()) return false;
+        String hmacAuth = req.header("x-backstage-auth");
+        if (hmacAuth != null && !hmacAuth.isBlank()) {
+            return com.deviceagent.crypto.LocalAuth.verifyRequestHeader(
+                    expected, hmacAuth, req.method, req.path, req.body, System.currentTimeMillis());
+        }
         String auth = req.header("authorization");
         if (auth == null) return false;
         String prefix = "Bearer ";
@@ -622,6 +676,7 @@ public final class ControlServer {
             case 401 -> "Unauthorized";
             case 404 -> "Not Found";
             case 413 -> "Payload Too Large";
+            case 429 -> "Too Many Requests";
             case 500 -> "Error";
             default -> "OK";
         };

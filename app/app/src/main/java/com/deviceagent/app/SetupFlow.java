@@ -36,8 +36,10 @@ final class SetupFlow {
         AgentActivity.Session s = a.session;
         if ("help".equals(s.page)) help();
         else if ("access".equals(s.page)) accessScreen();
+        else if ("optional".equals(s.page)) optionalFeaturesScreen();
         else if ("connect".equals(s.page) || "manual".equals(s.page) || !a.config.hasAssistant()) connectScreen();
-        else accessScreen();
+        else if (!a.config.paired && !a.daemonUp) accessScreen();
+        else optionalFeaturesScreen();
         updateHint();
     }
 
@@ -234,6 +236,90 @@ final class SetupFlow {
         LinearLayout col = k.column(); k.text(col, title, 15, k.ink, true); k.body(col, body);
         row.addView(col, new LinearLayout.LayoutParams(0, -2, 1));
         parent.addView(row);
+    }
+
+    private void optionalFeaturesScreen() {
+        heading(AppCopy.TOUR_TITLE);
+        k.body(root, AppCopy.TOUR_INTRO);
+        k.space(root, 4);
+
+        boolean screenOffOn = a.config.allowScreenOff;
+        optionalCard(
+                AppCopy.ACTION_ALLOW_SCREEN_OFF,
+                screenOffOn ? AppCopy.STATE_ON : AppCopy.STATE_OFF,
+                screenOffOn,
+                AppCopy.TOUR_SCREEN_OFF_DESC,
+                screenOffOn ? AppCopy.ACTION_TURN_OFF : AppCopy.ACTION_TURN_ON,
+                () -> a.toggleScreenOff(!screenOffOn));
+
+        boolean mobileDataOn = a.config.keepUsbDebugging;
+        optionalCard(
+                AppCopy.ACTION_STAY_ONLINE_OFF_WIFI,
+                mobileDataOn ? AppCopy.STATE_ON : AppCopy.STATE_OFF,
+                mobileDataOn,
+                AppCopy.TOUR_MOBILE_DATA_DESC,
+                mobileDataOn ? AppCopy.ACTION_TURN_OFF : AppCopy.ACTION_TURN_ON,
+                () -> a.toggleOffWifi(!mobileDataOn));
+
+        int blockedCount = a.blockedAppsCount();
+        optionalCard(
+                AppCopy.SEGMENT_BLOCKED,
+                AppCopy.blockedCountLabel(blockedCount),
+                blockedCount > 0,
+                AppCopy.TOUR_BLOCKED_APPS_DESC,
+                AppCopy.ACTION_MANAGE_BLOCKED,
+                a::openBlockedPickerFromTour);
+
+        String locState = a.locationState();
+        boolean locOn = LocationProvider.allowed(a);
+        optionalCard(
+                AppCopy.ACTION_ALLOW_LOCATION,
+                locState,
+                locOn,
+                AppCopy.TOUR_LOCATION_DESC,
+                locOn ? AppCopy.ACTION_MANAGE_LOCATION : AppCopy.ACTION_ALLOW_LOCATION,
+                a::locationAccess);
+
+        boolean shellOn = a.config.allowShell;
+        optionalCard(
+                AppCopy.ACTION_ALLOW_SHELL,
+                shellOn ? AppCopy.STATE_ON : AppCopy.STATE_OFF,
+                shellOn,
+                AppCopy.TOUR_SHELL_DESC,
+                shellOn ? AppCopy.ACTION_TURN_OFF : AppCopy.ACTION_TURN_ON,
+                () -> {
+                    if (!shellOn) {
+                        new AlertDialog.Builder(a)
+                                .setTitle(AppCopy.ACTION_ALLOW_SHELL)
+                                .setMessage(AppCopy.ALLOW_SHELL_BODY)
+                                .setPositiveButton(AppCopy.ACTION_TURN_ON, (d, w) -> a.toggleAllowShell(true))
+                                .setNegativeButton(AppCopy.CANCEL, null)
+                                .show();
+                    } else {
+                        a.toggleAllowShell(false);
+                    }
+                });
+
+        k.space(root, 12);
+        k.button(root, AppCopy.TOUR_FINISH, UiKit.PRIMARY, guard(a::finishOptionalTour));
+        if (!a.config.optionalTourDone) {
+            k.button(root, AppCopy.TOUR_SKIP, UiKit.QUIET, guard(a::finishOptionalTour));
+        }
+    }
+
+    private void optionalCard(String title, String badge, boolean active, String description, String buttonLabel, Runnable action) {
+        LinearLayout card = k.card(root);
+        LinearLayout header = k.row();
+        TextView t = k.text(null, title, 17, k.ink, true);
+        header.addView(t, new LinearLayout.LayoutParams(0, -2, 1));
+        TextView pill = k.pill(null, badge, active ? k.green : k.muted, active ? k.greenSoft : k.raised);
+        LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-2, -2);
+        pp.setMarginStart(k.dp(8));
+        header.addView(pill, pp);
+        card.addView(header, new LinearLayout.LayoutParams(-1, -2));
+        TextView body = k.body(card, description);
+        body.setPadding(0, k.dp(8), 0, k.dp(4));
+        k.button(card, buttonLabel, UiKit.SECONDARY, guard(action));
     }
 
     private void help() {

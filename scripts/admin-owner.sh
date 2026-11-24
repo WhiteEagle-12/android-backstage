@@ -7,8 +7,8 @@
 #   ./scripts/admin-owner.sh delete <email|ownerId> --yes
 set -euo pipefail
 
-PROJECT="${BACKSTAGE_WORK_PROJECT:-android-backstage-node2}"
-ACCOUNT="${BACKSTAGE_WORK_ACCOUNT:-gavin.pate.mt@gmail.com}"
+PROJECT="${BACKSTAGE_WORK_PROJECT:?Set BACKSTAGE_WORK_PROJECT to your GCP project ID}"
+ACCOUNT="${BACKSTAGE_WORK_ACCOUNT:?Set BACKSTAGE_WORK_ACCOUNT to your gcloud operator email}"
 ZONE="${BACKSTAGE_WORK_ZONE:-us-central1-a}"
 INSTANCE="${BACKSTAGE_WORK_INSTANCE:-backstage-gateway-1}"
 
@@ -60,21 +60,24 @@ case "$cmd" in
     ;;
 esac
 
+ref_b64="$(printf '%s' "$ref" | base64 -w0)"
+body_b64="$(printf '%s' "$body" | base64 -w0)"
+
 gcloud compute ssh "$INSTANCE" \
   --project="$PROJECT" \
   --account="$ACCOUNT" \
   --zone="$ZONE" \
   --tunnel-through-iap \
-  --command="sudo BACKSTAGE_ADMIN_METHOD='$method' BACKSTAGE_ADMIN_ENDPOINT='$endpoint' BACKSTAGE_ADMIN_REF='$ref' BACKSTAGE_ADMIN_BODY='$body' node -e '
+  --command="sudo BACKSTAGE_ADMIN_METHOD='$method' BACKSTAGE_ADMIN_ENDPOINT='$endpoint' BACKSTAGE_ADMIN_REF_B64='$ref_b64' BACKSTAGE_ADMIN_BODY_B64='$body_b64' node -e '
 const fs = require(\"node:fs\");
 const env = Object.fromEntries(fs.readFileSync(\"/etc/android-backstage/env\",\"utf8\").split(/\r?\n/).filter(l=>l&&!l.startsWith(\"#\")&&l.includes(\"=\")).map(l=>{const i=l.indexOf(\"=\");return [l.slice(0,i).trim(),l.slice(i+1).trim()];}));
 const token = env.RELAY_INTERNAL_TOKEN || env.RELAY_ADMIN_TOKEN;
 if (!token) { console.error(\"Missing RELAY_INTERNAL_TOKEN in /etc/android-backstage/env\"); process.exit(1); }
 const port = Number(env.PORT || 18424);
 const method = process.env.BACKSTAGE_ADMIN_METHOD;
-const ref = encodeURIComponent(process.env.BACKSTAGE_ADMIN_REF || \"\");
+const ref = encodeURIComponent(Buffer.from(process.env.BACKSTAGE_ADMIN_REF_B64 || \"\", \"base64\").toString(\"utf8\"));
 const endpoint = process.env.BACKSTAGE_ADMIN_ENDPOINT.replace(\"__REF__\", ref);
-const body = process.env.BACKSTAGE_ADMIN_BODY || \"\";
+const body = Buffer.from(process.env.BACKSTAGE_ADMIN_BODY_B64 || \"\", \"base64\").toString(\"utf8\");
 fetch(\"http://127.0.0.1:\" + port + endpoint, {
   method,
   headers: { \"x-backstage-internal-key\": token, \"content-type\": \"application/json\" },

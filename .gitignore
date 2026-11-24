@@ -18,13 +18,26 @@ agent-tools/
 
 # Real relay creds + link keys — never commit; use config/backstage.json.example
 config/backstage.json
+config/receipts/
 
 # Local signing material and relay/runtime secrets
+.env
+.env.local
+gateway/.env
+relay/.env
+deploy/.env
+deploy/gcp/backstage.env
+vault.key
+backup-passphrase.txt
+*.jks
+*.keystore
+*.p12
 app/keystore/*.jks
 relay/data/
-deploy/.env
 *.lock/
 *.receipts.jsonl
+review/
+.tmp-audit/
 
 # Downloaded build tools
 .toolchains/

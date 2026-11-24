@@ -12,12 +12,52 @@ import java.util.*;
 public final class FileChunks {
     public static final int MAX_BYTES=1024*1024;
     private FileChunks(){}
+    /** Block access to Backstage daemon state, private app data, and ADB keys (including via symlinks or .. traversal). */
+    public static void requireSafePath(String rawPath){
+        if(rawPath==null||rawPath.isBlank())throw new IllegalArgumentException("Use a valid file path");
+        Path p;
+        try{p=Paths.get(rawPath);}catch(InvalidPathException e){throw new IllegalArgumentException("Use a valid file path");}
+        Path normalized=p.toAbsolutePath().normalize();
+        checkBlockedNormalized(normalized.toString());
+        try{
+            Path real=Files.exists(normalized)?normalized.toRealPath():resolveParentReal(normalized);
+            checkBlockedNormalized(real.toString());
+        }catch(InputNotSentException e){throw e;}
+        catch(Exception ignored){}
+    }
+    private static Path resolveParentReal(Path normalized)throws Exception{
+        Path cur=normalized;
+        Deque<Path> tail=new ArrayDeque<>();
+        while(cur!=null&&!Files.exists(cur)){
+            if(cur.getFileName()!=null)tail.addFirst(cur.getFileName());
+            cur=cur.getParent();
+        }
+        Path base=cur!=null?cur.toRealPath():normalized.getRoot();
+        if(base==null)return normalized;
+        for(Path seg:tail)base=base.resolve(seg);
+        return base.normalize();
+    }
+    private static void checkBlockedNormalized(String pathStr){
+        String p=pathStr.replace('\\','/');
+        while(p.endsWith("/")&&p.length()>1)p=p.substring(0,p.length()-1);
+        if(p.equals("/data/local/tmp/backstage")||p.startsWith("/data/local/tmp/backstage/")
+                ||p.equals("/data/misc/adb")||p.startsWith("/data/misc/adb/")
+                ||p.equals("/data/data/com.androidbackstage.app")||p.startsWith("/data/data/com.androidbackstage.app/")
+                ||p.matches("^/data/user/[^/]+/com\\.androidbackstage\\.app(/.*)?$")
+                ||p.matches("^/data/user_de/[^/]+/com\\.androidbackstage\\.app(/.*)?$")
+                ||p.equals("/sdcard/Android/data/com.androidbackstage.app")||p.startsWith("/sdcard/Android/data/com.androidbackstage.app/")
+                ||p.matches("^/storage/emulated/[^/]+/Android/data/com\\.androidbackstage\\.app(/.*)?$")){
+            throw fail("path_blocked","Access to Backstage internal files is blocked.");
+        }
+    }
     public static Map<String,Object> read(String name,Long offset,Integer length,String expected){
         long start=offset==null?0:offset;
         if(start<0||length!=null&&(length<1||length>MAX_BYTES))throw new IllegalArgumentException("Use a nonnegative offset and a length from 1 to 1048576 bytes");
         if(expected!=null&&!expected.matches("file_[a-f0-9]{64}"))throw new IllegalArgumentException("Use fileId from the first chunk");
+        requireSafePath(name);
         try{
             ActionDeadline.check();Path path=Paths.get(name).toRealPath();
+            checkBlockedNormalized(path.toString());
             var before=Files.readAttributes(path,BasicFileAttributes.class);
             if(!before.isRegularFile())throw fail("not_a_file","Choose a regular file to download.");
             String version=identity(path,before);

@@ -434,3 +434,69 @@ test("POST /work/account/delete and /work/internal/admin wipe owner, devices, gr
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("paused assistants are blocked on all gateway routes, webhooks clear on pause/revoke, and DCR brand spoofing is neutralized", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bs-wave2-sec-"));
+  let server = null;
+  const webhookDeletes = [];
+  const fakeFetch = async (url, init) => {
+    if (init?.method === "DELETE" && String(url).endsWith("/v1/events/webhooks")) {
+      webhookDeletes.push({ url, auth: init?.headers?.Authorization });
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true, devices: [] }) };
+  };
+  try {
+    const connections = createConnections({ directory: path.join(dir, "connections"), relayUrl: "http://127.0.0.1:18420", fetchImpl: fakeFetch });
+    const artifacts = createArtifacts({ directory: path.join(dir, "artifacts") });
+    const owners = createOwners({ stateFile: path.join(dir, "owners.json"), origin: "http://127.0.0.1" });
+    const app = createWorkApp({
+      base: "http://127.0.0.1/work",
+      stateFile: path.join(dir, "oauth.json"),
+      approvalFile: path.join(dir, "approval.json"),
+      connections,
+      owners,
+      artifacts,
+    });
+    server = await new Promise((resolve) => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+
+    // 1. DCR brand spoofing: claiming "ChatGPT" with evil.example redirect gets neutralized to evil.example
+    const reg = await fetch(`${base}/work/register`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ client_name: "ChatGPT", redirect_uris: ["https://evil.example/cb"] }),
+    });
+    assert.equal(reg.status, 201);
+    const { client_id } = await reg.json();
+    const state = JSON.parse(fs.readFileSync(path.join(dir, "oauth.json"), "utf8"));
+    assert.equal(state.clients[client_id].name, "evil.example");
+
+    // 2. Pausing a grant clears its registered device webhook
+    const ownerId = "owner_" + "a".repeat(43);
+    const devId = "phone_" + "b".repeat(32);
+    fs.writeFileSync(path.join(dir, "connections", "devices.json"), JSON.stringify({
+      [devId]: { ownerId, name: "Phone", createdAt: Date.now(), linkedAt: Date.now(), needsReconnect: false },
+    }));
+    fs.mkdirSync(path.join(dir, "connections", "phones"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "connections", "phones", devId + ".json"), JSON.stringify({
+      relayUrl: "http://127.0.0.1:18420",
+      apiKey: "bsc_webhook_test",
+      agentId: "agt_0123456789abcdef",
+      device: "Phone",
+      links: { Phone: { deviceId: "dev_test1", linkKey: crypto.randomBytes(32).toString("base64url") } },
+    }));
+    const conn2 = createConnections({ directory: path.join(dir, "connections"), relayUrl: "http://127.0.0.1:18420", fetchImpl: fakeFetch });
+    const grantId = conn2.authorize(ownerId, client_id, "evil.example", [devId]);
+    conn2.setWebhookOwner(devId, grantId);
+    assert.equal(conn2.isPaused(grantId), false);
+    conn2.setPaused(ownerId, grantId, true);
+    assert.equal(conn2.isPaused(grantId), true);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.equal(webhookDeletes.length, 1);
+    assert.equal(webhookDeletes[0].auth, "Bearer bsc_webhook_test");
+    artifacts.close();
+  } finally {
+    await new Promise((r) => (server ? server.close(r) : r()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

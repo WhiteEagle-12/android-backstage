@@ -64,10 +64,27 @@ public final class LocalShell {
         try{long pid=((Number)Process.class.getMethod("pid").invoke(process)).longValue();if(pid>1&&pid<=Integer.MAX_VALUE)android.system.Os.kill(-(int)pid,android.system.OsConstants.SIGKILL);}catch(Exception ignored){}
     }
 
+    private static final int MAX_STREAM_BYTES = 1024 * 1024;
+    private static final byte[] TRUNCATED_SUFFIX = "\n... [output truncated at 1 MiB]\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
     private static Thread pump(InputStream in, ByteArrayOutputStream out) {
         Thread t = new Thread(() -> {
             try {
-                byte[] buffer = new byte[8192]; int read; while ((read = in.read(buffer)) != -1) out.write(buffer, 0, read);
+                byte[] buffer = new byte[8192];
+                int read;
+                int kept = 0;
+                boolean truncated = false;
+                while ((read = in.read(buffer)) != -1) {
+                    if (kept < MAX_STREAM_BYTES) {
+                        int take = Math.min(read, MAX_STREAM_BYTES - kept);
+                        out.write(buffer, 0, take);
+                        kept += take;
+                        if (take < read) truncated = true;
+                    } else {
+                        truncated = true;
+                    }
+                }
+                if (truncated) out.write(TRUNCATED_SUFFIX);
             } catch (IOException ignored) {
             }
         });

@@ -89,7 +89,10 @@ public final class AgentService extends Service {
             new Thread(() -> {
                 try {
                     AgentConfig c = AgentConfig.load(this);
-                    SimpleHttp.postJsonOnce("http://127.0.0.1:" + c.daemonPort + "/shutdown", "{}", 4000, c.localToken);
+                    if (ConnectionRecovery.verifiedHealth(c.daemonPort, c.localToken, 2000) != null) {
+                        String auth = com.deviceagent.crypto.LocalAuth.requestHeader(c.localToken, "POST", "/shutdown", "{}");
+                        SimpleHttp.requestOnceWithHeaders("POST", "http://127.0.0.1:" + c.daemonPort + "/shutdown", "{}", 4000, Map.of("X-Backstage-Auth", auth));
+                    }
                 } catch (Exception e) {
                     Log.e(TAG, "Stop failed; open app to retry", e);
                     setLast("Pause not confirmed. Open Backstage to retry.");
@@ -182,7 +185,7 @@ public final class AgentService extends Service {
     private void tryStart(AgentConfig config) {
         if (!running || Thread.currentThread().isInterrupted() || !AgentConfig.load(this).accessEnabled) return;
         try {
-            if(ConnectionRecovery.foreignService(config.daemonPort)) {
+            if(ConnectionRecovery.foreignService(config.daemonPort, config.localToken)) {
                 AgentConfig.savePort(this,ConnectionRecovery.availablePort(config.daemonPort));
                 config=AgentConfig.load(this);
                 setLast("Moved Backstage to a free local port");
@@ -191,6 +194,7 @@ public final class AgentService extends Service {
         if (healthOk()) {
             lastDiagnosis = "ok";
             ensurePolling(config);
+            StartScripts.cleanup(this);
             RecoveryNotifier.clear(this);
             setLast(healthSummary());
             return;
@@ -200,11 +204,11 @@ public final class AgentService extends Service {
             setLast("no ADB key");
             return;
         }
-        // Shizuku and `adb tcpip` leave adbd listening on plain TCP; that works without Wireless debugging.
+        // Only connect over authenticated TLS Wireless debugging; never dial unauthenticated loopback TCP 5555.
         boolean asked = userReconnect;
         userReconnect = false;
-        AdbLaunchAttempt attempt = openAdbOnce(ADB_TCP_PORT, 3_000);
-        if (attempt.connection == null && wirelessDebuggingOff()) {
+        AdbLaunchAttempt attempt = new AdbLaunchAttempt(null, 0, "no_port", "no wireless-debug connect port");
+        if (wirelessDebuggingOff()) {
             String blocked = asked ? null : WifiApproval.blockedReason(this);
             if (blocked != null) {
                 lastDiagnosis = "wireless_off";
@@ -342,10 +346,10 @@ public final class AgentService extends Service {
 
     private boolean healthOk() {
         try {
-            String raw = SimpleHttp.get("http://127.0.0.1:" + AgentConfig.load(this).daemonPort + "/health", 2000, null);
-            Map<String, Object> h = Json.object(raw);
-            // Another service on the same port (an older agent build) must not count as "up".
-            return SetupRules.isCurrentDaemon(h);
+            AgentConfig c = AgentConfig.load(this);
+            Map<String, Object> h = ConnectionRecovery.verifiedHealth(c.daemonPort, c.localToken, 2000);
+            // Another service on the same port (or a spoofed daemon without localToken) must not count as "up".
+            return h != null && SetupRules.isCurrentDaemon(h);
         } catch (Exception e) {
             return false;
         }
@@ -353,8 +357,9 @@ public final class AgentService extends Service {
 
     private String healthSummary() {
         try {
-            String raw = SimpleHttp.get("http://127.0.0.1:" + AgentConfig.load(this).daemonPort + "/health", 2000, null);
-            Map<String, Object> h = Json.object(raw);
+            AgentConfig c = AgentConfig.load(this);
+            Map<String, Object> h = ConnectionRecovery.verifiedHealth(c.daemonPort, c.localToken, 2000);
+            if (h == null) return "daemon unverified";
             Object relay = h.get("relay");
             String relayBit = "relay off";
             if (relay instanceof Map) {
@@ -373,13 +378,15 @@ public final class AgentService extends Service {
         if (!config.hasAssistant()) return;
         try {
             String endpoint = "http://127.0.0.1:" + config.daemonPort;
-            Map<String, Object> health = Json.object(SimpleHttp.get(endpoint + "/health", 2000, null));
+            Map<String, Object> health = ConnectionRecovery.verifiedHealth(config.daemonPort, config.localToken, 2000);
+            if (health == null) return;
             Object relay = health.get("relay");
             if (relay instanceof Map && Boolean.TRUE.equals(((Map<?, ?>) relay).get("polling"))) return;
             String body = Json.stringify(Json.mapOf("relayUrl", config.relayUrl,
                     "deviceToken", config.deviceToken, "deviceName", config.deviceName,
                     "deviceId", config.deviceId));
-            SimpleHttp.postJsonOnce(endpoint + "/configure", body, 4000, config.localToken);
+            String auth = com.deviceagent.crypto.LocalAuth.requestHeader(config.localToken, "POST", "/configure", body);
+            SimpleHttp.requestOnceWithHeaders("POST", endpoint + "/configure", body, 4000, Map.of("X-Backstage-Auth", auth));
             setLast("Restarted the phone's server connection");
         } catch (Exception error) {
             Log.w(TAG, "relay poll recovery", error);
@@ -495,8 +502,9 @@ public final class AgentService extends Service {
                 try (java.net.Socket socket = new java.net.Socket()) {
                     socket.connect(new java.net.InetSocketAddress("127.0.0.1", config.daemonPort), 2_000);
                     socket.setSoTimeout(45_000);
-                    socket.getOutputStream().write(("GET /watch HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer "
-                            + config.localToken + "\r\n\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    String watchAuth = com.deviceagent.crypto.LocalAuth.requestHeader(config.localToken, "GET", "/watch", "");
+                    socket.getOutputStream().write(("GET /watch HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Backstage-Auth: "
+                            + watchAuth + "\r\n\r\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(socket.getInputStream(), java.nio.charset.StandardCharsets.UTF_8));
                     String status = in.readLine();
                     if (status != null && status.contains(" 200 ")) {

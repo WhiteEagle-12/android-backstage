@@ -13,8 +13,7 @@ fi
 if [[ -z "${BACKSTAGE_RELAY_URL:-}" && ! -f "$ROOT/config/backstage.json" ]]; then
   cat <<'EOF'
 Android Backstage: no relay configured.
-  Either commit config/backstage.json  ({"relayUrl": "...", "apiKey": "bsk_...", "device": "phone"})
-  or set Cloud Agent secrets BACKSTAGE_RELAY_URL and BACKSTAGE_API_KEY.
+  Set Cloud Agent secrets BACKSTAGE_RELAY_URL and BACKSTAGE_API_KEY (never commit config/backstage.json with live keys).
   See docs/SETUP.md.
 EOF
   exit 0

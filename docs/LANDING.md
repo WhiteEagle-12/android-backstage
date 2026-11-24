@@ -25,19 +25,18 @@ read or issue a command. With the local CLI that client is your own computer.
 With the hosted connection used by ChatGPT, Codex, Cursor and other assistants,
 that client is the Backstage server, which therefore can see what your assistant
 asks and what your phone answers. Self-host the whole thing, or use ours. Every
-line is open source (Apache-2.0).
+line is source-available (`FSL-1.1-ALv2`, converting to Apache-2.0 after 2 years).
 
 ## Pricing
 
-| | Free | Plus | Team |
+| | Personal | Pro | Team |
 | --- | --- | --- | --- |
 | Devices on `relay.android-backstage.com` | 1 | 5 | 25 (more on request) |
 | Self-hosted relay | unlimited | unlimited | unlimited |
-| Usage | generous limits | no limits | no limits |
-| Price | $0 | $7 / month | $50 / month |
+| Parallel virtual displays | 1 | Multi | Multi |
+| Price | $0 | $9 / month ($7/mo yearly) | $39 / month |
 
-Everything in the product works on every tier. Paid tiers pay for hosting,
-uptime, and support.
+See `android-backstage.com/#pricing` for current hosted plan details and limits.
 
 ## What people ask first
 

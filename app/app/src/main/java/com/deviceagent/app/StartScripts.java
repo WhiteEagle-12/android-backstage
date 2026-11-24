@@ -33,7 +33,8 @@ public final class StartScripts {
                 config.links,
                 config.deviceId,
                 config.keepUsbDebugging,
-                config.allowShell);
+                config.allowShell,
+                config.allowScreenOff);
     }
 
     public static String apkPath(Context context) {
@@ -41,6 +42,16 @@ public final class StartScripts {
         return src == null ? "" : src;
     }
 
+    /** Remove any temporary external start.sh so credentials do not sit on shared storage. */
+    public static void cleanup(Context context) {
+        try {
+            File f = file(context);
+            if (f.exists()) f.delete();
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Materialize start.sh only when the user explicitly requests the USB fallback command. */
     public static void write(Context context, AgentConfig config) {
         try {
             File f = file(context);

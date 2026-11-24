@@ -84,6 +84,7 @@ export function createStore(dataDir, { log = console, flushMs = 150 } = {}) {
   let dirty = false;
   let flushTimer = null;
   let flushing = null;
+  let writeVersion = 0;
 
   async function flushAsync() {
     if (flushing) return flushing;
@@ -91,9 +92,12 @@ export function createStore(dataDir, { log = console, flushMs = 150 } = {}) {
       while (dirty) {
         dirty = false;
         if (!fs.existsSync(dataDir)) return;
+        const snapVersion = writeVersion;
         const snapshot = structuredClone(state);
         try {
-          await writePrivateJsonAsync(statePath, snapshot);
+          await writePrivateJsonAsync(statePath, snapshot, {
+            shouldCommit: () => writeVersion === snapVersion,
+          });
         } catch (err) {
           log.warn?.(`store flush failed: ${err.message}`);
         }
@@ -106,16 +110,19 @@ export function createStore(dataDir, { log = console, flushMs = 150 } = {}) {
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     if (!dirty) return;
     dirty = false;
+    writeVersion += 1;
     writePrivateJson(statePath, state);
   }
 
   function persistSync() {
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
     dirty = false;
+    writeVersion += 1;
     writePrivateJson(statePath, state);
   }
 
   function persist() {
+    writeVersion += 1;
     if (flushMs <= 0) { persistSync(); return; }
     dirty = true;
     if (flushTimer) return;
@@ -284,10 +291,16 @@ export function createStore(dataDir, { log = console, flushMs = 150 } = {}) {
     const apiKey=randomToken("bsk_");
     const nextHash=hashToken(apiKey);
     const updated={...account,keyHash:nextHash,rotatedAt:nowIso()};
-    writePrivateJson(statePath,{...state,accounts:{...state.accounts,[id]:updated}});
+    const prev=state.accounts[id];
+    state.accounts[id]=updated;
+    try {
+      persistSync();
+    } catch (err) {
+      state.accounts[id]=prev;
+      throw err;
+    }
     if(account.keyHash)accountsByHash.delete(account.keyHash);
     accountsByHash.set(nextHash,id);
-    state.accounts[id]=updated;
     if(id==="default")fs.rmSync(path.join(dataDir,"first-api-key.txt"),{force:true});
     return {id,apiKey};
   }

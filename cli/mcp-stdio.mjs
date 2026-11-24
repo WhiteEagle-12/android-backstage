@@ -21,7 +21,7 @@ function needsAutoRequestId(name, args) {
   if (short === "artifact") return op === "begin" || op === "delete";
   if (short === "notification") return ["open", "action", "reply", "dismiss"].includes(op);
   if (short === "personal") return op === "alarm" || op === "timer";
-  if (short === "events") return ["watch", "webhook_set", "webhook_clear"].includes(op);
+  if (short === "events") return ["watch", "set_rules", "webhook_set", "webhook_clear"].includes(op);
   if (short === "record") return op === "start" || op === "stop";
   if (short === "clipboard") return args?.text !== undefined;
   if (short === "device") {
@@ -117,6 +117,10 @@ export async function runMcpStdio({ deviceName, callTool, stdin = process.stdin,
       msg = JSON.parse(trimmed);
     } catch {
       write({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "invalid JSON" } });
+      continue;
+    }
+    if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
+      write({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "invalid request" } });
       continue;
     }
     try {

@@ -157,7 +157,7 @@ public final class AccountClient {
         }
         return out;
     }
-    public void decide(String requestId, boolean allow) throws IOException { post("/phone/requests/decide", Json.mapOf("request", requestId, "allow", allow, "allDevices", true)); }
+    public void decide(String requestId, boolean allow) throws IOException { post("/phone/requests/decide", Json.mapOf("request", requestId, "allow", allow)); }
 
     public Methods methods() throws IOException {
         Map<String, Object> m;

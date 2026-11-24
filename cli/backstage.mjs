@@ -299,7 +299,7 @@ export function acceptResultCounter(link, n) {
 }
 
 /** Number, seal and persist one call. Caller holds the link lock. Reusing `callId` lets the phone's journal dedupe a resend. */
-function sealCall(cfg, tool, args, { device, callId: reuse, deadline } = {}) {
+function sealCall(cfg, tool, args, { device, callId: reuse, deadline, subOwner } = {}) {
   args = wireArguments(tool,args);
   const name = device || requireDeviceName(cfg);
   const link = linkFor(cfg, name);
@@ -307,6 +307,7 @@ function sealCall(cfg, tool, args, { device, callId: reuse, deadline } = {}) {
   const callId = reuse || `call-${crypto.randomBytes(8).toString("hex")}`;
   const plaintext = JSON.stringify({
     id: callId, deviceId: link.deviceId, name: tool, arguments: args || {},
+    ...(subOwner ? { subOwner } : {}),
     timeoutMs: budget, expiresAt: Date.now() + budget + 5000,
   });
   const n = String(link.callCounter || Date.now());
@@ -426,7 +427,7 @@ async function directThenRelay(cfg, tool, args, options, sealed) {
       cfg.links = current.links || {};
       cfg.agentId = current.agentId || cfg.agentId;
       return submitCall(cfg, tool, args, {...options, callId, deadline});
-    });
+    }, { diskLock: !(cfg.inProcessLockOnly || options.inProcessLockOnly) });
     try {
       return await finishCall(cfg, pending);
     } catch (e) {
@@ -505,7 +506,7 @@ async function openResult(cfg, name, callId, status, body) {
   }, { diskLock: !cfg.inProcessLockOnly });
 }
 
-async function encryptedCallLocked(cfg, tool, args, { device } = {}) {
+async function encryptedCallLocked(cfg, tool, args, { device, subOwner } = {}) {
   args = wireArguments(tool,args);
   const name = device || requireDeviceName(cfg);
   const link = linkFor(cfg, name);
@@ -517,6 +518,7 @@ async function encryptedCallLocked(cfg, tool, args, { device } = {}) {
     deviceId: link.deviceId,
     name: tool,
     arguments: args || {},
+    ...(subOwner ? { subOwner } : {}),
     timeoutMs,
     expiresAt: Date.now() + budget + 5000,
   });
@@ -624,7 +626,8 @@ async function uploadFile(cfg, filePath, fileName) {
   }
   const size=fs.statSync(abs).size;
   await requireApiKey(cfg);
-  const started=await api(cfg,"/v1/uploads",{method:"POST",body:{size,name:fileName||path.basename(abs)}});
+  const uploadKey = cfg.links?.[cfg.device]?.apiKey || cfg.apiKey;
+  const started=await api(cfg,"/v1/uploads",{method:"POST",apiKey:uploadKey,body:{size,name:fileName||path.basename(abs)}});
   if(started.status!==201)throw new Error(started.body.error||"upload start failed");
   const id=started.body.id;
   let offset=0, failures=0;
@@ -632,18 +635,18 @@ async function uploadFile(cfg, filePath, fileName) {
     try{
       const end=Math.min(size,offset+8*1024*1024);
       const res=await fetch(`${cfg.transportRelayUrl||cfg.relayUrl}/v1/uploads/${id}`,{method:"PUT",
-        headers:{authorization:`Bearer ${cfg.apiKey}`,"x-upload-offset":String(offset),"content-length":String(end-offset)},
+        headers:{authorization:`Bearer ${uploadKey}`,"x-upload-offset":String(offset),"content-length":String(end-offset)},
         body:fs.createReadStream(abs,{start:offset,end:end-1}),duplex:"half",signal:AbortSignal.timeout(60000)});
       const data=await readJson(res);if(!res.ok)throw new Error(data.error||"chunk failed");
       offset=data.offset;failures=0;
     }catch(e){
       if(++failures>3)throw new Error(`Upload ${id} interrupted: ${e.message}`);
-      const progress=await api(cfg,`/v1/uploads/${id}`);
+      const progress=await api(cfg,`/v1/uploads/${id}`,{apiKey:uploadKey});
       if(progress.status!==200)throw new Error(progress.body.error||"upload unavailable");
       offset=progress.body.offset;
     }
   }
-  const done=await api(cfg,`/v1/uploads/${id}/complete`,{method:"POST",body:{}});
+  const done=await api(cfg,`/v1/uploads/${id}/complete`,{method:"POST",apiKey:uploadKey,body:{}});
   if(done.status!==200)throw new Error(done.body.error||"upload finalize failed");return done.body;
 }
 
@@ -831,7 +834,10 @@ async function cmdForget(cfg, name) {
     const links = { ...cfg.links };
     delete links[name];
     const remaining = Object.keys(links);
-    persistConfig(cfg, { links, device: cfg.device === name ? (remaining[0] || "") : cfg.device });
+    const nextDev = cfg.device === name ? (remaining[0] || "") : cfg.device;
+    const patch = { links, device: nextDev };
+    if (isConn && cfg.apiKey === devKey) patch.apiKey = links[nextDev]?.apiKey || "";
+    persistConfig(cfg, patch);
   }
   printJson(body);
 }
@@ -989,6 +995,17 @@ async function cmdMcp(cfg) {
   await runMcpStdio({
     deviceName,
     callTool: async (name, args) => {
+      if ((name === "android.file" && args?.operation === "push" || name === "android.push") && args?.local && args?.remote) {
+        const uploaded = await encryptAndUpload({ ...cfg, device: deviceName }, args.local);
+        return encryptedCall(cfg, "android.file", {
+          operation: "fetch",
+          url: uploaded.url,
+          fileKey: uploaded.fileKey,
+          sha256: uploaded.sha256,
+          remote: args.remote,
+          requestId: args.requestId || crypto.randomUUID(),
+        }, { device: deviceName });
+      }
       if ((name === "android.file" && args?.operation === "pull" || name === "android.pull") && args?.offset == null) {
         if (args.saveTo) {
           const out = await downloadFile(
@@ -999,9 +1016,9 @@ async function cmdMcp(cfg) {
         }
         const first = await encryptedCall(cfg, "android.file", { operation: "pull", path: args.path, offset: 0, length: args.length || 1048576 }, { device: deviceName });
         if (first?.outcome !== "succeeded" || first.eof) return first;
-        const dir = path.join(os.tmpdir(), "backstage-pulls");
-        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-        const dest = path.join(dir, `${Date.now()}-${path.basename(args.path).replace(/[^A-Za-z0-9._-]/g, "_")}`);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "backstage-pull-"));
+        fs.chmodSync(dir, 0o700);
+        const dest = path.join(dir, path.basename(args.path).replace(/[^A-Za-z0-9._-]/g, "_"));
         const out = await downloadFile(
           (tool, a) => encryptedCall(cfg, tool, a, { device: deviceName }),
           { remote: args.path, local: dest, device: deviceName },
@@ -1135,7 +1152,7 @@ function isMain() {
   const entry = process.argv[1];
   if (!entry) return false;
   try {
-    return pathToFileURL(path.resolve(entry)).href === import.meta.url;
+    return pathToFileURL(fs.realpathSync(entry)).href === import.meta.url;
   } catch {
     return false;
   }

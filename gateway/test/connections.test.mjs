@@ -91,19 +91,19 @@ test('revoking a grant while it waits on the shared phone lock prevents dispatch
 
 test('submission errors retain no-input certainty without an invented recovery job',async()=>{
  const {classifyCallError}=await import('../connections.mjs');
- const busy=classifyCallError(Object.assign(Error('queue full'),{code:'relay_busy',inputDelivered:false}),{name:'Redmagic'});
+ const busy=classifyCallError(Object.assign(Error('queue full'),{code:'relay_busy',inputDelivered:false}),{name:'TestPhone'});
  assert.equal(busy.code,'relay_busy');assert.equal(busy.inputDelivered,false);assert.equal(busy.jobId,undefined);
- const rejected=classifyCallError(Object.assign(Error('submission aborted by relay validation'),{code:'submission_rejected',inputDelivered:false}),{name:'Redmagic'});
+ const rejected=classifyCallError(Object.assign(Error('submission aborted by relay validation'),{code:'submission_rejected',inputDelivered:false}),{name:'TestPhone'});
  assert.equal(rejected.code,'submission_rejected');assert.equal(rejected.inputDelivered,false);
- const unknown=classifyCallError(Object.assign(Error('fetch failed'),{jobId:'call-123456789abcdef0',inputDelivered:null}),{name:'Redmagic'});
+ const unknown=classifyCallError(Object.assign(Error('fetch failed'),{jobId:'call-123456789abcdef0',inputDelivered:null}),{name:'TestPhone'});
  assert.equal(unknown.jobId,'call-123456789abcdef0');
 });
 
 test('a failed phone download is a definite tool failure, even when curl says it timed out',async()=>{
  const {classifyCallError}=await import('../connections.mjs');
  const text='job call-4d1718a063ff2266: command failed (28): rm -f /data/local/tmp/backstage/dl-1.bsf1; curl -L --fail --connect-timeout 15 -o dl http://100.64.0.10:18426/v1/files/f\ncurl: (28) Connection timed out after 15002 milliseconds';
- const failed=classifyCallError(Object.assign(Error(text),{inputDelivered:null}),{name:'Redmagic'});
+ const failed=classifyCallError(Object.assign(Error(text),{inputDelivered:null}),{name:'TestPhone'});
  assert.equal(failed.code,'tool_failed');assert.equal(failed.jobId,'call-4d1718a063ff2266');assert.match(failed.message,/^command failed \(28\)/);
- const lost=classifyCallError(Object.assign(Error('job call-123456789abcdef0 timed out. Query its status'),{inputDelivered:null}),{name:'Redmagic'});
+ const lost=classifyCallError(Object.assign(Error('job call-123456789abcdef0 timed out. Query its status'),{inputDelivered:null}),{name:'TestPhone'});
  assert.equal(lost.code,'uncertain');
 });
