@@ -25,9 +25,9 @@ final class WifiApproval {
     /** Null when Wireless debugging can turn on silently; otherwise why not, for the owner. */
     static String blockedReason(Context context) {
         String bssid = currentBssid(context);
-        if (bssid == null) return "It reconnects by itself on an approved Wi-Fi network.";
+        if (bssid == null) return "Backstage reconnects automatically on an approved Wi-Fi network.";
         if (trusted(context).contains(bssid)) return null;
-        return "This Wi-Fi access point is not approved for Wireless debugging yet.";
+        return "This Wi-Fi network isn’t approved for automatic reconnect yet.";
     }
 
     @SuppressWarnings("deprecation")

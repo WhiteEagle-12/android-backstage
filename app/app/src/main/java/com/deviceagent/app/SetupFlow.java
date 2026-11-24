@@ -248,6 +248,7 @@ final class SetupFlow {
         if (!a.accountServer()) k.button(root, AppCopy.ACTION_CONNECTION_CODE, UiKit.SECONDARY, guard(a::newConnectionCode));
         LinearLayout advanced = k.card(root);
         k.title(advanced, AppCopy.SECTION_CONNECTION);
+        k.body(advanced, AppCopy.SUB_ADVANCED_TOGGLE);
         k.button(advanced, AppCopy.ACTION_CONNECTION_DETAILS, UiKit.SECONDARY, a::showConnectionDetails);
         k.button(advanced, AppCopy.ACTION_DIAGNOSTIC_LOG, UiKit.SECONDARY, a::showDiagnosticLog);
         if (a.accountServer()) k.button(advanced, AppCopy.ACTION_MANAGE_BROWSER, UiKit.SECONDARY, a::openAccountPage);

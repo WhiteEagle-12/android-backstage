@@ -6,8 +6,10 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-/** Account, location and connection settings, grouped into cards of rows. */
+/** Account, optional permissions/features, updates, and collapsible troubleshooting tools. */
 final class SettingsTab extends TabPage {
+    private boolean advancedOpen;
+
     SettingsTab(AgentActivity activity, UiKit kit) { super(activity, kit, AppCopy.TAB_SETTINGS); }
 
     @Override void render() {
@@ -15,34 +17,41 @@ final class SettingsTab extends TabPage {
         if (a.accountServer()) put("account", "account", box -> {
             k.section(box, AppCopy.SECTION_ACCOUNT);
             LinearLayout card = group(box);
-            row(card, AppCopy.ACTION_SIGN_IN_METHODS, null, guard(a::signInMethodsDialog), true);
-            row(card, AppCopy.ACTION_MANAGE_BROWSER, null, a::openAccountPage, false);
+            row(card, AppCopy.ACTION_SIGN_IN_METHODS, AppCopy.SUB_SIGN_IN_METHODS, null, guard(a::signInMethodsDialog), true);
+            row(card, AppCopy.ACTION_MANAGE_BROWSER, AppCopy.SUB_MANAGE_BROWSER, null, a::openAccountPage, false);
         });
         String location = a.locationState();
-        put("location", "location|" + location, box -> {
-            k.section(box, AppCopy.SECTION_LOCATION);
+        put("options", "options|" + location + "|" + a.config.keepUsbDebugging + "|" + a.config.allowShell, box -> {
+            k.section(box, AppCopy.SECTION_OPTIONS);
             LinearLayout card = group(box);
-            row(card, LocationProvider.allowed(a) ? AppCopy.ACTION_MANAGE_LOCATION : AppCopy.ACTION_ALLOW_LOCATION, location, a::locationAccess, false);
-        });
-        put("connection", "connection|" + a.config.daemonPort + "|" + a.config.keepUsbDebugging + "|" + a.config.allowShell, box -> {
-            k.section(box, AppCopy.SECTION_CONNECTION);
-            LinearLayout card = group(box);
-            row(card, AppCopy.ACTION_STAY_ONLINE_OFF_WIFI, a.config.keepUsbDebugging ? AppCopy.STATE_ON : AppCopy.STATE_OFF, this::offWifiDialog, true);
-            row(card, AppCopy.ACTION_ALLOW_SHELL, a.config.allowShell ? AppCopy.STATE_ON : AppCopy.STATE_OFF, this::shellDialog, true);
-            row(card, AppCopy.ACTION_CHANGE_PORT, String.valueOf(a.config.daemonPort), a::portDialog, true);
-            row(card, AppCopy.ACTION_COPY_LOCAL_TOKEN, null, a::copyLocalToken, true);
-            row(card, AppCopy.ACTION_USB_COMMAND, null, a::showUsbCommand, true);
-            row(card, AppCopy.ACTION_CONNECTION_DETAILS, null, a::showConnectionDetails, true);
-            row(card, AppCopy.ACTION_DIAGNOSTIC_LOG, null, a::showDiagnosticLog, false);
+            row(card, LocationProvider.allowed(a) ? AppCopy.ACTION_MANAGE_LOCATION : AppCopy.ACTION_ALLOW_LOCATION,
+                    AppCopy.SUB_LOCATION, location, a::locationAccess, true);
+            row(card, AppCopy.ACTION_STAY_ONLINE_OFF_WIFI, AppCopy.SUB_STAY_ONLINE_OFF_WIFI,
+                    a.config.keepUsbDebugging ? AppCopy.STATE_ON : AppCopy.STATE_OFF, this::offWifiDialog, true);
+            row(card, AppCopy.ACTION_ALLOW_SHELL, AppCopy.SUB_ALLOW_SHELL,
+                    a.config.allowShell ? AppCopy.STATE_ON : AppCopy.STATE_OFF, this::shellDialog, false);
         });
         String updateVal = a.updateStatus.isEmpty() ? "v" + BuildInfo.VERSION : a.updateStatus;
         put("updates", "updates|" + a.checkingUpdate + "|" + updateVal + "|" + (a.availableUpdate == null ? 0 : a.availableUpdate.versionCode), box -> {
             k.section(box, AppCopy.SECTION_UPDATES);
             LinearLayout card = group(box);
-            row(card, AppCopy.ACTION_CHECK_UPDATES, updateVal, () -> {
+            row(card, AppCopy.ACTION_CHECK_UPDATES, AppCopy.SUB_CHECK_UPDATES, updateVal, () -> {
                 if (a.availableUpdate != null && a.availableUpdate.versionCode > a.installedVersionCode()) a.showUpdateDialog(a.availableUpdate);
                 else a.checkForUpdates();
             }, false);
+        });
+        put("advanced", "advanced|" + advancedOpen + "|" + a.config.daemonPort, box -> {
+            k.section(box, AppCopy.SECTION_CONNECTION);
+            LinearLayout card = group(box);
+            row(card, AppCopy.ACTION_ADVANCED_TOGGLE, AppCopy.SUB_ADVANCED_TOGGLE,
+                    advancedOpen ? AppCopy.STATE_HIDE : AppCopy.STATE_SHOW, () -> { advancedOpen = !advancedOpen; render(); }, advancedOpen);
+            if (advancedOpen) {
+                row(card, AppCopy.ACTION_CONNECTION_DETAILS, AppCopy.SUB_CONNECTION_DETAILS, null, a::showConnectionDetails, true);
+                row(card, AppCopy.ACTION_DIAGNOSTIC_LOG, AppCopy.SUB_DIAGNOSTIC_LOG, null, a::showDiagnosticLog, true);
+                row(card, AppCopy.ACTION_USB_COMMAND, AppCopy.SUB_USB_COMMAND, null, a::showUsbCommand, true);
+                row(card, AppCopy.ACTION_CHANGE_PORT, AppCopy.SUB_CHANGE_PORT, String.valueOf(a.config.daemonPort), a::portDialog, true);
+                row(card, AppCopy.ACTION_COPY_LOCAL_TOKEN, AppCopy.SUB_COPY_LOCAL_TOKEN, null, a::copyLocalToken, false);
+            }
             TextView version = k.body(box, AppCopy.APP_NAME + " " + BuildInfo.VERSION);
             version.setTextSize(12); version.setGravity(Gravity.CENTER); version.setPadding(0, k.dp(22), 0, k.dp(8));
         });
@@ -83,14 +92,19 @@ final class SettingsTab extends TabPage {
         LinearLayout card = k.card(box); card.setPadding(k.dp(4), k.dp(4), k.dp(4), k.dp(4)); return card;
     }
 
-    private void row(LinearLayout card, String label, String value, Runnable action, boolean divider) {
-        LinearLayout row = k.row(); row.setPadding(k.dp(14), 0, k.dp(10), 0); row.setMinimumHeight(k.dp(54));
+    private void row(LinearLayout card, String label, String subtitle, String value, Runnable action, boolean divider) {
+        LinearLayout row = k.row(); row.setPadding(k.dp(14), k.dp(12), k.dp(10), k.dp(12)); row.setMinimumHeight(k.dp(56));
         row.setBackground(k.ripple(null, 16)); row.setClickable(true); row.setFocusable(true);
         row.setOnClickListener(v -> action.run());
-        TextView l = k.text(null, label, 15, k.ink, false);
-        row.addView(l, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout col = k.column();
+        k.text(col, label, 15, k.ink, false);
+        if (subtitle != null && !subtitle.isEmpty()) {
+            TextView sub = k.text(col, subtitle, 13, k.muted, false);
+            sub.setPadding(0, k.dp(3), k.dp(6), 0);
+        }
+        row.addView(col, new LinearLayout.LayoutParams(0, -2, 1));
         if (value != null && !value.isEmpty()) {
-            TextView v = k.text(null, value, 14, k.muted, false); v.setPadding(k.dp(8), 0, k.dp(6), 0);
+            TextView v = k.text(null, value, 13.5f, k.muted, false); v.setPadding(k.dp(8), 0, k.dp(6), 0);
             row.addView(v);
             row.setContentDescription(label + ", " + value);
         }

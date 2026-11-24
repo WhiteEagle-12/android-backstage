@@ -200,7 +200,6 @@ final class ActivityTab extends TabPage {
                 row.addView(appIcon(pkg), iconParams());
                 LinearLayout col = k.column();
                 k.text(col, a.appLabel(pkg), 15, k.ink, false);
-                TextView p = k.body(col, pkg); p.setTextSize(12); p.setPadding(0, k.dp(2), 0, 0);
                 row.addView(col, new LinearLayout.LayoutParams(0, -2, 1));
                 android.widget.Button remove = k.buttonView(AppCopy.REMOVE, UiKit.QUIET);
                 remove.setContentDescription(AppCopy.REMOVE + " " + a.appLabel(pkg));

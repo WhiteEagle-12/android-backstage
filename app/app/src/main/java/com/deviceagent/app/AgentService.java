@@ -240,7 +240,7 @@ public final class AgentService extends Service {
             if ("auth_revoked".equals(attempt.diagnosis)) {
                 RecoveryNotifier.showOpenApp(this);
             } else {
-                RecoveryNotifier.showReconnect(this, "Android's Wireless debugging connection did not answer.");
+                RecoveryNotifier.showReconnect(this, "Backstage couldn’t reconnect automatically.");
             }
             setLast(attempt.logMessage);
             return;

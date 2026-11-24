@@ -378,10 +378,6 @@ final class LiveTab extends TabPage {
         LinearLayout head = k.row();
         LinearLayout titleCol = k.column();
         k.title(titleCol, label);
-        if (!pkg.isEmpty()) {
-            TextView p = k.body(titleCol, pkg);
-            p.setTextSize(12); p.setPadding(0, k.dp(1), 0, 0);
-        }
         head.addView(titleCol, new LinearLayout.LayoutParams(0, -2, 1));
         if (inControl) k.pill(head, AppCopy.LABEL_IN_CONTROL_SHORT, k.amber, k.amberSoft);
         else k.pill(head, foreground ? AppCopy.LABEL_MAIN_SCREEN : AppCopy.LABEL_AGENT_ACTIVE, k.green, k.greenSoft);

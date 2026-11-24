@@ -1625,7 +1625,9 @@ public final class AgentActivity extends Activity {
 
     void portDialog() {
         if (!checked || daemonPresent || healthUnknown || config.accessEnabled) { showText(AppCopy.PAUSE_FIRST_TITLE, AppCopy.PAUSE_FIRST_BODY); return; }
-        UiKit k = kit; LinearLayout form = k.form(); EditText port = k.field(form, AppCopy.ACTION_CHANGE_PORT, "18422", String.valueOf(config.daemonPort));
+        UiKit k = kit; LinearLayout form = k.form();
+        k.body(form, AppCopy.PORT_DIALOG_BODY);
+        EditText port = k.field(form, AppCopy.ACTION_CHANGE_PORT, "18422", String.valueOf(config.daemonPort));
         port.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle(AppCopy.ACTION_CHANGE_PORT).setView(form).setPositiveButton(AppCopy.SAVE, null).setNegativeButton(AppCopy.CANCEL, null).create();
         dialog.setOnShowListener(d -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
@@ -1635,8 +1637,14 @@ public final class AgentActivity extends Activity {
         })); dialog.show();
     }
     void copyLocalToken() { copy(config.localToken, true); toast(AppCopy.TOKEN_COPIED); }
-    void showUsbCommand() { showText(AppCopy.ACTION_USB_COMMAND, AppCopy.USB_COMMAND_BODY + "\n\n" + StartScripts.oneLiner(this)); }
-    void showDiagnosticLog() { showText(AppCopy.ACTION_DIAGNOSTIC_LOG, AgentService.tailLog(this, 25)); }
+    void showUsbCommand() {
+        String cmd = StartScripts.oneLiner(this);
+        showTextWithCopy(AppCopy.ACTION_USB_COMMAND, AppCopy.USB_COMMAND_BODY + "\n\n" + cmd, cmd);
+    }
+    void showDiagnosticLog() {
+        String log = AgentService.tailLog(this, 25);
+        showTextWithCopy(AppCopy.ACTION_DIAGNOSTIC_LOG, log, log);
+    }
     void showConnectionDetails() {
         showText(AppCopy.ACTION_CONNECTION_DETAILS, String.join("\n",
                 AppCopy.DETAIL_VERSION + ": " + BuildInfo.VERSION,
@@ -1647,11 +1655,14 @@ public final class AgentActivity extends Activity {
                 AppCopy.DETAIL_PAIR_PORT + ": " + config.lastPairPort,
                 AppCopy.DETAIL_CONNECT_PORT + ": " + config.lastConnectPort));
     }
-    private void showText(String title, String body) {
+    private void showText(String title, String body) { showTextWithCopy(title, body, null); }
+    private void showTextWithCopy(String title, String body, String copyValue) {
         TextView text = new TextView(this); text.setText(body.isEmpty() ? AppCopy.NO_DETAILS : body); text.setTextIsSelectable(true);
         text.setPadding(kit.dp(24), kit.dp(16), kit.dp(24), kit.dp(16)); text.setTextColor(kit.ink); text.setTextSize(14);
         ScrollView scroll = new ScrollView(this); scroll.addView(text);
-        new AlertDialog.Builder(this).setTitle(title).setView(scroll).setPositiveButton(AppCopy.DONE, null).show();
+        AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle(title).setView(scroll).setPositiveButton(AppCopy.DONE, null);
+        if (copyValue != null && !copyValue.isEmpty()) b.setNeutralButton(AppCopy.COPY, (d, w) -> { copy(copyValue, false); toast(AppCopy.COPIED); });
+        b.show();
     }
     private void copy(String value, boolean sensitive) {
         ClipData clip = ClipData.newPlainText(AppCopy.APP_NAME, value);
