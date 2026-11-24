@@ -252,7 +252,7 @@ public final class AgentActivity extends Activity {
     private void buildShell() {
         UiKit k = kit;
         getWindow().setStatusBarColor(k.canvas);
-        getWindow().setNavigationBarColor(k.card);
+        getWindow().setNavigationBarColor(k.elevated);
         LinearLayout frame = k.column(); frame.setBackgroundColor(k.canvas);
         frame.setOnApplyWindowInsetsListener((v, insets) -> {
             android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
@@ -273,9 +273,9 @@ public final class AgentActivity extends Activity {
         for (TabPage t : tabs) { t.scroll.setVisibility(View.GONE); pages.addView(t.scroll, new FrameLayout.LayoutParams(-1, -1)); }
 
         notice = new TextView(this);
-        notice.setTextSize(14); notice.setTextColor(k.dark ? k.canvas : Color.WHITE);
-        notice.setBackground(k.shape(k.dark ? k.ink : 0xFF1F2933, 14, 0));
-        notice.setPadding(k.dp(16), k.dp(13), k.dp(16), k.dp(13)); notice.setElevation(k.dp(4));
+        notice.setTextSize(14); notice.setTextColor(k.ink);
+        notice.setBackground(k.shape(k.raised, 12, k.strokeStrong));
+        notice.setPadding(k.dp(16), k.dp(12), k.dp(16), k.dp(12)); notice.setElevation(k.dp(4));
         notice.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         notice.setOnClickListener(v -> { if (!session.busy) { session.message = ""; syncChrome(); } });
         FrameLayout.LayoutParams np = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
@@ -291,7 +291,7 @@ public final class AgentActivity extends Activity {
         frame.addView(ctaBar, new LinearLayout.LayoutParams(-1, -2));
 
         navBar = k.row(); navBar.setGravity(Gravity.CENTER);
-        android.graphics.drawable.GradientDrawable navBg = k.shape(k.card, 0, 0);
+        android.graphics.drawable.GradientDrawable navBg = k.shape(k.elevated, 0, 0);
         navBar.setBackground(new android.graphics.drawable.LayerDrawable(new android.graphics.drawable.Drawable[]{navBg, hairline()}));
         int[] kinds = {AppIcons.LIVE, AppIcons.ACTIVITY, AppIcons.ASSISTANTS, AppIcons.SETTINGS};
         String[] labels = {AppCopy.TAB_LIVE, AppCopy.TAB_ACTIVITY, AppCopy.TAB_ASSISTANTS, AppCopy.TAB_SETTINGS};

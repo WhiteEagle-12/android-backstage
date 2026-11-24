@@ -206,6 +206,72 @@ public final class AndroidTools {
         return tasks().forceFinish(sessionId);
     }
 
+    public Map<String, Object> setUserTakeoverAdmin(String sessionId, boolean active, String confirmId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return Json.mapOf("ok", false, "error", "sessionId is required");
+        }
+        try {
+            Map<String, Object> res = tasks().setUserTakeover(sessionId, active);
+            if (active && confirmId != null && !confirmId.isBlank()) {
+                confirmations.markTakenOver(confirmId, 240_000L);
+            }
+            return res;
+        } catch (RuntimeException e) {
+            return Json.mapOf("ok", false, "error", String.valueOf(e.getMessage()));
+        }
+    }
+
+    public boolean decideConfirmationAdmin(String confirmId, String decision) {
+        String sessionId = confirmations.sessionFor(confirmId);
+        boolean ok = confirmations.decide(confirmId, decision);
+        if (ok && sessionId != null && ("completed".equals(decision) || "cancelled".equals(decision) || "approved".equals(decision))) {
+            try { tasks().setUserTakeover(sessionId, false); } catch (RuntimeException ignored) {}
+        }
+        return ok;
+    }
+
+    public Map<String, Object> userInputAdmin(String sessionId, Integer displayId, Map<String, Object> body) {
+        try {
+            int disp = -1;
+            if (sessionId != null && !sessionId.isBlank()) {
+                disp = tasks().activeDisplayForAdmin(sessionId);
+            } else if (displayId != null) {
+                disp = displayId;
+            }
+            if (disp <= 0) return Json.mapOf("ok", false, "error", "No active private screen for this session.");
+            requireDisplayAllowed(disp);
+            wakeIfNeeded(disp);
+            String action = Json.string(body, "action");
+            if (action == null) return Json.mapOf("ok", false, "error", "action is required");
+            return switch (action) {
+                case "tap" -> {
+                    int x = GesturePlan.integer(body, "x", -1, 0, 100000);
+                    int y = GesturePlan.integer(body, "y", -1, 0, 100000);
+                    yield device.interaction("tap", Json.mapOf("display", disp, "x", x, "y", y));
+                }
+                case "long_press" -> {
+                    int x = GesturePlan.integer(body, "x", -1, 0, 100000);
+                    int y = GesturePlan.integer(body, "y", -1, 0, 100000);
+                    int dur = GesturePlan.integer(body, "durationMs", 650, 300, 3000);
+                    yield device.interaction("long_press", Json.mapOf("display", disp, "x", x, "y", y, "durationMs", dur));
+                }
+                case "swipe" -> {
+                    int x1 = GesturePlan.integer(body, "x1", -1, 0, 100000);
+                    int y1 = GesturePlan.integer(body, "y1", -1, 0, 100000);
+                    int x2 = GesturePlan.integer(body, "x2", -1, 0, 100000);
+                    int y2 = GesturePlan.integer(body, "y2", -1, 0, 100000);
+                    int dur = GesturePlan.integer(body, "durationMs", 240, 80, 1200);
+                    yield device.interaction("drag", Json.mapOf("display", disp, "x1", x1, "y1", y1, "x2", x2, "y2", y2, "durationMs", dur, "holdMs", 0));
+                }
+                case "key" -> device.interaction("user_key", Json.mapOf("display", disp, "key", Json.string(body, "key")));
+                case "text" -> device.interaction("user_text", Json.mapOf("display", disp, "text", Json.string(body, "text")));
+                default -> Json.mapOf("ok", false, "error", "Unsupported action: " + action);
+            };
+        } catch (RuntimeException e) {
+            return Json.mapOf("ok", false, "error", String.valueOf(e.getMessage()));
+        }
+    }
+
     public Map<String, Object> handoffSessionAdmin(String sessionId, Integer displayId) {
         int disp = displayId != null ? displayId : -1;
         if (disp <= 0 && sessionId != null && !sessionId.isBlank()) {
@@ -402,9 +468,11 @@ public final class AndroidTools {
     private Map<String,Object> confirmAction(Map<String,Object> args,String owner){
         int display=((Number)args.get("display")).intValue();
         String sessionId=Json.string(args,"sessionId");
+        String kind="handoff".equals(Json.string(args,"kind"))?"handoff":"confirm";
         String title=Json.string(args,"title");
         String summary=Json.string(args,"summary");
-        int timeoutMs=GesturePlan.integer(args,"timeoutMs",60_000,5_000,120_000);
+        int defaultTimeout="handoff".equals(kind)?180_000:60_000;
+        int timeoutMs=GesturePlan.integer(args,"timeoutMs",defaultTimeout,5_000,300_000);
         requireDisplayAllowed(display);
         String comp=focusComponent(display);
         String pkg=privacyFence.packageOfComponent(comp);
@@ -414,10 +482,11 @@ public final class AndroidTools {
             if(shot.get("pngBase64") instanceof String b64)imgB64=b64;
             if(shot.get("mime") instanceof String m)imgMime=m;
         }catch(RuntimeException ignored){}
-        PendingConfirmations.Item item=confirmations.create(sessionId,display,owner,title,summary,pkg,imgB64,imgMime,timeoutMs);
+        PendingConfirmations.Item item=confirmations.create(sessionId,display,owner,kind,title,summary,pkg,imgB64,imgMime,timeoutMs);
         try{
             device.exec("am broadcast -a com.androidbackstage.app.CONFIRM_REQUEST -p "+ShellCommand.quote(selfPackage)
                     +" --es confirmId "+ShellCommand.quote(item.confirmId)
+                    +" --es kind "+ShellCommand.quote(kind)
                     +" --es title "+ShellCommand.quote(title)
                     +" --es summary "+ShellCommand.quote(summary==null?"":summary)
                     +" --es sessionId "+ShellCommand.quote(sessionId)
@@ -431,7 +500,9 @@ public final class AndroidTools {
                 handedOff=Boolean.TRUE.equals(moved.get("handedOff"));
             }catch(RuntimeException ignored){}
         }
-        return Json.mapOf("ok",true,"confirmId",item.confirmId,"decision",decision,"handedOff",handedOff,"inputDelivered",false);
+        boolean handedBack="completed".equals(decision);
+        if(handedBack){try{tasks().setUserTakeover(sessionId,false);}catch(RuntimeException ignored){}}
+        return Json.mapOf("ok",true,"confirmId",item.confirmId,"kind",kind,"decision",decision,"handedOff",handedOff,"handedBack",handedBack,"inputDelivered",false);
     }
     private Map<String,Object> personalShortcut(Map<String,Object> args){
         String op=Json.string(args,"operation");

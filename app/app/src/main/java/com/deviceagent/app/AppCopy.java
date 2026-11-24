@@ -56,21 +56,37 @@ public final class AppCopy {
     public static final String AUTOSTART_ACTION = "Open settings";
 
     // Live tab — Prepare & Confirm prompts
-    public static final String SECTION_CONFIRMATIONS = "Needs confirmation";
+    public static final String SECTION_CONFIRMATIONS = "Needs your input";
     public static final String ACTION_APPROVE = "Approve";
     public static final String ACTION_TAKE_OVER = "Take over";
+    public static final String ACTION_WATCH = "Watch";
+    public static final String ACTION_HAND_BACK = "Hand back";
+    public static final String ACTION_DONE_HAND_BACK = "Done — hand back";
+    public static final String ACTION_MAIN_SCREEN = "Main screen";
+    public static final String ACTION_TYPE = "Type";
+    public static final String ACTION_SEND = "Send";
+    public static final String ACTION_ENTER = "Enter";
+    public static final String ACTION_DELETE_KEY = "Del";
+    public static final String TYPE_HINT = "Type on screen…";
 
     // Live tab — Watch Backstage Live
     public static final String SECTION_ACTIVE_SCREENS = "Active screens";
     public static final String EMPTY_ACTIVE_SCREENS = "No active screens";
-    public static final String LABEL_PRIVATE_SCREEN = "Private screen";
+    public static final String LABEL_PRIVATE_SCREEN = "Backstage screen";
     public static final String LABEL_MAIN_SCREEN = "Main screen";
+    public static final String LABEL_AGENT_ACTIVE = "Agent active";
+    public static final String LABEL_YOU_IN_CONTROL = "You’re in control · Agent paused";
+    public static final String LABEL_IN_CONTROL_SHORT = "You’re in control";
     public static final String LABEL_RECORDING = "Recording";
     public static final String ACTION_STOP = "Stop";
     public static final String PREVIEW_HIDDEN_BLOCKED = "Preview hidden for blocked app";
     public static final String PREVIEW_UNAVAILABLE = "Waiting for screen frame…";
-    public static final String HANDOFF_DONE = "Moved to your screen.";
+    public static final String HANDOFF_DONE = "Moved to main screen.";
     public static final String HANDOFF_FAILED = "Could not move screen.";
+    public static final String TAKEOVER_ON = "You’re in control. Agent is paused.";
+    public static final String TAKEOVER_OFF = "Handed back to agent.";
+    public static final String TAKEOVER_FAILED = "Could not update control.";
+    public static final String SESSION_ENDED = "Screen closed.";
     public static final String SESSION_STOPPED = "Stopped.";
 
     // Activity tab — Timeline, Privacy Fence, Shared Inbox
@@ -109,7 +125,7 @@ public final class AppCopy {
 
     // Devices section
     public static final String SECTION_DEVICES = "Devices";
-    public static final String BADGE_THIS_PHONE = "This phone";
+    public static final String BADGE_THIS_PHONE = "This device";
     public static final String DEVICE_ONLINE = "Online";
     public static final String DEVICE_OFFLINE = "Offline";
     public static final String DEVICE_PAUSED = "Paused";
@@ -143,7 +159,7 @@ public final class AppCopy {
     public static final String ACTION_TURN_ON = "Turn on";
     public static final String ACTION_TURN_OFF = "Turn off";
     public static final String OFF_WIFI_BODY = "Android stops the background helper when you leave Wi-Fi unless USB debugging stays on.\n\nIf you turn this on, Backstage enables USB debugging while connected and turns it back off when you pause access.";
-    public static final String ALLOW_SHELL_BODY = "Shell commands run with full ADB access on this phone and can bypass Blocked apps.\n\nTurn this on only when you need raw shell access.";
+    public static final String ALLOW_SHELL_BODY = "Shell commands run with full ADB access on this device and can bypass Blocked apps.\n\nTurn this on only when you need raw shell access.";
     public static final String TOKEN_COPIED = "Local token copied.";
 
     // Sign-in & setup
@@ -191,7 +207,7 @@ public final class AppCopy {
     public static final String ACTION_CHANGE_PASSWORD = "Change password";
     public static final String PASSWORD_SAVED = "Password saved.";
 
-    public static final String SETUP_ACCESS_TITLE = "Enable phone access";
+    public static final String SETUP_ACCESS_TITLE = "Enable device access";
     public static final String ACTION_OPEN_DEV_OPTIONS = "Open Developer options";
     public static final String ACTION_ENTER_PAIR_CODE = "Enter pairing code";
     public static final String ACTION_PAIR = "Pair";
@@ -199,16 +215,16 @@ public final class AppCopy {
     public static final String FIELD_PAIR_CODE = "6-digit code";
 
     // Status details
-    public static final String PAUSED_BODY = "Assistants cannot reach this phone until you resume.";
+    public static final String PAUSED_BODY = "Assistants cannot reach this device until you resume.";
     public static final String PAUSE_UNCONFIRMED = "Could not confirm pause. Tap Pause to try again.";
     public static final String PAUSE_STILL_ACTIVE = "Access is still active. Tap Pause to stop it, or Resume to keep it on.";
     public static final String PORT_CONFLICT = "Another app is using this local port. Tap Reconnect to switch ports.";
     public static final String RESTART_FOR_UPDATE = "Tap Reconnect to finish the update.";
     public static final String WIRELESS_OFF_CONNECTED = "Wireless debugging is off. Access works now, but turn it on so Backstage can reconnect later.";
-    public static final String RELAY_REMOVED = "This phone was removed from your account. Sign in again to reconnect.";
-    public static final String RECONNECTING_BODY = "Phone access is ready. Waiting for the Backstage server.";
+    public static final String RELAY_REMOVED = "This device was removed from your account. Sign in again to reconnect.";
+    public static final String RECONNECTING_BODY = "Device access is ready. Waiting for the Backstage server.";
     public static final String PAIR_REVOKED = "Android revoked Wireless debugging access. Enter a new 6-digit pairing code to reconnect.";
-    public static final String ACTION_PAIR_AGAIN = "Pair phone again";
+    public static final String ACTION_PAIR_AGAIN = "Pair device again";
     public static final String WIRELESS_OFF = "Wireless debugging is off. Connect to Wi-Fi and turn it on to restore access.";
     public static final String ACCESS_NEEDS_HAND = "Check Wireless debugging, or enter a new pairing code.";
     public static final String DAEMON_UNAVAILABLE = "Backstage is not running. Resume or reconnect on the Live tab.";
@@ -232,7 +248,7 @@ public final class AppCopy {
     public static final String ERROR_PAIR_CODE = "Enter the 6-digit code";
     public static final String ERROR_PAIR_PORT = "Enter the pairing port";
     public static final String CHECKING_PAIR_CODE = "Checking pairing code…";
-    public static final String PAIR_APPROVED = "Phone paired. Starting connection…";
+    public static final String PAIR_APPROVED = "Device paired. Starting connection…";
     public static final String PAIR_REJECTED = "Code rejected. Open a new pairing code in Wireless debugging and try again.";
 
     // Setup: sign in and connection code
@@ -247,22 +263,22 @@ public final class AppCopy {
     public static final String LINK_REVIEW = "Review the server and code, then tap Connect.";
     public static final String LINK_INCOMPLETE = "This setup link is incomplete. Request a new one from your assistant.";
     public static final String CONNECT_CODE_TITLE = "Enter connection code";
-    public static final String CONNECT_CODE_BODY = "Enter a code from Backstage on another phone or from your assistant.";
+    public static final String CONNECT_CODE_BODY = "Enter a code from Backstage on another Android device or from your assistant.";
     public static final String FIELD_CONNECTION_NAME = "Connection name (optional)";
     public static final String FIELD_CONNECTION_NAME_HINT = "e.g. Work laptop";
     public static final String FIELD_CONNECTION_CODE = "Connection code";
     public static final String FIELD_CONNECTION_CODE_HINT = "ABCD-EFGHJK";
     public static final String SERVER_FMT = "Server: %s";
-    public static final String CONNECT_TRUST_BODY = "Connected assistants can run commands and use apps on this phone. You can pause or remove access anytime.";
+    public static final String CONNECT_TRUST_BODY = "Connected assistants can run commands and use apps on this device. You can pause or remove access anytime.";
     public static final String CONNECTING = "Connecting…";
     public static final String ACTION_CONNECT = "Connect";
     public static final String ACTION_PASTE_CODE = "Paste code or link";
     public static final String ACTION_CHANGE_SERVER = "Change server";
     public static final String ACTION_WHERE_CODE = "Where do I get a code?";
     public static final String WHERE_CODE_TITLE = "Get a connection code";
-    public static final String WHERE_CODE_BODY = "Adding this device to an account you already have? On your other phone, open Backstage and tap Add device; it shows the code.\n\nConnecting an assistant on your computer? Its Backstage connection page shows the code.\n\nUsing the command line? Run backstage pair and keep it open.\n\nThis code is different from Android’s 6-digit pairing code.";
+    public static final String WHERE_CODE_BODY = "Adding this device to an account you already have? On your other Android device, open Backstage and tap Add device; it shows the code.\n\nConnecting an assistant on your computer? Its Backstage connection page shows the code.\n\nUsing the command line? Run backstage pair and keep it open.\n\nThis code is different from Android’s 6-digit pairing code.";
     public static final String CODE_CHECK = "Check the connection code and server address. The code looks like ABCD-EFGHJK.";
-    public static final String OTHER_SERVER = "This phone already uses another server. Remove its connections on the Assistants tab before switching servers.";
+    public static final String OTHER_SERVER = "This device already uses another server. Remove its connections on the Assistants tab before switching servers.";
     public static final String APPROVING_CONNECTION = "Approving connection…";
     public static final String ASSISTANT_CONNECTED = "Assistant connected.";
     public static final String ASSISTANT_SAVED_RESTART = "Assistant linked and saved. Tap Reconnect on the Live tab to apply it.";
@@ -319,7 +335,7 @@ public final class AppCopy {
     // Assistants and devices
     public static final String ASSISTANT_CAN_USE_FMT = "Can use %s";
     public static final String USES_ALL_DEVICES = "all your devices";
-    public static final String USES_THIS_PHONE = "this phone";
+    public static final String USES_THIS_PHONE = "this device";
     public static final String USES_NO_DEVICE = "no device";
     public static final String ALLOWING = "Allowing…";
     public static final String DENYING = "Denying…";
@@ -352,14 +368,14 @@ public final class AppCopy {
     public static final String CONNECTION_INTERRUPTED = "Connection interrupted. Trying again…";
 
     // Connect an agent
-    public static final String CONNECT_PHONE_FIRST = "Connect this phone first. Once it is online, connect your agents here.";
+    public static final String CONNECT_PHONE_FIRST = "Connect this device first. Once it is online, connect your agents here.";
     public static final String AGENT_INSTRUCTIONS_FMT = "Connect this agent to my Android Backstage. Follow %s";
     public static final String CONNECT_AGENT_BODY = "On your computer, open android-backstage.com and choose your agent. Or add this address to it:";
     public static final String ACTION_COPY_ADDRESS = "Copy address";
     public static final String ADDRESS_COPIED = "Address copied";
     public static final String ACTION_COPY_INSTRUCTIONS = "Copy instructions for my agent";
     public static final String PASTE_INTO_AGENT = "Paste it into your agent";
-    public static final String CONNECT_AGENT_APPROVE = "When your agent signs in, enter your email on the Backstage page. This phone then shows the request. Check that the digits match and tap Allow.";
+    public static final String CONNECT_AGENT_APPROVE = "When your agent signs in, enter your email on the Backstage page. This device then shows the request. Check that the digits match and tap Allow.";
     public static final String CHOOSE_AGENT_TITLE = "Choose your agent";
     public static final String AGENT_CHATGPT = "ChatGPT";
     public static final String AGENT_CURSOR = "Cursor";
@@ -388,7 +404,7 @@ public final class AppCopy {
     public static final String ACTION_START_AGAIN = "Start again";
     public static final String REQUEST_ENDED = "The request ended. Tap Start again to retry.";
     public static final String CANT_REACH_RETRYING = "Couldn’t reach Backstage. Checking again…";
-    public static final String INVITE_CHECK_DIGITS = "Check that your agent shows these six digits. Allowing it gives access to apps and commands on this phone.";
+    public static final String INVITE_CHECK_DIGITS = "Check that your agent shows these six digits. Allowing it gives access to apps and commands on this device.";
     public static final String ALLOW_NAMED_FMT = "Allow %s?";
     public static final String ACCESS_ALLOWED_RETURN = "Access allowed. Return to your agent to finish connecting.";
     public static final String REQUEST_DENIED = "Request denied.";
@@ -407,7 +423,7 @@ public final class AppCopy {
     // Connections on another server
     public static final String PERMIT_RESUME = "Resume your connection to check access.";
     public static final String PERMIT_FULL = "Full access · all chats on this connection";
-    public static final String PERMIT_PAUSED = "Paused · no phone access";
+    public static final String PERMIT_PAUSED = "Paused · no device access";
     public static final String PERMIT_TESTING_FMT = "Testing %s · %d min left";
     public static final String PERMIT_TEST_ENDED = "Paused · test access ended";
     public static final String PERMIT_REVIEW = "Access needs review";
@@ -418,7 +434,7 @@ public final class AppCopy {
     public static final String CONNECTION_ID_FMT = "Connection ID · %s";
     public static final String FIELD_CONNECTION_LABEL = "Connection name";
     public static final String RENAME_CONNECTION_BODY = "Name the app or computer. This name applies to every chat using this connection.";
-    public static final String ALLOW_FULL_BODY = "Every chat using this connection can run commands and use apps on your phone.";
+    public static final String ALLOW_FULL_BODY = "Every chat using this connection can run commands and use apps on your Android device.";
     public static final String LIMIT_APP_TITLE = "Test one app for 15 minutes";
     public static final String LIMIT_APP_BODY_FMT = "For %s. Allows launch and test checks. Blocks shell commands and taps. Access pauses when time runs out.";
     public static final String ACTION_ALLOW_15_MIN = "Allow for 15 minutes";
@@ -431,7 +447,7 @@ public final class AppCopy {
     public static final String PERMIT_SET_QA_FMT = "%s: one app for 15 minutes.";
     public static final String PERMIT_SET_PAUSED_FMT = "%s: access paused.";
     public static final String PERMIT_SET_FULL_FMT = "%s: full access allowed.";
-    public static final String PERMIT_NOT_CHANGED = "Access was not changed. Resume your phone connection and try again.";
+    public static final String PERMIT_NOT_CHANGED = "Access was not changed. Resume your device connection and try again.";
     public static final String CONNECTION_REMOVED = "Connection removed.";
     public static final String REMOVAL_UNCONFIRMED = "Removal was not confirmed. Pause access to block the assistant, then resume and retry removal.";
 
@@ -446,7 +462,7 @@ public final class AppCopy {
     public static final String DETAIL_YES = "Yes";
     public static final String DETAIL_NO = "No";
     public static final String NO_DETAILS = "No details yet.";
-    public static final String USB_COMMAND_BODY = "With this phone connected by USB, run:";
+    public static final String USB_COMMAND_BODY = "With this device connected by USB, run:";
     public static final String PAUSE_FIRST_TITLE = "Pause access first";
     public static final String PAUSE_FIRST_BODY = "Pause your connection before changing its local port.";
     public static final String ERROR_PORT = "Use a port from 1 to 65535";

@@ -21,12 +21,14 @@ usage() {
 Usage:
   scripts/admin-owner.sh list
   scripts/admin-owner.sh inspect <email|ownerId>
+  scripts/admin-owner.sh set-plan <email|ownerId> <free|pro|team>
   scripts/admin-owner.sh revoke-grants <email|ownerId>
   scripts/admin-owner.sh delete <email|ownerId> --yes
 EOF
   exit 2
 }
 
+body=""
 case "$cmd" in
   list)
     method="GET"
@@ -36,6 +38,12 @@ case "$cmd" in
     [[ -n "$ref" ]] || usage
     method="GET"
     endpoint="/work/internal/admin/owner/__REF__"
+    ;;
+  set-plan)
+    [[ -n "$ref" && "$flag" =~ ^(free|pro|team)$ ]] || { echo "Plan must be free, pro, or team." >&2; usage; }
+    method="POST"
+    endpoint="/work/internal/admin/owner/__REF__/plan"
+    body="{\"plan\":\"$flag\"}"
     ;;
   revoke-grants)
     [[ -n "$ref" ]] || usage
@@ -57,7 +65,7 @@ gcloud compute ssh "$INSTANCE" \
   --account="$ACCOUNT" \
   --zone="$ZONE" \
   --tunnel-through-iap \
-  --command="sudo BACKSTAGE_ADMIN_METHOD='$method' BACKSTAGE_ADMIN_ENDPOINT='$endpoint' BACKSTAGE_ADMIN_REF='$ref' node -e '
+  --command="sudo BACKSTAGE_ADMIN_METHOD='$method' BACKSTAGE_ADMIN_ENDPOINT='$endpoint' BACKSTAGE_ADMIN_REF='$ref' BACKSTAGE_ADMIN_BODY='$body' node -e '
 const fs = require(\"node:fs\");
 const env = Object.fromEntries(fs.readFileSync(\"/etc/android-backstage/env\",\"utf8\").split(/\r?\n/).filter(l=>l&&!l.startsWith(\"#\")&&l.includes(\"=\")).map(l=>{const i=l.indexOf(\"=\");return [l.slice(0,i).trim(),l.slice(i+1).trim()];}));
 const token = env.RELAY_INTERNAL_TOKEN || env.RELAY_ADMIN_TOKEN;
@@ -66,9 +74,11 @@ const port = Number(env.PORT || 18424);
 const method = process.env.BACKSTAGE_ADMIN_METHOD;
 const ref = encodeURIComponent(process.env.BACKSTAGE_ADMIN_REF || \"\");
 const endpoint = process.env.BACKSTAGE_ADMIN_ENDPOINT.replace(\"__REF__\", ref);
+const body = process.env.BACKSTAGE_ADMIN_BODY || \"\";
 fetch(\"http://127.0.0.1:\" + port + endpoint, {
   method,
-  headers: { \"x-backstage-internal-key\": token, \"content-type\": \"application/json\" }
+  headers: { \"x-backstage-internal-key\": token, \"content-type\": \"application/json\" },
+  ...(body ? { body } : {})
 }).then(async r => {
   const txt = await r.text();
   try { console.log(JSON.stringify(JSON.parse(txt), null, 2)); } catch { console.log(txt); }

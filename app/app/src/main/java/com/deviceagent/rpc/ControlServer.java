@@ -262,8 +262,28 @@ public final class ControlServer {
                 continue;
             }
             if ("GET".equals(req.method) && "/preview".equals(req.path)) {
-                handlePreview(sock, req, session);
-                return;
+                handlePreview(sock, req, session, keepAlive);
+                if (!keepAlive) return;
+                continue;
+            }
+            if ("POST".equals(req.method) && "/session/takeover".equals(req.path)) {
+                Map<String, Object> body = parseObject(req.body);
+                String sid = Json.string(body, "sessionId");
+                boolean active = Boolean.TRUE.equals(body.get("active"));
+                String confirmId = Json.string(body, "confirmId");
+                Map<String, Object> res = tools.setUserTakeoverAdmin(sid, active, confirmId);
+                writeJson(sock, Boolean.TRUE.equals(res.get("ok")) ? 200 : 400, Json.stringify(res), session, keepAlive);
+                if (!keepAlive) return;
+                continue;
+            }
+            if ("POST".equals(req.method) && "/session/input".equals(req.path)) {
+                Map<String, Object> body = parseObject(req.body);
+                String sid = Json.string(body, "sessionId");
+                Integer disp = body.get("displayId") instanceof Number n ? n.intValue() : null;
+                Map<String, Object> res = tools.userInputAdmin(sid, disp, body);
+                writeJson(sock, Boolean.TRUE.equals(res.get("ok")) ? 200 : 400, Json.stringify(res), session, keepAlive);
+                if (!keepAlive) return;
+                continue;
             }
             if ("POST".equals(req.method) && "/session/handoff".equals(req.path)) {
                 Map<String, Object> body = parseObject(req.body);
@@ -290,9 +310,10 @@ public final class ControlServer {
             }
             if ("POST".equals(req.method) && "/confirmations/decide".equals(req.path)) {
                 Map<String, Object> body = parseObject(req.body);
-                boolean ok = tools.confirmations().decide(Json.string(body, "confirmId"), Json.string(body, "decision"));
-                writeJson(sock, ok ? 200 : 404, Json.stringify(Json.mapOf("ok", ok)), session, false);
-                return;
+                boolean ok = tools.decideConfirmationAdmin(Json.string(body, "confirmId"), Json.string(body, "decision"));
+                writeJson(sock, ok ? 200 : 404, Json.stringify(Json.mapOf("ok", ok)), session, keepAlive);
+                if (!keepAlive) return;
+                continue;
             }
             if ("GET".equals(req.method) && "/inbox".equals(req.path)) {
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "items", tools.inbox().list(50))), session, keepAlive);
@@ -345,13 +366,15 @@ public final class ControlServer {
         }
     }
 
-    private void handlePreview(Socket sock, HttpReq req, String session) throws IOException {
+    private void handlePreview(Socket sock, HttpReq req, String session, boolean keepAlive) throws IOException {
         if (virtualDisplay == null) {
-            writeJson(sock, 404, "{\"error\":\"no virtual display\"}", session, false);
+            writeJson(sock, 404, "{\"error\":\"no virtual display\"}", session, keepAlive);
             return;
         }
         int displayId = -1;
         float scale = 0.5f;
+        int quality = 85;
+        long sinceFrame = -1L;
         if (req.query != null) {
             for (String part : req.query.split("&")) {
                 int eq = part.indexOf('=');
@@ -360,31 +383,46 @@ public final class ControlServer {
                 try {
                     if ("displayId".equals(k)) displayId = Integer.parseInt(v);
                     else if ("scale".equals(k)) scale = Float.parseFloat(v);
+                    else if ("quality".equals(k)) quality = Integer.parseInt(v);
+                    else if ("sinceFrame".equals(k)) sinceFrame = Long.parseLong(v);
                 } catch (NumberFormatException ignored) {}
             }
         }
         if (displayId > 0) {
             String top = com.deviceagent.shell.SystemBinders.topActivityOnDisplay(displayId);
             if (tools.privacyFence().isBlocked(tools.privacyFence().packageOfComponent(top))) {
-                writeJson(sock, 403, "{\"error\":\"blocked_app\"}", session, false);
+                writeJson(sock, 403, "{\"error\":\"blocked_app\"}", session, keepAlive);
                 return;
             }
         }
         android.os.Bundle args = new android.os.Bundle();
         if (displayId > 0) args.putInt("displayId", displayId);
         args.putFloat("scale", scale);
+        args.putInt("quality", quality);
+        if (sinceFrame > 0) args.putLong("sinceFrame", sinceFrame);
         android.os.Bundle shot = virtualDisplay.handle("screenshot", args);
         if (!shot.getBoolean("ok", false)) {
-            writeJson(sock, 404, Json.stringify(Json.mapOf("error", String.valueOf(shot.getString("error")))), session, false);
+            writeJson(sock, 404, Json.stringify(Json.mapOf("error", String.valueOf(shot.getString("error")))), session, keepAlive);
+            return;
+        }
+        Map<String, String> extraHeaders = new LinkedHashMap<>();
+        long seq = shot.getLong("frameSeq", 0L);
+        int sw = shot.getInt("sourceWidth", 0);
+        int sh = shot.getInt("sourceHeight", 0);
+        if (seq > 0) extraHeaders.put("X-Frame-Seq", String.valueOf(seq));
+        if (sw > 0) extraHeaders.put("X-Source-Width", String.valueOf(sw));
+        if (sh > 0) extraHeaders.put("X-Source-Height", String.valueOf(sh));
+        if (shot.getBoolean("unchanged", false)) {
+            write(sock, 304, "application/octet-stream", new byte[0], session, !keepAlive, extraHeaders);
             return;
         }
         byte[] bytes = shot.getByteArray("png");
         String mime = shot.getString("mime", "image/webp");
         if (bytes == null || bytes.length == 0) {
-            writeJson(sock, 204, "{}", session, false);
+            writeJson(sock, 204, "{}", session, keepAlive);
             return;
         }
-        write(sock, 200, mime, bytes, session, true);
+        write(sock, 200, mime, bytes, session, !keepAlive, extraHeaders);
     }
 
     private void handleConfigure(Socket sock, HttpReq req, String session) throws IOException {
@@ -534,10 +572,18 @@ public final class ControlServer {
     private static void write(
             Socket sock, int code, String contentType, byte[] bytes, String session, boolean close)
             throws IOException {
+        write(sock, code, contentType, bytes, session, close, null);
+    }
+
+    private static void write(
+            Socket sock, int code, String contentType, byte[] bytes, String session, boolean close,
+            Map<String, String> extraHeaders)
+            throws IOException {
         String reason = switch (code) {
             case 200 -> "OK";
             case 202 -> "Accepted";
             case 204 -> "No Content";
+            case 304 -> "Not Modified";
             case 400 -> "Bad Request";
             case 401 -> "Unauthorized";
             case 404 -> "Not Found";
@@ -547,15 +593,24 @@ public final class ControlServer {
         };
         StringBuilder header = new StringBuilder();
         header.append("HTTP/1.1 ").append(code).append(' ').append(reason).append("\r\n");
-        header.append("Content-Type: ").append(contentType).append("\r\n");
-        header.append("Content-Length: ").append(bytes.length).append("\r\n");
+        if (code != 304 && code != 204) {
+            header.append("Content-Type: ").append(contentType).append("\r\n");
+            header.append("Content-Length: ").append(bytes.length).append("\r\n");
+        } else {
+            header.append("Content-Length: 0\r\n");
+        }
         header.append(close ? "Connection: close\r\n" : "Connection: keep-alive\r\nKeep-Alive: timeout=30\r\n");
         header.append(corsHeaders());
         if (session != null) header.append("mcp-session-id: ").append(session).append("\r\n");
+        if (extraHeaders != null) {
+            for (Map.Entry<String, String> e : extraHeaders.entrySet()) {
+                header.append(e.getKey()).append(": ").append(e.getValue()).append("\r\n");
+            }
+        }
         header.append("\r\n");
         OutputStream out = sock.getOutputStream();
         out.write(header.toString().getBytes(StandardCharsets.UTF_8));
-        if (bytes.length > 0) out.write(bytes);
+        if (bytes.length > 0 && code != 304 && code != 204) out.write(bytes);
         out.flush();
         if (close) {
             try {

@@ -17,28 +17,34 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-/** The app's design system: palette, type scale and the few view builders every screen uses. */
+/** The app's design system: matches android-backstage.com (obsidian surfaces, crisp hairlines, #8FDC4E accent). */
 final class UiKit {
     final Context context;
     final boolean dark;
-    final int canvas, card, stroke, ink, muted, green, greenInk, greenSoft, danger, dangerSoft, amber;
+    final int canvas, elevated, card, raised, stroke, strokeStrong, ink, muted, dim,
+            green, greenInk, greenSoft, danger, dangerSoft, amber, amberSoft;
     private final float density;
 
     UiKit(Context context) {
         this.context = context;
-        dark = (context.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        dark = true;
         density = context.getResources().getDisplayMetrics().density;
-        canvas = Color.parseColor(dark ? "#0E1318" : "#F6F7F9");
-        card = Color.parseColor(dark ? "#171F27" : "#FFFFFF");
-        stroke = Color.parseColor(dark ? "#26323E" : "#E3E7EC");
-        ink = Color.parseColor(dark ? "#F2F5F8" : "#111820");
-        muted = Color.parseColor(dark ? "#94A3B3" : "#5A6572");
-        green = Color.parseColor(dark ? "#66BB6A" : "#2E7D32");
-        greenInk = Color.parseColor(dark ? "#0B1F0D" : "#FFFFFF");
-        greenSoft = Color.parseColor(dark ? "#1A2E1D" : "#E8F5E9");
-        danger = Color.parseColor(dark ? "#EF5350" : "#C62828");
-        dangerSoft = Color.parseColor(dark ? "#3A1C1C" : "#FDECEA");
-        amber = Color.parseColor(dark ? "#FFB74D" : "#E08A00");
+        canvas = Color.parseColor("#000000");
+        elevated = Color.parseColor("#0A0A0A");
+        card = Color.parseColor("#0D0D0D");
+        raised = Color.parseColor("#141414");
+        stroke = Color.parseColor("#1F1F1F");
+        strokeStrong = Color.parseColor("#2E2E2E");
+        ink = Color.parseColor("#F5F5F5");
+        muted = Color.parseColor("#A3A3A3");
+        dim = Color.parseColor("#737373");
+        green = Color.parseColor("#8FDC4E");
+        greenInk = Color.parseColor("#0C1A04");
+        greenSoft = Color.parseColor("#1B2A10");
+        danger = Color.parseColor("#F0565C");
+        dangerSoft = Color.parseColor("#2A1315");
+        amber = Color.parseColor("#F2B441");
+        amberSoft = Color.parseColor("#2B210E");
     }
 
     int dp(float value) { return Math.round(value * density); }
@@ -46,12 +52,12 @@ final class UiKit {
     GradientDrawable shape(int color, float radius, int strokeColor) {
         GradientDrawable bg = new GradientDrawable();
         bg.setColor(color); bg.setCornerRadius(dp(radius));
-        if (strokeColor != 0) bg.setStroke(dp(1), strokeColor);
+        if (strokeColor != 0) bg.setStroke(Math.max(1, dp(1)), strokeColor);
         return bg;
     }
 
     Drawable ripple(Drawable content, float radius) {
-        int tint = (green & 0x00FFFFFF) | 0x26000000;
+        int tint = (green & 0x00FFFFFF) | 0x28000000;
         return new RippleDrawable(ColorStateList.valueOf(tint), content, shape(Color.WHITE, radius, 0));
     }
 
@@ -63,11 +69,11 @@ final class UiKit {
         LinearLayout box = new LinearLayout(context); box.setOrientation(LinearLayout.HORIZONTAL); box.setGravity(Gravity.CENTER_VERTICAL); return box;
     }
 
-    /** A white (or dark slate) card with a hairline stroke, added to parent. */
+    /** An obsidian card with a crisp hairline stroke matching .tile on android-backstage.com. */
     LinearLayout card(LinearLayout parent) {
         LinearLayout box = column();
-        box.setPadding(dp(18), dp(16), dp(18), dp(16));
-        box.setBackground(shape(card, 20, stroke));
+        box.setPadding(dp(16), dp(16), dp(16), dp(16));
+        box.setBackground(shape(card, 14, stroke));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.topMargin = dp(12);
         if (parent != null) parent.addView(box, lp);
         return box;
@@ -77,8 +83,8 @@ final class UiKit {
     LinearLayout rowCard(LinearLayout parent, Runnable onClick) {
         LinearLayout box = row();
         box.setPadding(dp(16), dp(14), dp(14), dp(14));
-        box.setBackground(shape(card, 20, stroke));
-        box.setForeground(ripple(null, 20));
+        box.setBackground(shape(card, 14, stroke));
+        box.setForeground(ripple(null, 14));
         box.setClickable(true); box.setFocusable(true); box.setMinimumHeight(dp(64));
         box.setOnClickListener(v -> onClick.run());
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2); lp.topMargin = dp(10);
@@ -95,15 +101,20 @@ final class UiKit {
         return view;
     }
 
-    TextView title(LinearLayout parent, CharSequence value) { return text(parent, value, 17, ink, true); }
+    TextView title(LinearLayout parent, CharSequence value) {
+        TextView v = text(parent, value, 16, ink, true);
+        v.setLetterSpacing(-0.015f);
+        return v;
+    }
     TextView body(LinearLayout parent, CharSequence value) {
         TextView v = text(parent, value, 14, muted, false); v.setPadding(0, dp(4), 0, 0); return v;
     }
 
-    /** Small uppercase-free section label above a group of cards. */
+    /** Monospace eyebrow section label matching .eyebrow on android-backstage.com. */
     TextView section(LinearLayout parent, CharSequence value) {
-        TextView v = text(parent, value, 13, muted, true);
-        v.setLetterSpacing(0.04f); v.setPadding(dp(4), dp(22), 0, dp(2));
+        TextView v = text(parent, value == null ? "" : value.toString().toUpperCase(java.util.Locale.ROOT), 11, dim, false);
+        v.setTypeface(Typeface.MONOSPACE);
+        v.setLetterSpacing(0.12f); v.setPadding(dp(2), dp(22), 0, dp(4));
         v.setAccessibilityHeading(true);
         return v;
     }
@@ -119,24 +130,25 @@ final class UiKit {
         parent.addView(line, lp); return line;
     }
 
-    static final int PRIMARY = 0, SECONDARY = 1, QUIET = 2, DANGER = 3;
+    static final int PRIMARY = 0, SECONDARY = 1, QUIET = 2, DANGER = 3, AMBER = 4;
 
     Button buttonView(CharSequence label, int kind) {
         Button b = new Button(context);
-        b.setText(label); b.setAllCaps(false); b.setTextSize(15);
+        b.setText(label); b.setAllCaps(false); b.setTextSize(14);
         b.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         b.setStateListAnimator(null); b.setElevation(0);
-        b.setMinHeight(dp(48)); b.setMinimumHeight(dp(48)); b.setMinWidth(0); b.setMinimumWidth(0);
-        b.setPadding(dp(18), 0, dp(18), 0);
+        b.setMinHeight(dp(44)); b.setMinimumHeight(dp(44)); b.setMinWidth(0); b.setMinimumWidth(0);
+        b.setPadding(dp(16), 0, dp(16), 0);
         int fill, text, line;
         switch (kind) {
             case PRIMARY: fill = green; text = greenInk; line = 0; break;
-            case DANGER: fill = card; text = danger; line = stroke; break;
+            case DANGER: fill = dangerSoft; text = danger; line = Color.parseColor("#4A1E21"); break;
+            case AMBER: fill = amber; text = Color.parseColor("#1A1102"); line = 0; break;
             case QUIET: fill = Color.TRANSPARENT; text = green; line = 0; break;
-            default: fill = card; text = ink; line = stroke;
+            default: fill = raised; text = ink; line = strokeStrong;
         }
         b.setTextColor(text);
-        b.setBackground(ripple(shape(fill, 14, line), 14));
+        b.setBackground(ripple(shape(fill, 10, line), 10));
         return b;
     }
 

@@ -28,8 +28,11 @@ public final class ConfirmReceiver extends BroadcastReceiver {
         if (confirmId == null || confirmId.isBlank()) return;
         if (ACTION_REQUEST.equals(action)) {
             showNotification(context, confirmId,
+                    intent.getStringExtra("kind"),
                     intent.getStringExtra("title"),
-                    intent.getStringExtra("summary"));
+                    intent.getStringExtra("summary"),
+                    intent.getStringExtra("sessionId"),
+                    intent.getIntExtra("displayId", -1));
         } else if (ACTION_DECIDE.equals(action)) {
             String decision = intent.getStringExtra("decision");
             NotificationManager nm = context.getSystemService(NotificationManager.class);
@@ -52,28 +55,66 @@ public final class ConfirmReceiver extends BroadcastReceiver {
         }
     }
 
-    private static void showNotification(Context ctx, String confirmId, String title, String summary) {
+    private static void showNotification(
+            Context ctx, String confirmId, String kind, String title, String summary, String sessionId, int displayId) {
         NotificationManager nm = ctx.getSystemService(NotificationManager.class);
         if (nm == null) return;
-        NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "Action confirmations", NotificationManager.IMPORTANCE_HIGH);
+        NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "Agent approvals & handoffs", NotificationManager.IMPORTANCE_HIGH);
         nm.createNotificationChannel(ch);
 
-        Intent open = new Intent(ctx, AgentActivity.class);
-        open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        open.putExtra("confirmId", confirmId);
-        PendingIntent contentIntent = PendingIntent.getActivity(ctx, confirmId.hashCode(), open,
-                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        boolean handoff = "handoff".equals(kind);
+        String resolvedTitle = title == null || title.isBlank()
+                ? (handoff ? "Agent needs your help" : "Confirm action")
+                : title;
+        String resolvedSummary = summary == null ? "" : summary;
+
+        PendingIntent contentIntent;
+        PendingIntent takeoverIntent;
+        if (displayId > 0 && sessionId != null && !sessionId.isBlank()) {
+            Intent openLive = LiveScreenActivity.openIntent(
+                    ctx, sessionId, displayId, "", "", false,
+                    confirmId, handoff ? "handoff" : "confirm", resolvedTitle, resolvedSummary, handoff);
+            contentIntent = PendingIntent.getActivity(ctx, confirmId.hashCode(), openLive,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+            Intent takeOverLive = LiveScreenActivity.openIntent(
+                    ctx, sessionId, displayId, "", "", false,
+                    confirmId, handoff ? "handoff" : "confirm", resolvedTitle, resolvedSummary, true);
+            takeoverIntent = PendingIntent.getActivity(ctx, confirmId.hashCode() + 2, takeOverLive,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        } else {
+            Intent open = new Intent(ctx, AgentActivity.class);
+            open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            open.putExtra("confirmId", confirmId);
+            contentIntent = PendingIntent.getActivity(ctx, confirmId.hashCode(), open,
+                    PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            takeoverIntent = null;
+        }
 
         Notification.Builder b = new Notification.Builder(ctx, CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle(title == null || title.isBlank() ? "Confirm action" : title)
-                .setContentText(summary == null ? "" : summary)
-                .setStyle(new Notification.BigTextStyle().bigText(summary == null ? "" : summary))
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle(resolvedTitle)
+                .setContentText(resolvedSummary)
+                .setStyle(new Notification.BigTextStyle().bigText(resolvedSummary))
                 .setContentIntent(contentIntent)
-                .setAutoCancel(true)
-                .addAction(actionBtn(ctx, confirmId, "approved", "Approve", 1))
-                .addAction(actionBtn(ctx, confirmId, "handoff", "Take over", 2))
-                .addAction(actionBtn(ctx, confirmId, "cancelled", "Cancel", 3));
+                .setAutoCancel(false);
+
+        if (handoff) {
+            if (takeoverIntent != null) {
+                b.addAction(new Notification.Action.Builder(null, "Take over", takeoverIntent).build());
+            } else {
+                b.addAction(actionBtn(ctx, confirmId, "handoff", "Take over", 2));
+            }
+            b.addAction(actionBtn(ctx, confirmId, "cancelled", "Cancel", 3));
+        } else {
+            b.addAction(actionBtn(ctx, confirmId, "approved", "Approve", 1));
+            if (takeoverIntent != null) {
+                b.addAction(new Notification.Action.Builder(null, "Take over", takeoverIntent).build());
+            } else {
+                b.addAction(actionBtn(ctx, confirmId, "handoff", "Take over", 2));
+            }
+            b.addAction(actionBtn(ctx, confirmId, "cancelled", "Cancel", 3));
+        }
         nm.notify(confirmId.hashCode(), b.build());
     }
 

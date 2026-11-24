@@ -18,7 +18,7 @@ export const SLOW_MS = 30_000;
 
 export const SLOW_TOOLS = new Map([
   ...['observe','open','tap','type','key','gesture','scroll','scroll_until','wait','sequence','task','task_begin','task_inspect','task_finish','task_share','task_list','handoff','location','record','device'].map(name=>['android.'+name,90000]),
-  ['android.confirm',135000],
+  ['android.confirm',315000],
   ...['install','maintenance','fetch','push','file'].map(name=>['android.'+name,600000]),
   ['android.developer',620000],['android.media',30000]
 ]);

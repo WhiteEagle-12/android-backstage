@@ -62,6 +62,10 @@ public final class EvidenceHostTest {
   var cfms=new PendingConfirmations();var item=cfms.create("session_a",2,"agt_1","Send money?","Review","com.example","","image/webp",5000);
   new Thread(()->{try{Thread.sleep(40);}catch(InterruptedException ignored){}cfms.decide(item.confirmId,"approved");}).start();
   check("approved".equals(cfms.awaitDecision(item.confirmId,2000)),"pending confirmation resolves");
+  var handoffItem=cfms.create("session_a",2,"agt_1","handoff","Sign in required","Enter your password","com.example","","image/webp",5000);
+  check("handoff".equals(handoffItem.kind)&&cfms.markTakenOver(handoffItem.confirmId,60_000L)&&handoffItem.takenOver,"handoff confirmation supports takeover extension");
+  new Thread(()->{try{Thread.sleep(40);}catch(InterruptedException ignored){}cfms.decide(handoffItem.confirmId,"completed");}).start();
+  check("completed".equals(cfms.awaitDecision(handoffItem.confirmId,2000)),"handoff confirmation resolves completed on hand back");
   var jank=DevDiagnostics.parseGfxInfo("com.example","Total frames rendered: 120\nJanky frames: 6 (5.00%)\n50th percentile: 6ms\n90th percentile: 11ms\n95th percentile: 15ms\n99th percentile: 22ms\nNumber Missed Vsync: 2\n");
   check(Integer.valueOf(120).equals(jank.get("totalFrames"))&&Integer.valueOf(6).equals(jank.get("jankyFrames"))&&Integer.valueOf(22).equals(jank.get("p99Ms")),"gfxinfo jank parser");
   var anr=DevDiagnostics.parseAnrs("11-22 00:10:00.123  1000  1234 I am_anr  : [0,5678,com.example,123,Input dispatching timed out]\n","com.example",5);

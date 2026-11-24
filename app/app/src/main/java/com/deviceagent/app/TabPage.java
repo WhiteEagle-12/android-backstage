@@ -31,12 +31,17 @@ abstract class TabPage {
         a = activity; k = kit;
         scroll = new ScrollView(a); scroll.setFillViewport(true); scroll.setBackgroundColor(k.canvas); scroll.setClipToPadding(false);
         LinearLayout wrap = k.column(); wrap.setGravity(Gravity.CENTER_HORIZONTAL);
-        LinearLayout page = k.column(); page.setPadding(k.dp(16), k.dp(8), k.dp(16), k.dp(24));
-        int width = Math.min(a.getResources().getDisplayMetrics().widthPixels, k.dp(600));
+        LinearLayout page = k.column(); page.setPadding(k.dp(14), k.dp(8), k.dp(14), k.dp(24));
+        int width = Math.min(a.getResources().getDisplayMetrics().widthPixels, k.dp(640));
         wrap.addView(page, new LinearLayout.LayoutParams(width, -2));
         scroll.addView(wrap);
-        TextView heading = k.text(page, title, 28, k.ink, true);
-        heading.setPadding(k.dp(4), k.dp(12), 0, k.dp(4)); heading.setAccessibilityHeading(true);
+        LinearLayout header = k.row();
+        header.setPadding(k.dp(2), k.dp(10), k.dp(2), k.dp(6));
+        TextView heading = k.text(null, title, 26, k.ink, true);
+        heading.setLetterSpacing(-0.03f);
+        heading.setAccessibilityHeading(true);
+        header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+        page.addView(header, new LinearLayout.LayoutParams(-1, -2));
         content = k.column();
         page.addView(content, new LinearLayout.LayoutParams(-1, -2));
     }

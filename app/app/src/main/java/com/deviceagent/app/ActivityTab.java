@@ -67,7 +67,7 @@ final class ActivityTab extends TabPage {
 
     private void segmentBar(LinearLayout box) {
         LinearLayout track = k.row(); track.setPadding(k.dp(4), k.dp(4), k.dp(4), k.dp(4));
-        track.setBackground(k.shape(k.dark ? k.card : 0xFFE9ECF0, 14, 0));
+        track.setBackground(k.shape(k.card, 12, k.stroke));
         String[] labels = {AppCopy.SEGMENT_TIMELINE, AppCopy.SEGMENT_BLOCKED, AppCopy.SEGMENT_SHARED};
         for (int i = 0; i < 3; i++) {
             final int index = i;
@@ -86,7 +86,7 @@ final class ActivityTab extends TabPage {
         TextView t = segments[i]; if (t == null) return;
         boolean on = i == segment;
         t.setTextColor(on ? k.ink : k.muted);
-        t.setBackground(on ? k.shape(k.dark ? k.stroke : k.card, 11, 0) : null);
+        t.setBackground(on ? k.shape(k.raised, 9, k.strokeStrong) : null);
         t.setSelected(on);
     }
 

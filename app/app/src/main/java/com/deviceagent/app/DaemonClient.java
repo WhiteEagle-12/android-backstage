@@ -18,12 +18,20 @@ import java.util.concurrent.Executors;
 final class DaemonClient {
     interface Result<T> { void done(T value, Exception error); }
 
-    /** A raw response, for the preview endpoint that returns image bytes. */
-    static final class Bytes { int status; byte[] body = new byte[0]; }
+    /** A raw response, for the preview endpoint that returns image bytes + frame metadata. */
+    static final class Bytes {
+        int status;
+        long frameSeq;
+        int sourceWidth, sourceHeight;
+        byte[] body = new byte[0];
+        android.graphics.Bitmap bitmap;
+    }
 
     private final Context app;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private final ExecutorService pool = Executors.newFixedThreadPool(3);
+    private final ExecutorService pool = Executors.newFixedThreadPool(4);
+    private final ExecutorService previewPool = Executors.newSingleThreadExecutor();
+    private final ExecutorService inputPool = Executors.newSingleThreadExecutor();
 
     DaemonClient(Context context) { app = context.getApplicationContext(); }
 
@@ -41,7 +49,16 @@ final class DaemonClient {
     }
 
     void post(String path, Map<String, Object> body, Result<Map<String, Object>> result) {
-        pool.execute(() -> {
+        postOn(pool, path, body, result);
+    }
+
+    /** Ordered input/takeover requests so takeover lock always lands before the first touch. */
+    void postOrdered(String path, Map<String, Object> body, Result<Map<String, Object>> result) {
+        postOn(inputPool, path, body, result);
+    }
+
+    private void postOn(ExecutorService exec, String path, Map<String, Object> body, Result<Map<String, Object>> result) {
+        exec.execute(() -> {
             Map<String, Object> value = null; Exception error = null;
             try {
                 AgentConfig c = AgentConfig.load(app);
@@ -53,27 +70,38 @@ final class DaemonClient {
     }
 
     void bytes(String path, Result<Bytes> result) {
-        pool.execute(() -> {
+        previewPool.execute(() -> {
             Bytes out = new Bytes(); Exception error = null;
             HttpURLConnection conn = null;
             try {
                 AgentConfig c = AgentConfig.load(app);
                 conn = (HttpURLConnection) new URL(url(c, path)).openConnection();
-                conn.setConnectTimeout(2000); conn.setReadTimeout(4000);
+                conn.setConnectTimeout(1500); conn.setReadTimeout(3000);
                 conn.setRequestProperty("Authorization", "Bearer " + c.localToken);
                 out.status = conn.getResponseCode();
+                out.frameSeq = parseLongHeader(conn.getHeaderField("X-Frame-Seq"));
+                out.sourceWidth = (int) parseLongHeader(conn.getHeaderField("X-Source-Width"));
+                out.sourceHeight = (int) parseLongHeader(conn.getHeaderField("X-Source-Height"));
                 if (out.status == 200) {
                     try (InputStream in = conn.getInputStream()) {
                         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
                         byte[] chunk = new byte[16384]; int n;
                         while ((n = in.read(chunk)) > 0) buffer.write(chunk, 0, n);
                         out.body = buffer.toByteArray();
+                        if (out.body.length > 0) {
+                            out.bitmap = android.graphics.BitmapFactory.decodeByteArray(out.body, 0, out.body.length);
+                        }
                     }
                 }
             } catch (Exception e) { error = e; }
             finally { if (conn != null) conn.disconnect(); }
             post(result, out, error);
         });
+    }
+
+    private static long parseLongHeader(String v) {
+        if (v == null || v.isBlank()) return 0L;
+        try { return Long.parseLong(v.trim()); } catch (NumberFormatException e) { return 0L; }
     }
 
     private <T> void post(Result<T> result, T value, Exception error) {
@@ -106,5 +134,5 @@ final class DaemonClient {
         return v instanceof Number ? ((Number) v).longValue() : 0;
     }
 
-    void shutdown() { pool.shutdownNow(); }
+    void shutdown() { pool.shutdownNow(); previewPool.shutdownNow(); inputPool.shutdownNow(); }
 }

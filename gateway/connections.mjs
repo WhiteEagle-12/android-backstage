@@ -4,6 +4,7 @@ import path from 'node:path';
 import {beginConnection} from '../cli/connect.mjs';
 import {writePrivateJson, writePrivateJsonAsync} from '../cli/state.mjs';
 import {encryptedCall} from '../cli/backstage.mjs';
+import {planLimits} from './plans.mjs';
 
 // Errors that callers can act on. `code` is stable; `message` is for people.
 export class ConnectionError extends Error {
@@ -26,7 +27,9 @@ export const validDeviceName=name=>typeof name==='string'&&/^[A-Za-z0-9][A-Za-z0
  * A device ID is stable for the life of the record. Reconnecting a phone replaces
  * the link file behind the same ID, so assistant access and names survive.
  */
-export function createConnections({directory,relayUrl,relayInternalUrl=null,relayInternalToken=null,directRoutes=null,vault=null,begin=beginConnection,call=encryptedCall,fetchImpl=fetch,flushMs=2000,now=Date.now,log=()=>{}}) {
+export function createConnections({directory,relayUrl,relayInternalUrl=null,relayInternalToken=null,directRoutes=null,vault=null,planOf=null,begin=beginConnection,call=encryptedCall,fetchImpl=fetch,flushMs=2000,now=Date.now,log=()=>{}}) {
+  let planResolver = typeof planOf === 'function' ? planOf : null;
+  const limitsFor = ownerId => planResolver ? planLimits(planResolver(ownerId)) : { id: 'unbounded', name: 'Local', maxDevices: 10, maxAssistants: 200, maxParallelScreens: 50, dailyActions: 50_000, screenRecording: true, webhooks: true, maxFileBytes: 128 * 1024 * 1024 };
   fs.mkdirSync(directory,{recursive:true,mode:0o700});
   const phones=path.join(directory,'phones');
   fs.mkdirSync(phones,{recursive:true,mode:0o700});
@@ -222,24 +225,48 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,rela
     return known?directRoutes.route(target.id,known.addresses,link.deviceId):null;
   }
 
+  function checkAssistantAllowance(ownerId, incomingClientIds) {
+    if(!OWNER_ID.test(ownerId||''))return;
+    const limits=limitsFor(ownerId);
+    const activeGrants=grantIds().map(readGrant).filter(r=>r&&r.ownerId===ownerId);
+    const existingClients=new Set(activeGrants.map(r=>r.clientId));
+    const uniqueIncoming=new Set((incomingClientIds||[]).filter(Boolean));
+    let newCount=0;
+    for(const cid of uniqueIncoming)if(!existingClients.has(cid))newCount++;
+    if(activeGrants.length+newCount>limits.maxAssistants){
+      const noun=limits.maxAssistants===1?'1 connected assistant':`${limits.maxAssistants} connected assistants`;
+      throw new ConnectionError('plan_limit',`Your ${limits.name} plan includes up to ${noun}. Remove an existing assistant in Backstage or upgrade to Pro for unlimited assistants.`);
+    }
+  }
   function authorize(ownerId,clientId,clientName,access='all') {
-    if(!OWNER_ID.test(ownerId||'')||ownerDevices(ownerId).length===0)throw new ConnectionError('no_devices','Connect your phone first');
+    if(!OWNER_ID.test(ownerId||'')||ownerDevices(ownerId).length===0)throw new ConnectionError('no_devices','Connect your Android device first');
     const chosen=normalizeAccess(ownerId,access);
     for(const id of grantIds()){const row=readGrant(id);if(row&&row.ownerId===ownerId&&row.clientId===clientId){row.access=chosen;row.clientName=clientName||row.clientName;writeGrant(id,row);return id;}}
+    checkAssistantAllowance(ownerId,[clientId]);
     const id='grant_'+crypto.randomBytes(16).toString('hex');
     writeGrant(id,{ownerId,clientId,clientName,access:chosen,createdAt:now()});return id;
   }
   const active=id=>{try {return fs.existsSync(grantFile(id))&&!fs.existsSync(grantFile(id)+'.revoked');} catch {return false;}};
   // What each assistant is doing now: last command time and the screens it holds.
-  // Kept in memory; a gateway restart forgets it and leases still expire on the phone.
+  // Kept in memory; a gateway restart forgets it and leases still expire on the device.
   const work=new Map();
   const activityOf=grantId=>{const row=work.get(grantId);if(!row)return {lastUsedAt:null,sessions:[]};
     for(const [id,s] of row.sessions)if(s.leaseExpiresAt&&s.leaseExpiresAt<now())row.sessions.delete(id);
     return {lastUsedAt:row.lastUsedAt,sessions:[...row.sessions.values()].map(({sessionId,deviceId,mode,display,startedAt})=>({sessionId,deviceId,mode,display,startedAt}))};};
+  function activeSessionsForOwner(ownerId){
+    if(!OWNER_ID.test(ownerId||''))return 0;
+    const seen=new Set();
+    for(const id of grantIds()){
+      const row=readGrant(id);if(!row||row.ownerId!==ownerId)continue;
+      for(const s of activityOf(id).sessions)if(s.mode!=='foreground')seen.add(s.sessionId);
+    }
+    return seen.size;
+  }
   function recordWork(grantId,deviceId,name,args,result){
     const row=work.get(grantId)||{lastUsedAt:0,sessions:new Map()};row.lastUsedAt=now();work.set(grantId,row);
     if((name==='android.task_begin'||name==='android.task'&&args?.operation==='begin')&&result?.sessionId)row.sessions.set(result.sessionId,{sessionId:result.sessionId,deviceId,mode:result.mode||'private',display:result.display??null,startedAt:now(),leaseExpiresAt:result.leaseExpiresAt||null});
     else if((name==='android.task_finish'||name==='android.task'&&args?.operation==='finish')&&args?.sessionId)row.sessions.delete(args.sessionId);
+    else if(args?.sessionId&&['session_expired','session_unavailable','display_unavailable'].includes(result?.code))row.sessions.delete(args.sessionId);
     else if(args?.sessionId&&row.sessions.has(args.sessionId)&&result?.leaseExpiresAt)row.sessions.get(args.sessionId).leaseExpiresAt=result.leaseExpiresAt;
   }
   async function callLink(target,name,args){
@@ -249,6 +276,9 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,rela
   }
 
   return {
+    setPlanResolver(fn) { planResolver = typeof fn === 'function' ? fn : null; },
+    checkAssistantAllowance,
+    activeSessionsForOwner,
     flush:flushDirtyPhones,
     flushSync:flushDirtyPhonesSync,
     // ---- devices -----------------------------------------------------------
@@ -364,7 +394,13 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,rela
     async begin({clientName='ChatGPT',ownerId,clientId,name,deviceId}={}) {
       if(ownerId&&!OWNER_ID.test(ownerId))throw new ConnectionError('invalid_request','Invalid owner');
       if(deviceId&&(!ownerId||!devices[deviceId]||devices[deviceId].ownerId!==ownerId))throw new ConnectionError('unknown_device','Device not found.');
-      if(ownerId&&!deviceId&&ownerDevices(ownerId).length>=10)throw new ConnectionError('busy','This account already has ten devices. Remove one first.');
+      if(ownerId&&!deviceId){
+        const limits=limitsFor(ownerId);
+        if(ownerDevices(ownerId).length>=limits.maxDevices){
+          const noun=limits.maxDevices===1?'1 Android device':`${limits.maxDevices} Android devices`;
+          throw new ConnectionError('plan_limit',`Your ${limits.name} plan includes up to ${noun}. Remove a device or upgrade to Pro to add more.`);
+        }
+      }
       const label=deviceId?devices[deviceId].name:uniqueName(ownerId,name);
       const extraHeaders=relayInternalToken&&ownerId?{'x-backstage-internal-key':relayInternalToken,'x-backstage-owner':ownerId}:null;
       const pairing=await begin({relayUrl,transportRelayUrl:relayInternalUrl||null,extraHeaders,clientName:ownerId?'Android Backstage':clientName,name:label});
@@ -378,6 +414,13 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,rela
             if(ownerId){
               const targetId=deviceId||'phone_'+crypto.randomBytes(16).toString('hex');
               if(deviceId&&!devices[deviceId])throw new ConnectionError('unknown_device','That device was removed while connecting.');
+              if(!deviceId){
+                const limits=limitsFor(ownerId);
+                if(ownerDevices(ownerId).length>=limits.maxDevices){
+                  const noun=limits.maxDevices===1?'1 Android device':`${limits.maxDevices} Android devices`;
+                  throw new ConnectionError('plan_limit',`Your ${limits.name} plan includes up to ${noun}. Remove a device or upgrade to Pro to add more.`);
+                }
+              }
               writePhoneFile(targetId,config);
               probeCache.delete(targetId);devices[targetId]=deviceId?{...devices[deviceId],linkedAt:now(),needsReconnect:false,lastError:null}:{ownerId,name:uniqueName(ownerId,label),createdAt:now(),linkedAt:now(),needsReconnect:false};
               saveDevices();

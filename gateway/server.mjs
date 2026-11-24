@@ -19,6 +19,7 @@ import {createRequestJournal} from './request-journal.mjs';
 import {jsonKeepAlive} from './json-keepalive.mjs';
 import { createAuth } from './auth.mjs';
 import {createOwners} from './owners.mjs';
+import {planLimits} from './plans.mjs';
 import {createMailer} from './mail.mjs';
 import {createAppReleases} from './app-releases.mjs';
 import {ownerRoutes} from './owner-routes.mjs';
@@ -123,7 +124,31 @@ const failure=(e)=>{
   return asToolResult({ok:false,code:'tool_failed',error:'The phone action did not finish. The phone may be offline, paused, or this connection may no longer have access. Do not retry a write unless its outcome is known.'},true);
 };
 
-export function createWorkApp({base,stateFile,approvalFile,connections,owners,artifacts,metadataReader,callTool,directFilesUrl=null,keepAlive,allowTestRedirect=false,zeroRetention=false,allowShell=process.env.BACKSTAGE_ALLOW_HOSTED_SHELL!=='0',internalToken=process.env.RELAY_INTERNAL_TOKEN||process.env.RELAY_ADMIN_TOKEN||null,audit=()=>{},now=Date.now}) {
+export function createWorkApp({base,stateFile,approvalFile,connections,owners,artifacts,metadataReader,callTool,directFilesUrl=null,keepAlive,allowTestRedirect=false,zeroRetention=false,allowShell=process.env.BACKSTAGE_ALLOW_HOSTED_SHELL!=='0',enforcePlans=process.env.BACKSTAGE_ENFORCE_PLANS!=='0',internalToken=process.env.RELAY_INTERNAL_TOKEN||process.env.RELAY_ADMIN_TOKEN||null,audit=()=>{},now=Date.now}) {
+  if(enforcePlans&&connections&&owners&&typeof owners.planOf==='function')connections.setPlanResolver?.(ownerId=>owners.planOf(ownerId));
+  const dailyUsage=new Map();
+  const ownerLimits=grantId=>{
+    if(!enforcePlans||!connections||!owners||typeof owners.planOf!=='function')return null;
+    const ownerId=connections.ownerOf?.(grantId);
+    if(!ownerId)return null;
+    return {ownerId,limits:planLimits(owners.planOf(ownerId))};
+  };
+  const consumeDailyAction=(ownerId,limits)=>{
+    const day=new Date(now()).toISOString().slice(0,10);
+    let row=dailyUsage.get(ownerId);
+    if(!row||row.day!==day){
+      if(!dailyUsage.has(ownerId)&&dailyUsage.size>=10000){
+        for(const [k,v] of dailyUsage)if(v.day!==day)dailyUsage.delete(k);
+        if(dailyUsage.size>=10000){const oldest=dailyUsage.keys().next().value;if(oldest!==undefined)dailyUsage.delete(oldest);}
+      }
+      row={day,count:0};
+      dailyUsage.set(ownerId,row);
+    }
+    if(row.count>=limits.dailyActions){
+      throw new ConnectionError('plan_limit',`Daily action limit reached for the ${limits.name} plan (${limits.dailyActions}/day). Wait until tomorrow or upgrade to Pro.`);
+    }
+    row.count++;
+  };
   if(zeroRetention&&stateFile)fs.rmSync(stateFile+'.requests',{recursive:true,force:true});
   const journal=createRequestJournal({directory:stateFile+'.requests',memoryOnly:zeroRetention,now,reconcile:async(grantId,name,args,jobId)=>{
     if(!connections?.active(grantId))return null;
@@ -208,6 +233,16 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
       const grants = connections ? connections.list(ownerId).map(g => ({ id: g.id, name: g.name || null, access: g.access, paused: !!g.paused, createdAt: g.createdAt })) : [];
       res.json({ ownerId, methods, devices, grants });
     });
+    app.post('/work/internal/admin/owner/:ref/plan', requireInternalAdmin, (req, res) => {
+      const ownerId = resolveOwnerId(req.params.ref);
+      if (!ownerId) return res.status(404).json({ error: 'owner_not_found' });
+      try {
+        const updated = owners.setPlan(ownerId, req.body?.plan);
+        res.json({ ok: true, ...updated });
+      } catch (e) {
+        res.status(400).json({ error: e.message });
+      }
+    });
     app.post('/work/internal/admin/owner/:ref/revoke-grants', requireInternalAdmin, (req, res) => {
       const ownerId = resolveOwnerId(req.params.ref);
       if (!ownerId) return res.status(404).json({ error: 'owner_not_found' });
@@ -243,6 +278,27 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
     const {device:ref,...rest}=args;
     if(!connections)return callTool(engine,rest,grantId,{});
     if(engine==='android.devices'&&rest.detail!=='debug')return {outcome:'succeeded',devices:(await connections.status(grantId)).map(({id,name,status,online,needsReconnect,model,lastSeen,lastError})=>({id,name,status,online,needsReconnect,model:model||null,...(lastSeen?{lastSeen}:{}),...(lastError?{lastError}:{})}))};
+    const planInfo=ownerLimits(grantId);
+    if(planInfo){
+      const {ownerId,limits}=planInfo;
+      if(engine!=='android.job_status')consumeDailyAction(ownerId,limits);
+      if(engine==='android.task'&&rest.operation==='begin'&&!rest.join&&rest.mode!=='foreground'){
+        const activeCount=connections.activeSessionsForOwner?.(ownerId)||0;
+        if(activeCount>=limits.maxParallelScreens){
+          const noun=limits.maxParallelScreens===1?'1 active backstage screen':`${limits.maxParallelScreens} active backstage screens`;
+          throw new ConnectionError('plan_limit',`Your ${limits.name} plan includes ${noun} at a time. Finish the active screen first, or upgrade to Pro for parallel backstage screens.`);
+        }
+      }
+      if(engine==='android.task'&&rest.operation==='record_start'&&!limits.screenRecording){
+        throw new ConnectionError('plan_limit','Screen recording is included with Pro and Team plans.');
+      }
+      if(engine==='android.events'&&['webhook_set','set_rules'].includes(rest.operation)&&!limits.webhooks){
+        throw new ConnectionError('plan_limit','Background triggers and webhooks are included with Pro and Team plans.');
+      }
+      if(engine==='android.artifact'&&rest.operation==='begin'&&rest.size>limits.maxFileBytes){
+        throw new ConnectionError('plan_limit',`Files over ${Math.round(limits.maxFileBytes/(1024*1024))} MB require a Pro or Team plan.`);
+      }
+    }
     if(engine==='android.artifact'){
       if(!artifacts)throw new ConnectionError('tool_failed','File artifacts are unavailable.');
       if(rest.operation==='begin'){const {operation,...input}=rest;const row=artifacts.begin({grantId,...input});return {outcome:'succeeded',...row,uploadUrl:base+'/artifacts/'+row.artifactId,method:'PUT',maxRequestBytes:90*1024*1024};}
@@ -282,7 +338,7 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
       let fd=fs.openSync(tmp,'wx',0o600);
       const hash=createHash('sha256');
       let offset=0;
-      const maxPullBytes=artifacts.maxBytes||128*1024*1024;
+      const maxPullBytes=planInfo?Math.min(artifacts.maxBytes||128*1024*1024,planInfo.limits.maxFileBytes):(artifacts.maxBytes||128*1024*1024);
       const fileId=first.fileId,totalBytes=first.totalBytes;
       let saved;
       try {
@@ -292,7 +348,12 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
           if(fileId&&row.fileId&&row.fileId!==fileId)throw new ConnectionError('file_changed','The file changed during transfer. Retry pull.');
           const buf=Buffer.from(typeof row.dataBase64==='string'?row.dataBase64:'','base64');
           if(row.sha256&&createHash('sha256').update(buf).digest('hex')!==row.sha256)throw new ConnectionError('integrity_mismatch','Pulled chunk failed SHA-256 check.');
-          if(offset+buf.length>maxPullBytes)throw new ConnectionError('invalid_request',`File exceeds maximum transfer size (${maxPullBytes} bytes).`);
+          if(offset+buf.length>maxPullBytes){
+            if(planInfo&&maxPullBytes===planInfo.limits.maxFileBytes&&planInfo.limits.maxFileBytes<(artifacts.maxBytes||128*1024*1024)){
+              throw new ConnectionError('plan_limit',`Files over ${Math.round(planInfo.limits.maxFileBytes/(1024*1024))} MB require a Pro or Team plan.`);
+            }
+            throw new ConnectionError('invalid_request',`File exceeds maximum transfer size (${maxPullBytes} bytes).`);
+          }
           if(buf.length){fs.writeSync(fd,buf,0,buf.length,offset);hash.update(buf);offset+=buf.length;}
           if(row.eof||!buf.length)break;
           row=await send('android.pull',{path:rest.path,offset,length:1048576,...(fileId?{fileId}:{})});

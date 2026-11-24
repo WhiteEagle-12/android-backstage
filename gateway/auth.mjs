@@ -402,6 +402,7 @@ form.addEventListener('submit',async event=>{
         if(Object.keys(state.clients).length+row.clients.length>10000)throw new ConnectionError('busy','Try again later.');
         for(const c of row.clients){state.clients[c.clientId]={name:c.name,redirects:[],secret:null,method:'none',createdAt:now(),lastUsedAt:now()};}
         save();
+        connections.checkAssistantAllowance?.(ownerId,row.clients.map(c=>c.clientId));
         row.grants=row.clients.map(c=>connections.authorize(ownerId,c.clientId,c.name,access||'all'));row.decision='allow';
       }
       else {row.decision='deny';row.expires=Math.min(row.expires,now()+60000);}

@@ -50,7 +50,7 @@ async function harness(t,{url,dataDir}) {
   const start=async()=>{
     const connections=createConnections({directory,relayUrl:url,now:()=>clock}),owners=createOwners({stateFile:ownerFile,origin,now:()=>clock});
     const artifacts=createArtifacts({directory:path.join(dataDir,'artifacts'),now:()=>clock});
-    const app=createWorkApp({base,stateFile,connections,owners,artifacts,now:()=>clock});
+    const app=createWorkApp({base,stateFile,connections,owners,artifacts,enforcePlans:false,now:()=>clock});
     server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});endpoint='http://127.0.0.1:'+server.address().port;
     return connections;
   };

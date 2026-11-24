@@ -24,10 +24,11 @@ final class LiveTab extends TabPage {
     private List<Map<String, Object>> confirmations = new ArrayList<>();
     private boolean sessionsLoading, confirmLoading, sessionsLoaded;
     private final Map<String, Bitmap> confirmShots = new HashMap<>();
-    /** Live thumbnails keyed by session, updated in place. */
+    /** Live full-width previews keyed by session, updated in place. */
     private final Map<String, ImageView> thumbs = new HashMap<>();
     private final Map<String, TextView> thumbNotes = new HashMap<>();
     private final Map<String, Boolean> previewLoading = new HashMap<>();
+    private final Map<String, Long> previewSeq = new HashMap<>();
     private long lastPreviewAt;
     private TextView statusTitle, statusMeta, statusBody;
     private View statusDot;
@@ -78,7 +79,7 @@ final class LiveTab extends TabPage {
         for (Map<String, Object> s : sessions) sig.append('|').append(DaemonClient.str(s, "sessionId")).append(',')
                 .append(DaemonClient.str(s, "package")).append(',').append(DaemonClient.str(s, "mode")).append(',')
                 .append(DaemonClient.str(s, "recording")).append(',').append(DaemonClient.str(s, "blocked")).append(',')
-                .append(DaemonClient.str(s, "display"));
+                .append(DaemonClient.str(s, "userInControl")).append(',').append(DaemonClient.str(s, "display"));
         if (a.daemonUp) put("screens", sig.toString(), this::screensSection);
         end();
     }
@@ -129,8 +130,14 @@ final class LiveTab extends TabPage {
         k.section(box, AppCopy.SECTION_CONFIRMATIONS);
         for (Map<String, Object> c : confirmations) {
             String id = DaemonClient.str(c, "confirmId");
+            String sid = DaemonClient.str(c, "sessionId");
+            String kind = "handoff".equals(DaemonClient.str(c, "kind")) ? "handoff" : "confirm";
+            String title = DaemonClient.str(c, "title");
+            String summary = DaemonClient.str(c, "summary");
+            String pkg = DaemonClient.str(c, "package");
+            int display = (int) DaemonClient.num(c, "displayId");
             LinearLayout card = k.card(box);
-            card.setBackground(k.shape(k.card, 20, k.green));
+            card.setBackground(k.shape(k.card, 14, "handoff".equals(kind) ? k.amber : k.green));
             Bitmap shot = confirmShots.get(id);
             if (shot == null && c.get("screenshotBase64") instanceof String) {
                 try {
@@ -142,18 +149,31 @@ final class LiveTab extends TabPage {
             if (shot != null) {
                 ImageView image = new ImageView(a); image.setImageBitmap(shot);
                 image.setAdjustViewBounds(true); image.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                image.setBackground(k.shape(k.canvas, 14, k.stroke)); image.setClipToOutline(true);
+                image.setBackground(k.shape(k.canvas, 10, k.stroke)); image.setClipToOutline(true);
                 image.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, k.dp(220)); lp.bottomMargin = k.dp(12);
+                if (display > 0 && !sid.isEmpty()) {
+                    image.setOnClickListener(v -> openLive(sid, display, pkg, false, id, kind, title, summary, true));
+                }
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, k.dp(240)); lp.bottomMargin = k.dp(12);
                 card.addView(image, lp);
             }
-            k.title(card, DaemonClient.str(c, "title"));
-            String summary = DaemonClient.str(c, "summary");
+            k.title(card, title);
             if (!summary.isEmpty()) k.body(card, summary);
             LinearLayout row = k.buttonRow(card);
-            k.rowButton(row, AppCopy.ACTION_APPROVE, UiKit.PRIMARY, () -> decide(id, "approved"));
-            k.rowButton(row, AppCopy.ACTION_TAKE_OVER, UiKit.SECONDARY, () -> decide(id, "handoff"));
-            k.rowButton(row, AppCopy.CANCEL, UiKit.SECONDARY, () -> decide(id, "cancelled"));
+            if ("handoff".equals(kind)) {
+                k.rowButton(row, AppCopy.ACTION_TAKE_OVER, UiKit.PRIMARY, () -> {
+                    if (display > 0 && !sid.isEmpty()) openLive(sid, display, pkg, false, id, kind, title, summary, true);
+                    else decide(id, "handoff");
+                });
+                k.rowButton(row, AppCopy.CANCEL, UiKit.SECONDARY, () -> decide(id, "cancelled"));
+            } else {
+                k.rowButton(row, AppCopy.ACTION_APPROVE, UiKit.PRIMARY, () -> decide(id, "approved"));
+                k.rowButton(row, AppCopy.ACTION_TAKE_OVER, UiKit.SECONDARY, () -> {
+                    if (display > 0 && !sid.isEmpty()) openLive(sid, display, pkg, false, id, kind, title, summary, true);
+                    else decide(id, "handoff");
+                });
+                k.rowButton(row, AppCopy.CANCEL, UiKit.SECONDARY, () -> decide(id, "cancelled"));
+            }
         }
     }
 
@@ -165,56 +185,93 @@ final class LiveTab extends TabPage {
         a.daemon.post("/confirmations/decide", Json.mapOf("confirmId", confirmId, "decision", decision), (r, e) -> { });
     }
 
-    // ---- Active screens ----
+    // ---- Active screens (full horizontal width) ----
 
     private void screensSection(LinearLayout box) {
-        thumbs.clear(); thumbNotes.clear();
+        thumbs.clear(); thumbNotes.clear(); previewSeq.clear();
         k.section(box, AppCopy.SECTION_ACTIVE_SCREENS);
         if (sessions.isEmpty()) { if (sessionsLoaded) k.empty(box, AppCopy.EMPTY_ACTIVE_SCREENS); return; }
+        int screenWidth = a.getResources().getDisplayMetrics().widthPixels;
         for (Map<String, Object> s : sessions) {
             String id = DaemonClient.str(s, "sessionId"), pkg = DaemonClient.str(s, "package");
             boolean foreground = "foreground".equals(DaemonClient.str(s, "mode"));
             boolean blocked = Boolean.TRUE.equals(s.get("blocked"));
+            boolean inControl = Boolean.TRUE.equals(s.get("userInControl"));
             int display = (int) DaemonClient.num(s, "display");
+            String label = pkg.isEmpty() ? (foreground ? AppCopy.LABEL_MAIN_SCREEN : AppCopy.LABEL_PRIVATE_SCREEN) : a.appLabel(pkg);
+
             LinearLayout card = k.card(box);
-            LinearLayout row = k.row(); row.setGravity(Gravity.TOP);
+            card.setPadding(k.dp(14), k.dp(14), k.dp(14), k.dp(14));
+            if (inControl) card.setBackground(k.shape(k.card, 14, k.amber));
+
+            // Header row: App name + live state pills
+            LinearLayout head = k.row();
+            LinearLayout titleCol = k.column();
+            k.title(titleCol, label);
+            if (!pkg.isEmpty()) {
+                TextView p = k.body(titleCol, pkg);
+                p.setTextSize(12); p.setPadding(0, k.dp(1), 0, 0);
+            }
+            head.addView(titleCol, new LinearLayout.LayoutParams(0, -2, 1));
+            if (inControl) k.pill(head, AppCopy.LABEL_IN_CONTROL_SHORT, k.amber, k.amberSoft);
+            else k.pill(head, foreground ? AppCopy.LABEL_MAIN_SCREEN : AppCopy.LABEL_AGENT_ACTIVE, k.green, k.greenSoft);
+            if (Boolean.TRUE.equals(s.get("recording"))) k.pill(head, AppCopy.LABEL_RECORDING, k.danger, k.dangerSoft);
+            card.addView(head, new LinearLayout.LayoutParams(-1, -2));
+
+            // Full-width live preview canvas (tap to open edge-to-edge live takeover viewer)
             if (display > 0) {
                 long w = DaemonClient.num(s, "width"), h = DaemonClient.num(s, "height");
-                int tw = k.dp(92), th = w > 0 && h > 0 ? (int) Math.min(k.dp(200), tw * h / w) : k.dp(180);
+                int availW = Math.max(k.dp(240), Math.min(screenWidth, k.dp(640)) - k.dp(56));
+                int maxH = Math.round(a.getResources().getDisplayMetrics().heightPixels * 0.56f);
+                int th = w > 0 && h > 0 ? (int) Math.min(maxH, availW * h / w) : Math.min(maxH, k.dp(420));
                 FrameLayout frame = new FrameLayout(a);
-                frame.setBackground(k.shape(k.canvas, 12, k.stroke)); frame.setClipToOutline(true);
-                ImageView thumb = new ImageView(a); thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                frame.setBackground(k.shape(k.canvas, 12, inControl ? k.amber : k.strokeStrong));
+                frame.setClipToOutline(true);
+                ImageView thumb = new ImageView(a);
+                thumb.setScaleType(ImageView.ScaleType.FIT_CENTER);
                 thumb.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
                 frame.addView(thumb, new FrameLayout.LayoutParams(-1, -1));
-                TextView note = k.text(null, blocked ? AppCopy.PREVIEW_HIDDEN_BLOCKED : AppCopy.PREVIEW_UNAVAILABLE, 11, k.muted, false);
-                note.setGravity(Gravity.CENTER); note.setPadding(k.dp(6), 0, k.dp(6), 0);
+                TextView note = k.text(null, blocked ? AppCopy.PREVIEW_HIDDEN_BLOCKED : AppCopy.PREVIEW_UNAVAILABLE, 13, k.muted, false);
+                note.setGravity(Gravity.CENTER); note.setPadding(k.dp(12), 0, k.dp(12), 0);
                 frame.addView(note, new FrameLayout.LayoutParams(-1, -1));
-                LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(tw, th); fp.setMarginEnd(k.dp(14));
-                row.addView(frame, fp);
-                if (!blocked) { thumbs.put(id, thumb); thumbNotes.put(id, note); }
+                if (!blocked) {
+                    frame.setClickable(true); frame.setFocusable(true);
+                    frame.setOnClickListener(v -> openLive(id, display, pkg, inControl, "", "confirm", "", "", false));
+                    thumbs.put(id, thumb); thumbNotes.put(id, note);
+                }
+                LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, th);
+                fp.topMargin = k.dp(12);
+                card.addView(frame, fp);
             }
-            LinearLayout info = k.column();
-            k.title(info, pkg.isEmpty() ? (foreground ? AppCopy.LABEL_MAIN_SCREEN : AppCopy.LABEL_PRIVATE_SCREEN) : a.appLabel(pkg));
-            if (!pkg.isEmpty()) { TextView p = k.body(info, pkg); p.setTextSize(12); p.setPadding(0, k.dp(2), 0, 0); }
-            LinearLayout badges = k.row(); badges.setPadding(0, k.dp(8), 0, 0);
-            k.pill(badges, foreground ? AppCopy.LABEL_MAIN_SCREEN : AppCopy.LABEL_PRIVATE_SCREEN, k.green, k.greenSoft);
-            if (Boolean.TRUE.equals(s.get("recording"))) k.pill(badges, AppCopy.LABEL_RECORDING, k.danger, k.dangerSoft);
-            info.addView(badges);
-            LinearLayout actions = k.column(); actions.setPadding(0, k.dp(4), 0, 0);
-            if (!foreground) k.button(actions, AppCopy.ACTION_TAKE_OVER, UiKit.PRIMARY, () -> handoff(id, display));
-            k.button(actions, AppCopy.ACTION_STOP, UiKit.DANGER, () -> stop(id));
-            info.addView(actions);
-            row.addView(info, new LinearLayout.LayoutParams(0, -2, 1));
-            card.addView(row);
+
+            // Full-width action row
+            LinearLayout actions = k.buttonRow(card);
+            if (!foreground && display > 0) {
+                if (inControl) {
+                    k.rowButton(actions, AppCopy.ACTION_TAKE_OVER, UiKit.AMBER, () -> openLive(id, display, pkg, true, "", "confirm", "", "", false));
+                    k.rowButton(actions, AppCopy.ACTION_HAND_BACK, UiKit.PRIMARY, () -> setTakeover(id, false));
+                } else {
+                    k.rowButton(actions, AppCopy.ACTION_TAKE_OVER, UiKit.PRIMARY, () -> openLive(id, display, pkg, false, "", "confirm", "", "", true));
+                    k.rowButton(actions, AppCopy.ACTION_WATCH, UiKit.SECONDARY, () -> openLive(id, display, pkg, false, "", "confirm", "", "", false));
+                }
+            }
+            k.rowButton(actions, AppCopy.ACTION_STOP, UiKit.DANGER, () -> stop(id));
         }
         lastPreviewAt = 0;
     }
 
-    private void handoff(String id, int display) {
-        Map<String, Object> body = Json.mapOf("sessionId", id);
-        if (display > 0) body.put("displayId", display);
-        a.daemon.post("/session/handoff", body, (r, e) -> {
-            toast(e == null ? AppCopy.HANDOFF_DONE : AppCopy.HANDOFF_FAILED);
+    private void openLive(
+            String sessionId, int displayId, String pkg, boolean inControl,
+            String confirmId, String confirmKind, String confirmTitle, String confirmSummary, boolean autoTakeover) {
+        String label = pkg == null || pkg.isEmpty() ? AppCopy.LABEL_PRIVATE_SCREEN : a.appLabel(pkg);
+        a.startActivity(LiveScreenActivity.openIntent(
+                a, sessionId, displayId, pkg, label, inControl,
+                confirmId, confirmKind, confirmTitle, confirmSummary, autoTakeover));
+    }
+
+    private void setTakeover(String id, boolean active) {
+        a.daemon.postOrdered("/session/takeover", Json.mapOf("sessionId", id, "active", active), (r, e) -> {
+            toast(e == null ? (active ? AppCopy.TAKEOVER_ON : AppCopy.TAKEOVER_OFF) : AppCopy.TAKEOVER_FAILED);
             loadSessions();
         });
     }
@@ -237,7 +294,7 @@ final class LiveTab extends TabPage {
         loadSessions();
         if (a.pendingConfirmations > 0 || !confirmations.isEmpty() || a.focusConfirm != null) loadConfirmations();
         long now = SystemClock.elapsedRealtime();
-        if (now - lastPreviewAt >= 2000) { lastPreviewAt = now; loadPreviews(); }
+        if (now - lastPreviewAt >= 700) { lastPreviewAt = now; loadPreviews(); }
     }
 
     private void loadSessions() {
@@ -272,13 +329,17 @@ final class LiveTab extends TabPage {
             if (display <= 0 || Boolean.TRUE.equals(s.get("blocked")) || !thumbs.containsKey(id)) continue;
             if (Boolean.TRUE.equals(previewLoading.get(id))) continue;
             previewLoading.put(id, true);
-            a.daemon.bytes("/preview?displayId=" + display + "&scale=0.45", (shot, error) -> {
+            long seq = previewSeq.getOrDefault(id, -1L);
+            String url = "/preview?displayId=" + display + "&scale=0.55&quality=75" + (seq > 0 ? "&sinceFrame=" + seq : "");
+            a.daemon.bytes(url, (shot, error) -> {
                 previewLoading.remove(id);
                 ImageView thumb = thumbs.get(id); TextView note = thumbNotes.get(id);
                 if (thumb == null || note == null || shot == null) return;
+                if (shot.status == 304) return;
                 if (shot.status == 403) { thumb.setImageDrawable(null); note.setText(AppCopy.PREVIEW_HIDDEN_BLOCKED); note.setVisibility(View.VISIBLE); return; }
-                Bitmap bitmap = shot.status == 200 && shot.body.length > 0 ? BitmapFactory.decodeByteArray(shot.body, 0, shot.body.length) : null;
+                Bitmap bitmap = shot.status == 200 ? shot.bitmap : null;
                 if (bitmap == null) { if (thumb.getDrawable() == null) { note.setText(AppCopy.PREVIEW_UNAVAILABLE); note.setVisibility(View.VISIBLE); } return; }
+                if (shot.frameSeq > 0) previewSeq.put(id, shot.frameSeq);
                 thumb.setImageBitmap(bitmap); note.setVisibility(View.GONE);
             });
         }

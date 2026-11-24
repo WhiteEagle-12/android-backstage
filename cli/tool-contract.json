@@ -9967,7 +9967,7 @@
   },
   {
     "name": "android.confirm",
-    "description": "Ask user on phone to Approve, Take Over, or Cancel.",
+    "description": "Ask user on Android device to approve an action (kind:confirm) or take over the live screen for sign-in, 2FA, CAPTCHA, or manual help (kind:handoff).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -9981,6 +9981,13 @@
           "minLength": 1,
           "pattern": "^[A-Za-z0-9_-]{1,128}$"
         },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "confirm",
+            "handoff"
+          ]
+        },
         "title": {
           "type": "string",
           "minLength": 1,
@@ -9993,7 +10000,7 @@
         "timeoutMs": {
           "type": "integer",
           "minimum": 5000,
-          "maximum": 120000
+          "maximum": 300000
         }
       },
       "required": [

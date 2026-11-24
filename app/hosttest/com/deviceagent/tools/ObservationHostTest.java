@@ -38,6 +38,12 @@ public final class ObservationHostTest {
   var tasks=new TaskResources(root,(op,args)->{calls.add(op);return switch(op){case "display_status"->new LinkedHashMap<>(display);case "display_start"->{display.putAll(Json.mapOf("active",true,"created",true,"displayId",2,"createdAt",clock[0]));yield new LinkedHashMap<>(display);}case "display_stop"->{display.put("active",false);yield Map.of("ok",true);}case "activities"->Map.of("activityTasks",List.of());default->throw new AssertionError(op);};},()->clock[0]);
   var begin=tasks.begin(Map.of("leaseMinutes",1),"a");String id=(String)begin.get("sessionId");check(tasks.use(id,"a")==2,"owned display acquired");rejects(()->tasks.use(id,"b"));
   rejects(()->tasks.use(id,"a",0));
+  // User takeover immediately blocks agent use() with code=user_in_control until handback, while admin display stays active.
+  var took=tasks.setUserTakeover(id,true);check(Boolean.TRUE.equals(took.get("ok"))&&Boolean.TRUE.equals(took.get("userInControl"))&&tasks.isUserInControl(id),"user takeover locks session");
+  try{tasks.use(id,"a");throw new AssertionError("agent allowed during user takeover");}catch(InputNotSentException e){check("user_in_control".equals(e.code),"user_in_control code");}
+  check(tasks.activeDisplayForAdmin(id)==2,"admin user input still resolves display during takeover");
+  check(Boolean.TRUE.equals(tasks.inspect(id,"a").get("userInControl")),"inspect reports userInControl");
+  var back=tasks.setUserTakeover(id,false);check(Boolean.FALSE.equals(back.get("userInControl"))&&tasks.use(id,"a")==2,"handback restores agent control");
   java.nio.file.Files.writeString(java.nio.file.Path.of((String)begin.get("temporaryDirectory"),"test"),"x");
   var done=tasks.finish(Map.of("sessionId",id),"a");check(((List<?>)done.get("released")).containsAll(List.of("display","temporaryFiles")),"reports actual released resources");check(((List<?>)tasks.finish(Map.of("sessionId",id),"a").get("released")).isEmpty(),"idempotent finish");
   begin=tasks.begin(Map.of("leaseMinutes",1),"a");String expired=(String)begin.get("sessionId");clock[0]=60001;tasks.sweep();check(tasks.inspect(expired,"a").get("state").equals("finished"),"disconnect lease expiry cleans resources");

@@ -95,6 +95,8 @@ public final class InteractionHost {
             if(op.equals("tap"))return tap(args);
             if(op.equals("activity_process")){var component=android.content.ComponentName.unflattenFromString(Json.string(args,"component"));if(component==null)throw new IllegalArgumentException("Invalid activity");var info=shellContext().getPackageManager().getActivityInfo(component,0);return Json.mapOf("ok",true,"process",info.processName);}
             if(op.equals("key"))return key(args);
+            if(op.equals("user_key"))return userKey(args);
+            if(op.equals("user_text"))return userText(args);
             if(op.equals("paste_text"))return pasteText(args);
             if(op.equals("notification"))return notifications.handle(shellContext(),args);
             if(op.equals("clipboard"))return clipboard(args);
@@ -322,6 +324,67 @@ public final class InteractionHost {
         }
         if(!complete||!released)return Json.mapOf("ok",false,"inputDelivered",attempted?null:false,"code",attempted?"input_outcome_unknown":"input_not_sent","error","The key has no complete receipt. Observe the display before trying again.","keysReleased",released);
         return Json.mapOf("ok",true,"inputDelivered",true,"display",display,"keysReleased",true);
+    }
+    private Map<String,Object> userKey(Map<String,Object> args) throws Exception {
+        int display=GesturePlan.integer(args,"display",-1,1,Integer.MAX_VALUE);
+        if(shellContext().getSystemService(DisplayManager.class).getDisplay(display)==null)throw new IllegalArgumentException("The virtual display no longer exists.");
+        String keyName=Json.string(args,"key");
+        if(keyName==null||!java.util.Set.of("BACK","ENTER","DEL","FORWARD_DEL","TAB","ESCAPE","SPACE","DPAD_UP","DPAD_DOWN","DPAD_LEFT","DPAD_RIGHT","DPAD_CENTER").contains(keyName))
+            throw new IllegalArgumentException("Unsupported user takeover key");
+        int code=KeyEvent.keyCodeFromString("KEYCODE_"+keyName);
+        if(code==KeyEvent.KEYCODE_UNKNOWN)throw new IllegalArgumentException("Unsupported key");
+        Class<?> cls=Class.forName("android.hardware.input.InputManager");
+        Object manager=cls.getMethod("getInstance").invoke(null);
+        Method inject=cls.getMethod("injectInputEvent",InputEvent.class,int.class);
+        Method setDisplay=InputEvent.class.getMethod("setDisplayId",int.class);
+        long down=SystemClock.uptimeMillis();
+        sendKey(manager,inject,setDisplay,display,down,KeyEvent.ACTION_DOWN,code,0,0);
+        sendKey(manager,inject,setDisplay,display,down,KeyEvent.ACTION_UP,code,0,0);
+        return Json.mapOf("ok",true,"inputDelivered",true,"display",display,"key",keyName);
+    }
+    private Map<String,Object> userText(Map<String,Object> args) throws Exception {
+        int display=GesturePlan.integer(args,"display",-1,1,Integer.MAX_VALUE);
+        if(shellContext().getSystemService(DisplayManager.class).getDisplay(display)==null)throw new IllegalArgumentException("The virtual display no longer exists.");
+        String text=Json.string(args,"text");
+        if(text==null||text.isEmpty())return Json.mapOf("ok",true,"inputDelivered",false,"display",display);
+        if(text.length()>4000)throw new IllegalArgumentException("Text is too long");
+        Class<?> cls=Class.forName("android.hardware.input.InputManager");
+        Object manager=cls.getMethod("getInstance").invoke(null);
+        Method inject=cls.getMethod("injectInputEvent",InputEvent.class,int.class);
+        Method setDisplay=InputEvent.class.getMethod("setDisplayId",int.class);
+        KeyCharacterMap kcm=KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD);
+        KeyEvent[] events=kcm.getEvents(text.toCharArray());
+        if(events!=null){
+            for(KeyEvent ev:events){
+                KeyEvent scoped=new KeyEvent(SystemClock.uptimeMillis(),SystemClock.uptimeMillis(),ev.getAction(),ev.getKeyCode(),ev.getRepeatCount(),ev.getMetaState(),KeyCharacterMap.VIRTUAL_KEYBOARD,0,0,InputDevice.SOURCE_KEYBOARD);
+                setDisplay.invoke(scoped,display);
+                if(!Boolean.TRUE.equals(inject.invoke(manager,scoped,2)))throw new IllegalStateException("Android rejected key event");
+            }
+            return Json.mapOf("ok",true,"inputDelivered",true,"method","keys","display",display);
+        }
+        // Non-ASCII / emoji fallback: paste via clipboard with save + restore.
+        Context shell=shellContext();
+        var clipboard=shell.getSystemService(android.content.ClipboardManager.class);
+        if(clipboard==null||clipboardLocked(shell))return clipboardLockedResult();
+        android.content.ClipData saved=null;
+        try{saved=clipboard.getPrimaryClip();}catch(Exception ignored){}
+        String marker="backstage_user_"+UUID.randomUUID();
+        boolean changed=false;
+        try{
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText(marker,text));changed=true;
+            long down=SystemClock.uptimeMillis();
+            int meta=KeyEvent.META_CTRL_ON|KeyEvent.META_CTRL_LEFT_ON;
+            sendKey(manager,inject,setDisplay,display,down,KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_CTRL_LEFT,0,meta);
+            sendKey(manager,inject,setDisplay,display,down,KeyEvent.ACTION_DOWN,KeyEvent.KEYCODE_V,0,meta);
+            sendKey(manager,inject,setDisplay,display,down,KeyEvent.ACTION_UP,KeyEvent.KEYCODE_V,0,meta);
+            sendKey(manager,inject,setDisplay,display,down,KeyEvent.ACTION_UP,KeyEvent.KEYCODE_CTRL_LEFT,0,0);
+            return Json.mapOf("ok",true,"inputDelivered",true,"method","paste","display",display);
+        }finally{
+            if(changed)try{
+                var current=clipboard.getPrimaryClipDescription();
+                if(current!=null&&marker.contentEquals(current.getLabel())){if(saved==null)clipboard.clearPrimaryClip();else clipboard.setPrimaryClip(saved);}
+            }catch(Exception ignored){}
+        }
     }
     private com.deviceagent.tools.InputGuard inputGuard(int display,Map<String,Object> args)throws Exception{
         if(display!=0)return new com.deviceagent.tools.InputGuard(null);

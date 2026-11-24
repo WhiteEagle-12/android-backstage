@@ -30,7 +30,7 @@ export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifa
     attempts.set(key,row);
     return row.count>max;
   };
-  const send=(res,e)=>{if(e instanceof ConnectionError)return res.status({unknown_device:404,unknown_approval:404,access_revoked:404,invalid_request:400,busy:429,no_devices:409,assistant_paused:409}[e.code]||400).json({error:e.code,message:e.message});res.status(500).json({error:'server_error',message:'Something went wrong on the server.'});};
+  const send=(res,e)=>{if(e instanceof ConnectionError)return res.status({unknown_device:404,unknown_approval:404,access_revoked:404,invalid_request:400,plan_limit:403,busy:429,no_devices:409,assistant_paused:409}[e.code]||400).json({error:e.code,message:e.message});res.status(500).json({error:'server_error',message:'Something went wrong on the server.'});};
 
   // The phone answers with HMAC-SHA256(linkKey, "backstage owner v1\n" + nonce).
   app.post('/work/phone/challenge',(req,res)=>{
@@ -164,7 +164,10 @@ export function phoneRoutes(app,{connections,auth,owners,base,appReleases,artifa
     try{
       const {ownerId,deviceId}=req.phone;
       const devices=await Promise.all(connections.devices(ownerId).map(d=>connections.probe(d)));
+      const planInfo=owners.methods?.(ownerId);
       res.json({ownerId,thisDevice:deviceId,
+        plan:planInfo?.plan||'free',
+        limits:planInfo?.limits||null,
         devices:devices.map(d=>({id:d.id,name:d.name,status:d.status,online:!!d.online,needsReconnect:!!d.needsReconnect,model:d.model||null,lastSeen:d.lastSeen||null,thisDevice:d.id===deviceId})),
         assistants:connections.list(ownerId).map(g=>describeGrant(ownerId,g))});
     }catch(e){send(res,e);}

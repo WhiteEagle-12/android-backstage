@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import {promisify} from 'node:util';
 import {writePrivateJson} from '../cli/state.mjs';
+import {PLANS, normalizePlan, planLimits} from './plans.mjs';
 import * as webauthn from '@simplewebauthn/server';
 const scryptAsync = promisify(crypto.scrypt);
 
@@ -162,7 +163,7 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
       if (ownerByEmail(email)) throw new Error('An account with that email already exists. Log in instead.');
       const ownerId = 'owner_' + random();
       const t = now();
-      state.owners[ownerId] = { createdAt: t, email, passwordHash: row.passwordHash, passwordUpdatedAt: t };
+      state.owners[ownerId] = { createdAt: t, email, passwordHash: row.passwordHash, passwordUpdatedAt: t, plan: 'free' };
       save();
       return ownerId;
     },
@@ -307,11 +308,26 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
       state.owners[ownerId].recovery = state.owners[ownerId].recovery.filter(d => d !== digest); save();
       return ownerId;
     },
+    /** Current hosted plan id ('free' | 'pro' | 'team') for an owner. */
+    planOf(ownerId) {
+      return normalizePlan(state.owners[ownerId]?.plan);
+    },
+    /** Update an owner's hosted plan (admin / billing webhook). */
+    setPlan(ownerId, plan) {
+      if (!Object.hasOwn(state.owners, ownerId)) throw new Error('Unknown account.');
+      const key = String(plan || '').trim().toLowerCase();
+      if (!Object.hasOwn(PLANS, key)) throw new Error('Plan must be free, pro, or team.');
+      state.owners[ownerId].plan = key;
+      state.owners[ownerId].planUpdatedAt = now();
+      save();
+      return { ownerId, plan: key, limits: planLimits(key) };
+    },
     /** List all owners (non-secret metadata for local admin tooling). */
     listOwners() {
       return Object.entries(state.owners).map(([id, row]) => ({
         id,
         email: row.email || null,
+        plan: normalizePlan(row.plan),
         createdAt: row.createdAt || null,
         hasPassword: !!row.passwordHash,
         passkeyCount: Object.values(state.credentials).filter(c => c.ownerId === id).length,
@@ -321,7 +337,9 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
     /** Sign-in methods on the account, without secrets. */
     methods(ownerId) {
       const row = state.owners[ownerId] || {};
+      const plan = normalizePlan(row.plan);
       return {email: row.email || null, emailAvailable: !!mailer?.configured(),
+        plan, limits: planLimits(plan),
         hasPassword: !!row.passwordHash,
         passkeys: Object.values(state.credentials).filter(c => c.ownerId === ownerId).map(c => ({id: c.id, label: c.label || 'Passkey', createdAt: c.createdAt || null})),
         recoveryCodesLeft: (row.recovery || []).length};

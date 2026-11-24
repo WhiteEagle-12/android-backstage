@@ -440,9 +440,11 @@ public final class VirtualDisplayHost {
         long started=System.nanoTime();
         float scale = args.getFloat("scale", 0.5f);
         if (scale <= 0f || scale > 1f) scale = 0.5f;
+        int quality = Math.max(30, Math.min(100, args.getInt("quality", 85)));
+        long sinceFrame = args.getLong("sinceFrame", -1L);
         Bitmap scaled;
         int displayId, sourceWidth, sourceHeight;
-        long frameAt;
+        long frameAt, frameSeq;
         touch(args);
         synchronized (lock) {
             Slot slot = slot(args);
@@ -452,15 +454,27 @@ public final class VirtualDisplayHost {
                 if (slot.latest == null) return error("no frame rendered yet; launch an app on the virtual display first");
                 sourceWidth = slot.latest.getWidth();
                 sourceHeight = slot.latest.getHeight();
-                scaled = toScaledBitmap(slot.latest, scale);
                 frameAt = slot.lastFrameAt;
+                frameSeq = slot.frames;
+                if (sinceFrame > 0 && frameSeq == sinceFrame) {
+                    Bundle unchanged = new Bundle();
+                    unchanged.putBoolean("ok", true);
+                    unchanged.putBoolean("unchanged", true);
+                    unchanged.putInt("displayId", displayId);
+                    unchanged.putInt("sourceWidth", sourceWidth);
+                    unchanged.putInt("sourceHeight", sourceHeight);
+                    unchanged.putLong("frameSeq", frameSeq);
+                    unchanged.putLong("frameAt", frameAt);
+                    return unchanged;
+                }
+                scaled = toScaledBitmap(slot.latest, scale);
             }
         }
         long encodingStarted=System.nanoTime();
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
         String mime;
         if (android.os.Build.VERSION.SDK_INT >= 30
-                && scaled.compress(Bitmap.CompressFormat.WEBP_LOSSY, 85, encoded)) {
+                && scaled.compress(Bitmap.CompressFormat.WEBP_LOSSY, quality, encoded)) {
             mime = "image/webp";
         } else {
             encoded.reset();
@@ -475,6 +489,7 @@ public final class VirtualDisplayHost {
         out.putInt("sourceWidth", sourceWidth);
         out.putInt("sourceHeight", sourceHeight);
         out.putFloat("scale", scale);
+        out.putLong("frameSeq", frameSeq);
         out.putLong("frameAt",frameAt);
         out.putLong("frameAgeMs",Math.max(0,System.currentTimeMillis()-frameAt));
         out.putString("mime", mime);

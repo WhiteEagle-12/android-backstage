@@ -15,7 +15,7 @@ test('one phone enrollment serves local and cloud MCP clients after restart, ref
  const stateFile=path.join(dataDir,'oauth.json'),ownerFile=path.join(dataDir,'owners.json'),directory=path.join(dataDir,'connections');let server,endpoint,jar='',clock=Date.now();
  const start=async()=>{
   const connections=createConnections({directory,relayUrl:url}),owners=createOwners({stateFile:ownerFile,origin,now:()=>clock});
-  const app=createWorkApp({base,stateFile,connections,owners,now:()=>clock,callTool:(...args)=>connections.call(...args)});
+  const app=createWorkApp({base,stateFile,connections,owners,enforcePlans:false,now:()=>clock,callTool:(...args)=>connections.call(...args)});
   server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});endpoint='http://127.0.0.1:'+server.address().port;
  };
  await start();

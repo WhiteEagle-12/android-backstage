@@ -15,6 +15,7 @@ import java.util.function.LongSupplier;
  private final Path root;private final BiFunction<String,Map<String,Object>,Map<String,Object>> call;private final LongSupplier clock;
  private final Map<String,Map<String,Object>> stateCache=new LinkedHashMap<>();
  private final Map<String,Long> lastSavedExpiry=new HashMap<>();
+ private final Set<String> userTakeovers=new HashSet<>();
  public TaskResources(Path root,String pkg,BiFunction<String,Map<String,Object>,Map<String,Object>> call){this(root,call,System::currentTimeMillis);}
  public TaskResources(Path root,BiFunction<String,Map<String,Object>,Map<String,Object>> call,LongSupplier clock){this.root=root;this.call=call;this.clock=clock;}
  private Path directory(String id){if(id==null||!id.matches("session_[a-f0-9]{32}"))throw new IllegalArgumentException("Use sessionId from task_begin");return root.resolve(id);}
@@ -59,14 +60,36 @@ import java.util.function.LongSupplier;
  public synchronized int use(String id,String owner,Integer requestedDisplay,boolean renew){
   var state=read(id);owner(state,owner);
   if(!"active".equals(state.get("state"))||((Number)state.get("expiresAt")).longValue()<=clock.getAsLong())throw new InputNotSentException("session_expired","This session expired. Begin a new task.");
+  if(userTakeovers.contains(id))throw new InputNotSentException("user_in_control","The user took over this screen. Wait until they hand control back.");
   if(requestedDisplay!=null&&!sameNumber(requestedDisplay,state.get("display")))throw new InputNotSentException("wrong_session_display","The display does not belong to this session.");
   var display=status(state);if(!owns(state,display))throw new InputNotSentException("display_unavailable","The session display is no longer available. Finish it and begin a new task.");
   if(!renew)return ((Number)state.get("display")).intValue();
   long expiry=clock.getAsLong()+((Number)state.get("leaseMs")).longValue();
   if(foreground(state)){var renewed=call.apply("foreground_renew",Map.of("sessionId",id,"expiresAt",expiry));if(!owns(state,renewed))throw new InputNotSentException("screen_control_stopped","Screen control stopped. Begin a new task when the user is ready.");}
+  touchLeaseLocked(id,state,expiry);
+  return ((Number)state.get("display")).intValue();
+ }
+ private void touchLeaseLocked(String id,Map<String,Object> state,long expiry){
   state.put("expiresAt",expiry);
   Long savedExp=lastSavedExpiry.get(id);
   if(savedExp==null||expiry-savedExp>=LEASE_PERSIST_INTERVAL_MS)save(id,state);
+ }
+ /** Pauses or resumes agent control on a session when the user takes over on the device. */
+ public synchronized Map<String,Object> setUserTakeover(String id,boolean active){
+  var state=read(id);
+  if(!"active".equals(state.get("state"))||((Number)state.get("expiresAt")).longValue()<=clock.getAsLong())throw new InputNotSentException("session_expired","This session expired.");
+  if(active)userTakeovers.add(id);else userTakeovers.remove(id);
+  touchLeaseLocked(id,state,clock.getAsLong()+((Number)state.get("leaseMs")).longValue());
+  return Json.mapOf("ok",true,"sessionId",id,"display",state.get("display"),"userInControl",active);
+ }
+ public synchronized boolean isUserInControl(String id){return id!=null&&userTakeovers.contains(id);}
+ /** Resolves an active session's display for direct user interaction and keeps its lease alive. */
+ public synchronized int activeDisplayForAdmin(String id){
+  var state=read(id);
+  if(!"active".equals(state.get("state"))||((Number)state.get("expiresAt")).longValue()<=clock.getAsLong())throw new InputNotSentException("session_expired","This session expired.");
+  var display=status(state);
+  if(!owns(state,display))throw new InputNotSentException("display_unavailable","This screen is no longer active.");
+  touchLeaseLocked(id,state,clock.getAsLong()+((Number)state.get("leaseMs")).longValue());
   return ((Number)state.get("display")).intValue();
  }
  /** Open sessions this connection began or joined, so an agent can resume or finish one whose ID it lost. */
@@ -87,7 +110,7 @@ import java.util.function.LongSupplier;
    String id=dir.getFileName().toString();if(!id.matches("session_[a-f0-9]{32}"))continue;
    Map<String,Object> state;try{state=read(id);}catch(RuntimeException e){continue;}
    if("finished".equals(state.get("state")))continue;
-   sessions.add(Json.mapOf("sessionId",id,"owner",state.getOrDefault("owner","local"),"mode",state.getOrDefault("mode","private"),"display",state.get("display"),"state",state.get("state"),"createdAt",state.get("createdAt"),"leaseExpiresAt",state.get("expiresAt")));
+   sessions.add(Json.mapOf("sessionId",id,"owner",state.getOrDefault("owner","local"),"mode",state.getOrDefault("mode","private"),"display",state.get("display"),"state",state.get("state"),"createdAt",state.get("createdAt"),"leaseExpiresAt",state.get("expiresAt"),"userInControl",userTakeovers.contains(id)));
   }}catch(java.io.IOException ignored){}
   return sessions;
  }
@@ -95,7 +118,7 @@ import java.util.function.LongSupplier;
  public synchronized Map<String,Object> forceFinish(String id){
   var state=read(id);return cleanup(id,state);
  }
- public synchronized Map<String,Object> inspect(String id,String owner){var state=read(id);owner(state,owner);var display=status(state);var out=Json.mapOf("ok",true,"sessionId",id,"mode",state.getOrDefault("mode","private"),"leaseExpiresAt",state.get("expiresAt"),"state",state.get("state"),"role",Objects.equals(state.get("owner"),owner)?"owner":"member","members",members(state).size(),"ownedDisplay",owns(state,display)?Json.mapOf("display",display.get("displayId"),"width",display.get("width"),"height",display.get("height"),"state",display.get("displayState")):null);if(owns(state,display))out.putAll(call.apply("activities",Map.of("display",state.get("display"))));return out;}
+ public synchronized Map<String,Object> inspect(String id,String owner){var state=read(id);owner(state,owner);var display=status(state);var out=Json.mapOf("ok",true,"sessionId",id,"mode",state.getOrDefault("mode","private"),"leaseExpiresAt",state.get("expiresAt"),"state",state.get("state"),"userInControl",userTakeovers.contains(id),"role",Objects.equals(state.get("owner"),owner)?"owner":"member","members",members(state).size(),"ownedDisplay",owns(state,display)?Json.mapOf("display",display.get("displayId"),"width",display.get("width"),"height",display.get("height"),"state",display.get("displayState")):null);if(owns(state,display))out.putAll(call.apply("activities",Map.of("display",state.get("display"))));return out;}
  private static boolean sameNumber(Object a,Object b){return a instanceof Number x&&b instanceof Number y&&x.longValue()==y.longValue();}
  private boolean owns(Map<String,Object> state,Map<String,Object> display){return Boolean.TRUE.equals(display.get("active"))&&(foreground(state)?Objects.equals(state.get("sessionId"),display.get("sessionId")):sameNumber(state.get("display"),display.get("displayId"))&&sameNumber(state.get("createdAt"),display.get("createdAt")));}
  /** The owner's finish releases the display for everyone; a member's finish only leaves. */
@@ -133,6 +156,7 @@ import java.util.function.LongSupplier;
   if(owns(state,display)){var stopped=call.apply(foreground(state)?"foreground_stop":"display_stop",foreground(state)?Map.of("sessionId",id):Map.of("sessionId",id,"displayId",((Number)state.get("display")).intValue()));if(Boolean.FALSE.equals(stopped.get("ok")))return Json.mapOf("ok",false,"sessionId",id,"code","cleanup_incomplete","released",released,"error","The display could not be released. Run task_finish again.");released.add(foreground(state)?"screenControl":"display");}
   try{Path files=directory(id).resolve("files");if(Files.exists(files,LinkOption.NOFOLLOW_LINKS)){try(var paths=Files.walk(files)){for(Path path:paths.sorted(Comparator.reverseOrder()).collect(java.util.stream.Collectors.toList()))Files.delete(path);}released.add("temporaryFiles");}}
   catch(Exception e){return Json.mapOf("ok",false,"sessionId",id,"code","cleanup_incomplete","released",released,"error","Some files remain. Run task_finish again.");}
+  userTakeovers.remove(id);
   state.put("state","finished");state.put("finishedAt",clock.getAsLong());save(id,state);
   return Json.mapOf("ok",true,"sessionId",id,"released",released);
  }
