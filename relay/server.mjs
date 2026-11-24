@@ -809,7 +809,22 @@ export async function createRelay(opts = {}) {
         const account = requireAccount(req, store);
         let job = queue.get(jobPath[1]);
         if (!job || job.accountId !== account.id) throw new HttpError(404, "unknown job");
-        if (req.method === "DELETE") job = queue.cancel(job.id);
+        if (req.method === "DELETE") {
+          job = queue.cancel(job.id);
+        } else {
+          const waitMs = Math.max(0, Math.min(25_000, Number(url.searchParams.get("waitMs") || req.headers["x-backstage-wait-ms"] || 0) || 0));
+          if (waitMs > 0 && ["queued", "running"].includes(job.state)) {
+            const gone = new AbortController();
+            const closed = () => { if (!res.writableFinished) gone.abort(); };
+            res.on("close", closed);
+            try {
+              job = (await queue.waitForChange(job.id, waitMs, gone.signal)) || job;
+            } finally {
+              res.off("close", closed);
+            }
+            if (gone.signal.aborted || res.destroyed) return;
+          }
+        }
         json(res, 200, { id: job.id, state: job.state, cancelRequested: !!job.cancelRequested,
           createdAt: job.createdAt, expiresAt: job.expiresAt, ...job.outcome }); return;
       }
@@ -1102,6 +1117,8 @@ export async function createRelay(opts = {}) {
     clearInterval(rateTimer);
     clearInterval(eventTimer);
     queue.close();
+    await store.flush?.();
+    store.flushSync?.();
     for (const list of pairWaiters.values()) {
       for (const waiter of list) {
         clearTimeout(waiter.timer);
@@ -1139,6 +1156,13 @@ function isMain() {
 if (isMain()) {
   const zeroRetention = process.env.RELAY_ZERO_RETENTION !== "0";
   const relay = await createRelay({ zeroRetention });
+  for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.on(sig, () => {
+      relay.store?.flushSync?.();
+      relay.close().finally(() => process.exit(0));
+      setTimeout(() => process.exit(0), 3000).unref();
+    });
+  }
   const bind = process.env.HOST || "0.0.0.0";
   console.log(`backstage-relay ${VERSION} listening on http://${bind}:${relay.port} (zero-retention=${zeroRetention ? "on" : "off"})`);
 }

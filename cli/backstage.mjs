@@ -450,8 +450,10 @@ async function awaitJob(cfg, tool, callId, relayTimeout) {
   let pollFailures=0;
   do {
     let polled;
+    const pollStart = Date.now();
+    const waitMs = Math.max(1, Math.min(12000, until - pollStart));
     try {
-      polled=await api(cfg, `/v1/jobs/${callId}`, {timeoutMs:Math.max(1,Math.min(15000,until-Date.now()))});
+      polled=await api(cfg, `/v1/jobs/${callId}`, {headers:{"x-backstage-wait-ms":String(waitMs)},timeoutMs:Math.min(20000, waitMs + 5000)});
       if([429,502,503,504].includes(polled.status))throw new Error(`Temporary relay error (HTTP ${polled.status})`);
     } catch(error) {
       if(Date.now()>=until||++pollFailures>=3)throw error;
@@ -461,7 +463,8 @@ async function awaitJob(cfg, tool, callId, relayTimeout) {
     pollFailures=0;
     status=polled.status;body=polled.body;
     if (status >= 400 || !waiting(body.state)) break;
-    await new Promise(r=>setTimeout(r,300));
+    // Back off only if talking to an older relay that ignored waitMs and returned immediately.
+    if (Date.now() - pollStart < 100) await new Promise(r=>setTimeout(r,300));
   } while(Date.now()<until);
   if (["queued","running"].includes(body?.state)) {
     const stopped=await api(cfg, `/v1/jobs/${callId}`, {method:"DELETE",timeoutMs:15000});
@@ -553,8 +556,10 @@ async function encryptedCallLocked(cfg, tool, args, { device } = {}) {
       let pollFailures=0;
       do {
         let polled;
+        const pollStart = Date.now();
+        const waitMs = Math.max(1, Math.min(12000, until - pollStart));
         try {
-          polled=await api(cfg, `/v1/jobs/${callId}`, {timeoutMs:Math.max(1,Math.min(15000,until-Date.now()))});
+          polled=await api(cfg, `/v1/jobs/${callId}`, {headers:{"x-backstage-wait-ms":String(waitMs)},timeoutMs:Math.min(20000, waitMs + 5000)});
           if([429,502,503,504].includes(polled.status))throw new Error(`Temporary relay error (HTTP ${polled.status})`);
         } catch(error) {
           if(Date.now()>=until||++pollFailures>=3)throw error;
@@ -564,7 +569,7 @@ async function encryptedCallLocked(cfg, tool, args, { device } = {}) {
         pollFailures=0;
         status=polled.status;body=polled.body;
         if (status >= 400 || !waiting(body.state)) break;
-        await new Promise(r=>setTimeout(r,300));
+        if (Date.now() - pollStart < 100) await new Promise(r=>setTimeout(r,300));
       } while(Date.now()<until);
       if (["queued","running"].includes(body.state)) {
         const stopped=await api(cfg, `/v1/jobs/${callId}`, {method:"DELETE",timeoutMs:15000});

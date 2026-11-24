@@ -5,7 +5,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { writePrivateJson } from "./persist.mjs";
+import { writePrivateJson, writePrivateJsonAsync } from "./persist.mjs";
 
 export const SESSION_ALPHABET = "ABCDEFGHJKMNPQRSTVWXYZ23456789";
 export const SESSION_TTL_MS = 10 * 60 * 1000;
@@ -42,7 +42,7 @@ function randomSessionId() {
   return id;
 }
 
-export function createStore(dataDir, { log = console } = {}) {
+export function createStore(dataDir, { log = console, flushMs = 150 } = {}) {
   fs.mkdirSync(dataDir, { recursive: true });
   const statePath = path.join(dataDir, "state.json");
   let state = emptyState();
@@ -81,11 +81,52 @@ export function createStore(dataDir, { log = console } = {}) {
   }
   rebuildIndices();
 
-  function persist() {
+  let dirty = false;
+  let flushTimer = null;
+  let flushing = null;
+
+  async function flushAsync() {
+    if (flushing) return flushing;
+    flushing = (async () => {
+      while (dirty) {
+        dirty = false;
+        if (!fs.existsSync(dataDir)) return;
+        const snapshot = structuredClone(state);
+        try {
+          await writePrivateJsonAsync(statePath, snapshot);
+        } catch (err) {
+          log.warn?.(`store flush failed: ${err.message}`);
+        }
+      }
+    })().finally(() => { flushing = null; });
+    return flushing;
+  }
+
+  function flushSync() {
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    if (!dirty) return;
+    dirty = false;
     writePrivateJson(statePath, state);
   }
 
-  if (migrated) persist();
+  function persistSync() {
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    dirty = false;
+    writePrivateJson(statePath, state);
+  }
+
+  function persist() {
+    if (flushMs <= 0) { persistSync(); return; }
+    dirty = true;
+    if (flushTimer) return;
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      void flushAsync();
+    }, flushMs);
+    flushTimer.unref?.();
+  }
+
+  if (migrated) persistSync();
 
   if (Object.keys(state.accounts).length === 0) {
     const apiKey = randomToken("bsk_");
@@ -97,7 +138,7 @@ export function createStore(dataDir, { log = console } = {}) {
       createdAt: nowIso(),
     };
     accountsByHash.set(keyHash, "default");
-    persist();
+    persistSync();
     const keyPath = path.join(dataDir, "first-api-key.txt");
     fs.writeFileSync(keyPath, `${apiKey}\n`, { mode: 0o600 });
     try {
@@ -133,7 +174,7 @@ export function createStore(dataDir, { log = console } = {}) {
 
   function createConnection(name, clientIp = null) {
     sweepSessions();
-    const pendingConnects = Object.values(state.sessions).filter(s => s.connectionId);
+    const pendingConnects = Object.values(state.sessions).filter(s => s.connectionId && !s.agentConfirm);
     if (pendingConnects.length >= 512)
       throw Object.assign(new Error("Too many pending connections. Try again shortly."), {status:429});
     if (clientIp && pendingConnects.filter(s => s.clientIp === clientIp).length >= 8)
@@ -167,7 +208,7 @@ export function createStore(dataDir, { log = console } = {}) {
     }
     const device = state.devices[deviceId];
     if (device) device.agents = (device.agents || []).filter(id => id !== agentId);
-    persist();
+    persistSync();
   }
 
   function revokeConnectionById(connectionId) {
@@ -191,7 +232,7 @@ export function createStore(dataDir, { log = console } = {}) {
         }
       }
     }
-    persist();
+    persistSync();
     return { revoked: true, droppedDeviceId };
   }
 
@@ -436,7 +477,7 @@ export function createStore(dataDir, { log = console } = {}) {
         delete state.connections[key];
       }
     }
-    persist();
+    persistSync();
     return true;
   }
 
@@ -445,6 +486,9 @@ export function createStore(dataDir, { log = console } = {}) {
     createConnection, connectionByKey, approveConnection, revokeConnection, revokeConnectionById,
     firstApiKey,
     persist,
+    persistSync,
+    flush: flushAsync,
+    flushSync,
     snapshot: () => state,
     accountById,
     accountByKey,

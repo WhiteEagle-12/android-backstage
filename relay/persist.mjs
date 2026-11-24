@@ -11,3 +11,18 @@ export function writePrivateJson(file, data) {
   const parent = fs.openSync(path.dirname(file), 'r');
   try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
 }
+
+export async function writePrivateJsonAsync(file, data) {
+  const dir = path.dirname(file);
+  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  const payload = JSON.stringify(data, null, 2) + '\n';
+  const fh = await fs.promises.open(tmp, 'wx', 0o600);
+  try {
+    await fh.writeFile(payload, 'utf8');
+    await fh.datasync();
+  } finally {
+    await fh.close();
+  }
+  await fs.promises.rename(tmp, file);
+}

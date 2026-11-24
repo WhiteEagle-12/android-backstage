@@ -16,17 +16,25 @@ export function createQueue({
 } = {}) {
   // polls holds waiting long-polls per device; polling counts open polls. A phone
   // advertises how many jobs it runs at once (lanes); older phones run one.
-  const jobs = new Map(), results = new Map(), polls = new Map(), polling = new Map(), lanes = new Map();
+  const jobs = new Map(), results = new Map(), watchers = new Map(), polls = new Map(), polling = new Map(), lanes = new Map();
+  const INFLIGHT_HEADROOM = 256 * 1024;
   const laneLimit = deviceId => lanes.get(deviceId) || 1;
   const dir = dataDir && path.join(dataDir, 'jobs');
   if (dir) fs.mkdirSync(dir, {recursive:true, mode:0o700});
   const sizes = new Map();
+  const wakeWatchers = jobId => {
+    const set = watchers.get(jobId);
+    if (!set) return;
+    watchers.delete(jobId);
+    for (const fn of [...set]) fn();
+  };
   const persist = job => { if (dir) writePrivateJson(path.join(dir, job.id + '.json'), job); sizes.set(job.id,Buffer.byteLength(JSON.stringify(job))); };
   const finish = (job, state, outcome) => {
     const updated={...job,state,updatedAt:Date.now(),...(outcome ? {outcome} : {})};
     persist(updated); Object.assign(job,updated);
     const waiter = results.get(job.id);
     if (waiter) { clearTimeout(waiter.timer); results.delete(job.id); waiter.resolve(outcome || {error:{message:state}}); }
+    wakeWatchers(job.id);
   };
   if (dir) for (const file of fs.readdirSync(dir).filter(f=>f.endsWith('.json'))) {
     const job = JSON.parse(fs.readFileSync(path.join(dir,file),'utf8'));
@@ -46,26 +54,35 @@ export function createQueue({
   const sweeper = setInterval(sweep,1000); sweeper.unref(); sweep();
   function capacity(deviceId, accountId = null) {
     sweep();
-    const all = [...jobs.values()];
-    const reserved=all.reduce((n,j)=>n+(['queued','running'].includes(j.state)?8*1024*1024:(sizes.get(j.id)||0)),0);
-    if (reserved+8*1024*1024>quotaBytes || jobs.size >= 10000 || all.filter(j=>j.deviceId===deviceId && ['queued','running'].includes(j.state)).length >= maxPending) {
+    let reserved = 0, devicePending = 0, ownCount = 0, ownBytes = 0;
+    for (const j of jobs.values()) {
+      const inflight = j.state === 'queued' || j.state === 'running';
+      const bytes = (sizes.get(j.id) || 0) + (inflight ? INFLIGHT_HEADROOM : 0);
+      reserved += bytes;
+      if (inflight && j.deviceId === deviceId) devicePending++;
+      if (accountId && j.accountId === accountId) {
+        ownCount++;
+        ownBytes += bytes;
+      }
+    }
+    if (reserved + INFLIGHT_HEADROOM > quotaBytes || jobs.size >= 10000 || devicePending >= maxPending) {
       const e = new Error('device queue capacity reached'); e.status=429; throw e;
     }
-    if (accountId) {
-      const own = all.filter(j=>j.accountId===accountId);
-      const ownBytes = own.reduce((n,j)=>n+(['queued','running'].includes(j.state)?8*1024*1024:(sizes.get(j.id)||0)),0);
-      if (own.length >= maxAccountJobs || ownBytes + 8*1024*1024 > maxAccountBytes) {
-        const e = new Error('account queue capacity reached'); e.status=429; throw e;
-      }
+    if (accountId && (ownCount >= maxAccountJobs || ownBytes + INFLIGHT_HEADROOM > maxAccountBytes)) {
+      const e = new Error('account queue capacity reached'); e.status=429; throw e;
     }
   }
   function take(deviceId) {
     sweep();
-    if ([...jobs.values()].filter(j=>j.deviceId===deviceId && j.state==='running').length >= laneLimit(deviceId)) return null;
-    const job = [...jobs.values()].find(j=>j.deviceId===deviceId && j.state==='queued');
-    if (!job) return null;
-    const updated={...job,state:'running',updatedAt:Date.now()}; persist(updated);Object.assign(job,updated);
-    return {id:job.id,envelope:job.envelope};
+    let running = 0, nextQueued = null;
+    for (const j of jobs.values()) {
+      if (j.deviceId !== deviceId) continue;
+      if (j.state === 'running') running++;
+      else if (!nextQueued && j.state === 'queued') nextQueued = j;
+    }
+    if (running >= laneLimit(deviceId) || !nextQueued) return null;
+    const updated={...nextQueued,state:'running',updatedAt:Date.now()}; persist(updated);Object.assign(nextQueued,updated);
+    return {id:nextQueued.id,envelope:nextQueued.envelope};
   }
   function wake(deviceId) {
     const waiting=polls.get(deviceId);
@@ -145,12 +162,33 @@ export function createQueue({
     for(const waiter of polls.get(id)||[]){clearTimeout(waiter.timer);waiter.resolve(null);}polls.delete(id);
     polling.delete(id);
   }
+  function waitForChange(jobId, timeoutMs, signal) {
+    const job = jobs.get(jobId);
+    if (!job || !['queued', 'running'].includes(job.state) || timeoutMs <= 0 || signal?.aborted) {
+      return Promise.resolve(job || null);
+    }
+    return new Promise((resolve) => {
+      let set = watchers.get(jobId);
+      if (!set) { set = new Set(); watchers.set(jobId, set); }
+      const done = () => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', done);
+        const cur = watchers.get(jobId);
+        if (cur) { cur.delete(done); if (!cur.size) watchers.delete(jobId); }
+        resolve(jobs.get(jobId) || null);
+      };
+      const timer = setTimeout(done, Math.min(timeoutMs, 25_000));
+      signal?.addEventListener('abort', done, { once: true });
+      set.add(done);
+    });
+  }
   function close() {
     clearInterval(sweeper);
     for(const list of polls.values())for(const w of list){clearTimeout(w.timer);w.resolve(null);}polls.clear();polling.clear();
     for(const w of results.values()){clearTimeout(w.timer);const e=new Error('relay closed; query job status before retry');e.code='CLOSED';w.reject(e);}results.clear();
+    for(const id of [...watchers.keys()]) wakeWatchers(id);
   }
-  return {enqueue,waitForJob,release,waitForResult,complete,cancel,dropDevice,recoverDevice,close,capacity,
+  return {enqueue,waitForJob,release,waitForResult,waitForChange,complete,cancel,dropDevice,recoverDevice,close,capacity,
     // A device may hold one open poll per lane; further polls are duplicates.
     setLanes:(id,count)=>{const n=Number.isInteger(count)?Math.min(Math.max(count,1),MAX_LANES):1;lanes.set(id,n);wake(id);return n;},
     lanes:laneLimit,
