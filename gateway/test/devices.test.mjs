@@ -99,8 +99,8 @@ test('one agent uses two named devices; nothing is substituted when a device is 
   assert.equal(phoneA.received.length+phoneB.received.length,3,'no phone received the misdirected calls');
   // Offline: a device that stopped polling is reported, never swapped.
   await withRelayOffline(ctx,phoneB,async()=>{const off=await h.call(token,'android_packages',{device:'tablet',package:'com.example'});assert.equal(off.structuredContent.code,'device_offline');assert.match(off.structuredContent.error,/tablet/);});
-  // Raw shell is disabled on hosted MCP by default.
-  const shellBlocked=await h.call(token,'android_shell',{device:'phone',command:'echo hi'});assert.equal(shellBlocked.isError,true);assert.equal(shellBlocked.structuredContent.code,'tool_disabled');
+  // Raw shell forwards to the phone (which enforces the on-device Allow shell commands toggle).
+  const shellForwarded=await h.call(token,'android_shell',{device:'phone',command:'echo hi'},phoneA,()=>({ok:false,code:'shell_disabled',inputDelivered:false,error:'Shell commands are off on this phone.'}));assert.equal(shellForwarded.structuredContent.code,'shell_disabled');
   // A rename keeps the ID and the link; the assistant keeps working.
   const rename=await h.post('/work/account/devices/rename',{deviceId:tablet.id,name:'Tab S7'});assert.equal(rename.status,200);
   const renamed=await h.call(token,'android_packages',{device:'tab s7',package:'com.example'},phoneB,()=>({ok:true,value:'SM-T870'}));assert.equal(renamed.structuredContent.value,'SM-T870');

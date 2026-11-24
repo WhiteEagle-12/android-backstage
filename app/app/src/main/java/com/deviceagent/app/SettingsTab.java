@@ -24,10 +24,11 @@ final class SettingsTab extends TabPage {
             LinearLayout card = group(box);
             row(card, LocationProvider.allowed(a) ? AppCopy.ACTION_MANAGE_LOCATION : AppCopy.ACTION_ALLOW_LOCATION, location, a::locationAccess, false);
         });
-        put("connection", "connection|" + a.config.daemonPort + "|" + a.config.keepUsbDebugging, box -> {
+        put("connection", "connection|" + a.config.daemonPort + "|" + a.config.keepUsbDebugging + "|" + a.config.allowShell, box -> {
             k.section(box, AppCopy.SECTION_CONNECTION);
             LinearLayout card = group(box);
             row(card, AppCopy.ACTION_STAY_ONLINE_OFF_WIFI, a.config.keepUsbDebugging ? AppCopy.STATE_ON : AppCopy.STATE_OFF, this::offWifiDialog, true);
+            row(card, AppCopy.ACTION_ALLOW_SHELL, a.config.allowShell ? AppCopy.STATE_ON : AppCopy.STATE_OFF, this::shellDialog, true);
             row(card, AppCopy.ACTION_CHANGE_PORT, String.valueOf(a.config.daemonPort), a::portDialog, true);
             row(card, AppCopy.ACTION_COPY_LOCAL_TOKEN, null, a::copyLocalToken, true);
             row(card, AppCopy.ACTION_USB_COMMAND, null, a::showUsbCommand, true);
@@ -49,6 +50,21 @@ final class SettingsTab extends TabPage {
                     a.config = AgentConfig.load(a);
                     render();
                     if (a.config.accessEnabled) a.restartConnection();
+                })
+                .setNegativeButton(AppCopy.CANCEL, null)
+                .show();
+    }
+
+    private void shellDialog() {
+        boolean next = !a.config.allowShell;
+        new android.app.AlertDialog.Builder(a)
+                .setTitle(AppCopy.ACTION_ALLOW_SHELL)
+                .setMessage(AppCopy.ALLOW_SHELL_BODY)
+                .setPositiveButton(next ? AppCopy.ACTION_TURN_ON : AppCopy.ACTION_TURN_OFF, (d, w) -> {
+                    AgentConfig.setAllowShell(a, next);
+                    a.config = AgentConfig.load(a);
+                    render();
+                    a.daemon.post("/shell-access", com.deviceagent.tools.Json.mapOf("enabled", next), (reply, error) -> {});
                 })
                 .setNegativeButton(AppCopy.CANCEL, null)
                 .show();

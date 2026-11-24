@@ -23,6 +23,7 @@ public final class AgentConfig {
     public boolean bootBlocked;
     public boolean oemAutostartAcked;
     public boolean keepUsbDebugging;
+    public boolean allowShell;
     public int lastConnectPort;
     public int lastPairPort;
     /** Daemon inbound port (LAN envelopes + supervision). Default 18422. */
@@ -42,6 +43,7 @@ public final class AgentConfig {
         c.bootBlocked = prefs.getBoolean("boot_blocked", false);
         c.oemAutostartAcked = prefs.getBoolean("oem_autostart_acked", false);
         c.keepUsbDebugging = prefs.getBoolean("keep_usb_debugging", false);
+        c.allowShell = prefs.getBoolean("allow_shell", false);
         c.lastConnectPort = prefs.getInt("last_connect_port", 0);
         c.lastPairPort = prefs.getInt("last_pair_port", 0);
         c.daemonPort = prefs.getInt("daemon_port", 18422);
@@ -98,6 +100,10 @@ public final class AgentConfig {
     }
     public static void setKeepUsbDebugging(Context context, boolean enabled) {
         context.getSharedPreferences(PREFS, 0).edit().putBoolean("keep_usb_debugging", enabled).commit();
+        StartScripts.write(context, load(context));
+    }
+    public static void setAllowShell(Context context, boolean enabled) {
+        context.getSharedPreferences(PREFS, 0).edit().putBoolean("allow_shell", enabled).commit();
         StartScripts.write(context, load(context));
     }
     public static void savePort(Context context, int port) {

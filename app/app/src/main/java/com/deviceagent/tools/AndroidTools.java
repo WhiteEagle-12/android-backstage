@@ -33,6 +33,7 @@ public final class AndroidTools {
     private final ActivityTimeline timeline;
     private final PendingConfirmations confirmations = new PendingConfirmations();
     private final SharedInbox inbox;
+    private volatile boolean allowShell;
     private volatile java.util.function.Consumer<Map<String, Object>> eventEmitter;
     private volatile Runnable eventRulesChanged;
     private TaskResources taskResources;
@@ -154,6 +155,7 @@ public final class AndroidTools {
         this.selfPackage = packageName == null || packageName.isBlank() ? BuildInfo.DEFAULT_PACKAGE : packageName;
         this.configPath = configPath == null || configPath.isBlank() ? Starter.CONFIG_PATH : configPath;
         this.daemonConfig = config;
+        this.allowShell = config != null && config.allowShell;
         this.privacyFence = new PrivacyFence(config);
         Path baseDir = java.nio.file.Paths.get(this.configPath).getParent();
         this.timeline = new ActivityTimeline(baseDir == null ? null : baseDir.resolve("timeline.json"));
@@ -595,10 +597,23 @@ public final class AndroidTools {
         return out;
     }
 
+    public boolean allowShell() {
+        return allowShell;
+    }
+
+    public synchronized boolean setAllowShell(boolean enabled) {
+        this.allowShell = enabled;
+        if (daemonConfig != null) {
+            daemonConfig.allowShell = enabled;
+            try { daemonConfig.save(); } catch (Exception ignored) {}
+        }
+        return this.allowShell;
+    }
+
     public Map<String, Object> shell(String command) {
         if (command == null || command.isBlank()) throw new IllegalArgumentException("command is required");
-        if (privacyFence.count() > 0) {
-            throw new InputNotSentException("blocked_app", "Raw shell is disabled while blocked apps are configured in Privacy settings.");
+        if (!allowShell) {
+            throw new InputNotSentException("shell_disabled", "Shell commands are off on this phone. Turn on Allow shell commands in Android Backstage Settings.");
         }
         ProcessResult process=device.exec(command);
         Map<String,Object> result=resultMap(process);

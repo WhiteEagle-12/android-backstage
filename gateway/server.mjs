@@ -56,8 +56,8 @@ const gatewayTools=[
 ];
 const replaced=new Set(gatewayTools.map(t=>t.name));
 const allStrictCatalogue=[...mcpTools({strict:true}).filter(t=>!replaced.has(t.name)).map(t=>({...t,inputSchema:{...t.inputSchema,properties:{...DEVICE_PROP,...t.inputSchema.properties}}})),...gatewayTools].map(t=>({...t,name:t.name.replaceAll('.','_'),description:t.description.replace(/\bandroid\.([a-z_]+)\b/g,'android_$1'),annotations:t.annotations||toolAnnotations(t.name),securitySchemes:[{type:'oauth2',scopes:['phone:control']}],_meta:{securitySchemes:[{type:'oauth2',scopes:['phone:control']}]}}));
-// Raw shell is excluded from the public hosted catalog by default to protect Privacy Fence & account boundaries.
-export const strictCatalogue=allStrictCatalogue.filter(t=>t.name!=='android_shell');
+// Raw shell is exposed on hosted MCP and enforced on-device via the phone's Allow shell commands toggle (off by default).
+export const strictCatalogue=allStrictCatalogue;
 export const catalogue=strictCatalogue.map(t=>({...t,inputSchema:advertisedSchema(t.inputSchema,t.inputSchema,{toolName:t.name})}));
 export const TOOL_CONTRACT={version:VERSION,sha256:createHash('sha256').update(JSON.stringify(catalogue)).digest('hex')};
 const ajv=new Ajv({strict:false,allErrors:true});
@@ -122,7 +122,7 @@ const failure=(e)=>{
   return asToolResult({ok:false,code:'tool_failed',error:'The phone action did not finish. The phone may be offline, paused, or this connection may no longer have access. Do not retry a write unless its outcome is known.'},true);
 };
 
-export function createWorkApp({base,stateFile,approvalFile,connections,owners,artifacts,metadataReader,callTool,directFilesUrl=null,keepAlive,allowTestRedirect=false,zeroRetention=false,allowShell=process.env.BACKSTAGE_ALLOW_HOSTED_SHELL==='1',audit=()=>{},now=Date.now}) {
+export function createWorkApp({base,stateFile,approvalFile,connections,owners,artifacts,metadataReader,callTool,directFilesUrl=null,keepAlive,allowTestRedirect=false,zeroRetention=false,allowShell=process.env.BACKSTAGE_ALLOW_HOSTED_SHELL!=='0',audit=()=>{},now=Date.now}) {
   if(zeroRetention&&stateFile)fs.rmSync(stateFile+'.requests',{recursive:true,force:true});
   const journal=createRequestJournal({directory:stateFile+'.requests',memoryOnly:zeroRetention,now,reconcile:async(grantId,name,args,jobId)=>{
     if(!connections?.active(grantId))return null;
@@ -276,13 +276,13 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
     if (req.headers.origin && !auth.originAllowed(req.headers.origin,req.backstageClient)) return res.sendStatus(403);
     if(req.headers.origin){res.set('Access-Control-Allow-Origin',req.headers.origin);res.vary('Origin');}
     if (req.method !== 'POST') {res.set('Allow','POST');return res.sendStatus(405);}
-    const activeCatalogue = allowShell ? allStrictCatalogue.map(t=>({...t,inputSchema:advertisedSchema(t.inputSchema,t.inputSchema,{toolName:t.name})})) : catalogue;
+    const activeCatalogue = allowShell ? catalogue : catalogue.filter(t=>t.name!=='android_shell');
     const server = new Server({name:'android-backstage-work',version:VERSION},{capabilities:{tools:{}},instructions:SERVER_INSTRUCTIONS});
     server.setRequestHandler(ListToolsRequestSchema,async () => ({tools:activeCatalogue}));
     server.setRequestHandler(CallToolRequestSchema,async request => {
       const normalized = normalizeToolCall(request.params.name, request.params.arguments || {});
       const name = normalized.name;
-      if (name === 'android_shell' && !allowShell) return asToolResult({outcome:'failed',code:'tool_disabled',inputDelivered:false,error:'Raw shell access is disabled on the hosted server to enforce Privacy Fence and account isolation. Use structured tools or the Local E2EE Bridge.'},true);
+      if (name === 'android_shell' && !allowShell) return asToolResult({outcome:'failed',code:'tool_disabled',inputDelivered:false,error:'Shell commands are disabled on this server. Use the structured tools instead.'},true);
       const validate = validators.get(name);
       let args = normalized.args || {};
       if (!validate) return asToolResult({outcome:'failed',code:'unknown_tool',inputDelivered:false,error:'Unknown tool. Refresh tools/list and use a listed tool name.'},true);

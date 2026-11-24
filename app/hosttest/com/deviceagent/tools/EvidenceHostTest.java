@@ -53,6 +53,8 @@ public final class EvidenceHostTest {
   var fence=new PrivacyFence(cfg);
   check(fence.isBlocked("com.bank.app")&&!fence.isBlocked("com.android.settings"),"privacy fence matches blocked packages");
   try{fence.requireComponentAllowed("com.bank.app/.MainActivity");throw new AssertionError("blocked app allowed");}catch(InputNotSentException e){check("blocked_app".equals(e.code),"blocked_app code");}
+  check(!cfg.allowShell&&!cfg.toJson().contains("allowShell"),"allowShell defaults off and omitted");
+  cfg.allowShell=true;check(cfg.toJson().contains("\"allowShell\":true"),"allowShell serializes when enabled");
   var tl=new ActivityTimeline(null);tl.record("agt_1","android.open","com.android.settings","succeeded",null,2);
   check(tl.recent(10).size()==1&&"android.open".equals(tl.recent(10).get(0).get("tool")),"timeline records activity");
   var inbox=new SharedInbox(null);var added=inbox.add("https://example.com","Link","text/plain","com.android.chrome",List.of());

@@ -235,6 +235,17 @@ public final class ControlServer {
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "packages", saved)), session, false);
                 return;
             }
+            if ("GET".equals(req.method) && "/shell-access".equals(req.path)) {
+                writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "enabled", tools.allowShell())), session, keepAlive);
+                if (!keepAlive) return;
+                continue;
+            }
+            if ("POST".equals(req.method) && "/shell-access".equals(req.path)) {
+                Map<String, Object> body = parseObject(req.body);
+                boolean saved = tools.setAllowShell(Boolean.TRUE.equals(body.get("enabled")));
+                writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "enabled", saved)), session, false);
+                return;
+            }
             if ("GET".equals(req.method) && "/timeline".equals(req.path)) {
                 writeJson(sock, 200, Json.stringify(Json.mapOf("ok", true, "entries", tools.timeline().recent(100))), session, keepAlive);
                 if (!keepAlive) return;

@@ -32,7 +32,8 @@ public final class StartScripts {
                 config.daemonPort,
                 config.links,
                 config.deviceId,
-                config.keepUsbDebugging);
+                config.keepUsbDebugging,
+                config.allowShell);
     }
 
     public static String apkPath(Context context) {

@@ -31,6 +31,8 @@ public final class DaemonConfig {
     public boolean allowLanDirect = false;
     /** Opt-in: keep global USB debugging enabled so adbd survives Wi-Fi transitions. */
     public boolean keepUsbDebugging = false;
+    /** Opt-in: allow raw android.shell commands on this device (bypasses blocked apps). */
+    public boolean allowShell = false;
     /** Absolute path of the json file this was loaded from (or will be written to). */
     public String configPath = DEFAULT_PATH;
     /** Linked agents: {@code [{agentId, linkKey, lastCallCounter, resultCounter}]}. */
@@ -77,6 +79,7 @@ public final class DaemonConfig {
         if (c.port <= 0 || c.port >= 65536) c.port = 18422;
         c.allowLanDirect = Boolean.TRUE.equals(obj.get("allowLanDirect"));
         c.keepUsbDebugging = Boolean.TRUE.equals(obj.get("keepUsbDebugging"));
+        c.allowShell = Boolean.TRUE.equals(obj.get("allowShell"));
         c.links = parseLinks(obj.get("links"));
         if (obj.get("revokedLinks") instanceof List) for (Object x : (List<?>)obj.get("revokedLinks")) c.revokedLinks.add(String.valueOf(x));
         if (obj.get("blockedPackages") instanceof List) for (Object x : (List<?>)obj.get("blockedPackages")) c.blockedPackages.add(String.valueOf(x));
@@ -98,6 +101,7 @@ public final class DaemonConfig {
         if (port != 18422) m.put("port", port);
         if (allowLanDirect) m.put("allowLanDirect", true);
         if (keepUsbDebugging) m.put("keepUsbDebugging", true);
+        if (allowShell) m.put("allowShell", true);
         List<Map<String, Object>> linkRows = new ArrayList<>();
         if (links != null) {
             for (Link link : links) {
