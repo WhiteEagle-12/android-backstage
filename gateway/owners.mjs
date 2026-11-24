@@ -1,7 +1,9 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import {promisify} from 'node:util';
 import {writePrivateJson} from '../cli/state.mjs';
 import * as webauthn from '@simplewebauthn/server';
+const scryptAsync = promisify(crypto.scrypt);
 
 export const sessionCookie = '__Host-backstage-owner';
 export const challengeCookie = '__Host-backstage-passkey';
@@ -22,23 +24,22 @@ const validatePassword = value => {
   if (value.length > 128) throw new Error('Password must be 128 characters or fewer.');
   return value;
 };
-const hashPassword = password => {
+const hashPassword = async password => {
   const salt = crypto.randomBytes(16);
-  const key = crypto.scryptSync(password, salt, 32, { N: 16384, r: 8, p: 1 });
+  const key = await scryptAsync(password, salt, 32, { N: 16384, r: 8, p: 1 });
   return `scrypt$${salt.toString('base64url')}$${key.toString('base64url')}`;
 };
 const DUMMY_SALT = crypto.randomBytes(16);
-const DUMMY_KEY = crypto.scryptSync('backstage-dummy-password', DUMMY_SALT, 32, { N: 16384, r: 8, p: 1 });
-const checkPasswordHash = (password, stored) => {
+const checkPasswordHash = async (password, stored) => {
   const parts = typeof stored === 'string' ? stored.split('$') : [];
   if (parts.length !== 3 || parts[0] !== 'scrypt') {
-    crypto.scryptSync(typeof password === 'string' ? password : '', DUMMY_SALT, 32, { N: 16384, r: 8, p: 1 });
+    await scryptAsync(typeof password === 'string' ? password : '', DUMMY_SALT, 32, { N: 16384, r: 8, p: 1 });
     return false;
   }
   try {
     const salt = Buffer.from(parts[1], 'base64url');
     const expected = Buffer.from(parts[2], 'base64url');
-    const derived = crypto.scryptSync(password, salt, expected.length, { N: 16384, r: 8, p: 1 });
+    const derived = await scryptAsync(password, salt, expected.length, { N: 16384, r: 8, p: 1 });
     return derived.length === expected.length && crypto.timingSafeEqual(derived, expected);
   } catch {
     return false;
@@ -143,7 +144,7 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
       if (!email) throw new Error('Enter a valid email address.');
       validatePassword(password);
       if (ownerByEmail(email)) throw new Error('An account with that email already exists. Log in instead.');
-      const passwordHash = hashPassword(password);
+      const passwordHash = await hashPassword(password);
       return await sendOtp(
         email,
         'signup',
@@ -165,8 +166,8 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
       save();
       return ownerId;
     },
-    /** Standard email + password login with constant-time verification and per-email rate limiting. */
-    verifyPassword(value, password) {
+    /** Standard email + password login with constant-time async verification and per-email rate limiting. */
+    async verifyPassword(value, password) {
       prune();
       const email = normalEmail(value);
       if (!email || typeof password !== 'string' || !password) throw new Error('Enter your email and password.');
@@ -176,7 +177,7 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
       if (recent.length >= 10) throw new Error('Too many failed sign-in attempts. Wait a few minutes or reset your password.');
       const ownerId = ownerByEmail(email);
       const stored = ownerId ? state.owners[ownerId]?.passwordHash : null;
-      const ok = checkPasswordHash(password, stored);
+      const ok = await checkPasswordHash(password, stored);
       if (!ownerId || !stored || !ok) {
         evictIfFull(passwordRates, 5000);
         passwordRates.set(rateKey, [...recent, t]);
@@ -202,7 +203,7 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
       );
     },
     /** Forgot password step 2: verify reset OTP, update password, invalidate old browser sessions, and return ownerId. */
-    verifyPasswordReset(value, code, newPassword) {
+    async verifyPasswordReset(value, code, newPassword) {
       prune();
       const email = normalEmail(value);
       if (!email) throw new Error('Enter a valid email address.');
@@ -212,7 +213,7 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
       if (!ownerId || !Object.hasOwn(state.owners, ownerId) || state.owners[ownerId].email !== email) {
         throw new Error('That code expired. Ask for a new one.');
       }
-      state.owners[ownerId].passwordHash = hashPassword(newPassword);
+      state.owners[ownerId].passwordHash = await hashPassword(newPassword);
       state.owners[ownerId].passwordUpdatedAt = now();
       for (const [id, sess] of Object.entries(state.sessions)) if (sess.ownerId === ownerId) delete state.sessions[id];
       passwordRates.delete(hash('pw:' + email));
@@ -220,17 +221,17 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
       return ownerId;
     },
     /** Set or change password for a signed-in account. */
-    setPassword(ownerId, newPassword, { currentPassword = null, requireCurrent = false } = {}) {
+    async setPassword(ownerId, newPassword, { currentPassword = null, requireCurrent = false } = {}) {
       if (!Object.hasOwn(state.owners, ownerId)) throw new Error('Unknown account.');
       if (!state.owners[ownerId].email) throw new Error('Add an email address before setting a password.');
       validatePassword(newPassword);
       const existing = state.owners[ownerId].passwordHash;
       if (existing && requireCurrent) {
-        if (typeof currentPassword !== 'string' || !checkPasswordHash(currentPassword, existing)) {
+        if (typeof currentPassword !== 'string' || !(await checkPasswordHash(currentPassword, existing))) {
           throw new Error('Current password is incorrect.');
         }
       }
-      state.owners[ownerId].passwordHash = hashPassword(newPassword);
+      state.owners[ownerId].passwordHash = await hashPassword(newPassword);
       state.owners[ownerId].passwordUpdatedAt = now();
       save();
       return true;

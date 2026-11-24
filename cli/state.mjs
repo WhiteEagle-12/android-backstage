@@ -12,13 +12,27 @@ export function writePrivateJson(file, data) {
   try { fs.fsyncSync(parent); } finally { fs.closeSync(parent); }
 }
 
+/** Non-blocking atomic JSON write (temp file + rename, 0600) for coalesced background persistence. */
+export async function writePrivateJsonAsync(file, data) {
+  const dir = path.dirname(file);
+  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+  const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  const handle = await fs.promises.open(tmp, 'wx', 0o600);
+  try {
+    await handle.writeFile(JSON.stringify(data, null, 2) + '\n', 'utf8');
+  } finally {
+    await handle.close();
+  }
+  await fs.promises.rename(tmp, file);
+}
+
 // In-process per-file FIFO queue avoids 50 ms filesystem polling when multiple
 // concurrent callers in the same gateway share one device link file.
 const inProcessLocks = new Map();
 
 // Serialize the entire exchange: allocating a counter alone does not prevent
 // two senders from delivering their monotonically numbered calls out of order.
-export async function withConfigLock(file, fn) {
+export async function withConfigLock(file, fn, { diskLock = true } = {}) {
   const key = path.resolve(file);
   const previous = inProcessLocks.get(key) || Promise.resolve();
   let releaseLocal;
@@ -27,7 +41,7 @@ export async function withConfigLock(file, fn) {
   inProcessLocks.set(key, tail);
   await previous;
   try {
-    return await withDiskConfigLock(file, fn);
+    return diskLock ? await withDiskConfigLock(file, fn) : await fn();
   } finally {
     releaseLocal();
     if (inProcessLocks.get(key) === tail) inProcessLocks.delete(key);

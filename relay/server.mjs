@@ -1079,6 +1079,8 @@ export async function createRelay(opts = {}) {
 
   let listenUrl = publicUrl || `http://127.0.0.1:${port}`;
 
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 70_000;
   await new Promise((resolve, reject) => {
     const onError = (err) => reject(err);
     server.once("error", onError);

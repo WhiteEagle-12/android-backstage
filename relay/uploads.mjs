@@ -31,7 +31,7 @@ export function createUploads(dataDir, {uploadsDir=null, maxBytes=512*1024*1024,
   const active=new Set();
   const fail=(msg,status=400)=>Object.assign(new Error(msg),{status});
   const meta=id=>path.join(dir,id+'.json'), blob=id=>path.join(dir,id+'.part');
-  function list(){return fs.readdirSync(dir).filter(x=>x.endsWith('.json')).map(x=>JSON.parse(fs.readFileSync(path.join(dir,x),'utf8')));}
+  function list(){if(!fs.existsSync(dir))return [];return fs.readdirSync(dir).filter(x=>x.endsWith('.json')).map(x=>JSON.parse(fs.readFileSync(path.join(dir,x),'utf8')));}
   function sweep(){for(const u of list())if(u.expiresAt<Date.now()&&!active.has(u.id)){shredSync(blob(u.id),shred);shredSync(meta(u.id),shred);}}
   function get(id,owner){if(!/^[a-f0-9]{32}$/.test(id))throw fail('unknown upload',404); let u;try{u=JSON.parse(fs.readFileSync(meta(id),'utf8'));}catch(e){if(e.code==='ENOENT')throw fail('unknown upload',404);throw e;}if(u.owner!==owner||u.expiresAt<Date.now())throw fail('unknown upload',404);return u;}
   function begin(owner,name,size){

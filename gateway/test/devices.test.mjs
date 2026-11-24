@@ -76,7 +76,7 @@ async function harness(t,{url,dataDir}) {
     if(phone)await phone.serve(handler);
     const r=await request;assert.equal(r.status,200);return (await r.json()).result;
   }
-  const restart=async()=>{await new Promise(resolve=>server.close(resolve));connections=await start();};
+  const restart=async()=>{connections.flushSync?.();await new Promise(resolve=>server.close(resolve));connections=await start();};
   return {get,post,register,enrollFirst,consent,enroll,call,restart,directory,connections:()=>connections,advance:ms=>{clock+=ms;},endpoint,jar:()=>jar,setJar:v=>{jar=v;}};
 }
 

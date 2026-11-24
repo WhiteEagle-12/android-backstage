@@ -336,5 +336,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
     if(error){console.error('Cannot bind Work listener:',error.code);process.exitCode=1;}
     else console.log(`Backstage Work listening on ${bindHost} (zero-retention=${zeroRetention?'on':'off'}, vault=${vault?'sealed':'plain'})`);
   });
+  listener.keepAliveTimeout=65000;listener.headersTimeout=70000;
   listener.on('error',()=>{process.exitCode=1;});
+  for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{connections.flushSync?.();listener.close(()=>process.exit(0));setTimeout(()=>process.exit(0),3000).unref();});
 }

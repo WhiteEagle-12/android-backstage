@@ -10,6 +10,8 @@ const relayPort = Number(process.env.BACKSTAGE_INTERNAL_RELAY_PORT || 18420);
 const workHost = process.env.BACKSTAGE_WORK_UPSTREAM_HOST || '127.0.0.1';
 const workPort = Number(process.env.BACKSTAGE_WORK_UPSTREAM_PORT || 18424);
 const relay = await createRelay({port:relayPort,host:relayHost,zeroRetention});
+const relayAgent = new http.Agent({keepAlive:true,keepAliveMsecs:15000,maxSockets:2048,maxFreeSockets:256});
+const workAgent = new http.Agent({keepAlive:true,keepAliveMsecs:15000,maxSockets:2048,maxFreeSockets:256});
 const front = http.createServer((req,res)=>{
   let pathname;try {pathname=new URL(req.url,'http://localhost').pathname;}catch{res.writeHead(400).end();return;}
   const work = pathname === '/.well-known/assetlinks.json' || pathname === '/work' || pathname.startsWith('/work/') || pathname === '/.well-known/oauth-authorization-server/work' || pathname === '/.well-known/oauth-protected-resource/work/mcp';
@@ -24,7 +26,7 @@ const front = http.createServer((req,res)=>{
   // Cloudflare overwrites this header; the front listener is loopback-only.
   // Never trust an arbitrary client-supplied forwarding chain.
   headers['x-forwarded-for']=net.isIP(req.headers['cf-connecting-ip']||'')?req.headers['cf-connecting-ip']:req.socket.remoteAddress;
-  const upstream=http.request({host:work?workHost:relayUpstreamHost,port:work?workPort:relay.port,method:req.method,path:req.url,headers},reply=>{
+  const upstream=http.request({host:work?workHost:relayUpstreamHost,port:work?workPort:relay.port,agent:work?workAgent:relayAgent,method:req.method,path:req.url,headers},reply=>{
     // Browser-facing hardening for every response, whichever service answered.
     const out={...reply.headers,'strict-transport-security':'max-age=31536000','x-content-type-options':'nosniff','referrer-policy':'no-referrer','x-frame-options':'DENY','permissions-policy':'camera=(), microphone=(), geolocation=(), payment=()','cross-origin-opener-policy':'same-origin','cache-control':reply.headers['cache-control']||'no-store'};
     res.writeHead(reply.statusCode,out);reply.pipe(res);
@@ -33,6 +35,7 @@ const front = http.createServer((req,res)=>{
   upstream.on('error',()=>{if(!res.headersSent){res.writeHead(502,{'content-type':'application/json'});res.end('{"error":"service_unavailable"}');}else if(!res.writableEnded){res.end();}});
   req.on('aborted',()=>upstream.destroy());res.on('close',()=>upstream.destroy());req.pipe(upstream);
 });
+front.keepAliveTimeout=65000;front.headersTimeout=70000;
 front.listen(publicPort,process.env.HOST || '127.0.0.1',()=>console.log('Backstage HTTPS services ready on loopback'));
 // Phones on the tailnet download transfer files straight from this computer instead of
 // through Cloudflare. Only tailnet peers are answered, only for capability file URLs
@@ -56,5 +59,5 @@ if(directFilesPort){
   directFiles.listen(directFilesPort,process.env.BACKSTAGE_DIRECT_FILES_HOST||'0.0.0.0',()=>console.log('Direct tailnet file transfers on port '+directFilesPort));
 }
 // Phone long polls would hold the relay open until systemd kills it 15 s later; end them now (phones reconnect).
-for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{front.close();directFiles?.close();front.closeAllConnections?.();directFiles?.closeAllConnections?.();relay.server.closeAllConnections?.();
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,async()=>{front.close();directFiles?.close();front.closeAllConnections?.();directFiles?.closeAllConnections?.();relayAgent.destroy();workAgent.destroy();relay.server.closeAllConnections?.();
   await Promise.race([relay.close(),new Promise(resolve=>setTimeout(resolve,5000))]);process.exit(0);});

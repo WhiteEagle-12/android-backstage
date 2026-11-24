@@ -50,9 +50,9 @@ test('standard signup (email + password -> OTP verify), login, forgot-password r
     await assert.rejects(() => owners.startSignUp('alice@example.com', 'another-password'), /already exists/);
 
     // 6. Password login succeeds with right password, fails with wrong password
-    assert.equal(owners.verifyPassword('alice@example.com', 'correct-horse-battery'), ownerId);
-    assert.throws(() => owners.verifyPassword('alice@example.com', 'wrong-password'), /Incorrect email or password/);
-    assert.throws(() => owners.verifyPassword('nobody@example.com', 'wrong-password'), /Incorrect email or password/);
+    assert.equal(await owners.verifyPassword('alice@example.com', 'correct-horse-battery'), ownerId);
+    await assert.rejects(() => owners.verifyPassword('alice@example.com', 'wrong-password'), /Incorrect email or password/);
+    await assert.rejects(() => owners.verifyPassword('nobody@example.com', 'wrong-password'), /Incorrect email or password/);
 
     // 7. Forgot password for unknown email returns sent:true silently without sending email
     const beforeCount = mailer.sent.length;
@@ -64,15 +64,15 @@ test('standard signup (email + password -> OTP verify), login, forgot-password r
     await owners.startPasswordReset('alice@example.com');
     const resetCode = mailer.lastCode('alice@example.com');
     assert.match(resetCode, /^\d{6}$/);
-    const resetOwner = owners.verifyPasswordReset('alice@example.com', resetCode, 'new-strong-password-42');
+    const resetOwner = await owners.verifyPasswordReset('alice@example.com', resetCode, 'new-strong-password-42');
     assert.equal(resetOwner, ownerId);
-    assert.throws(() => owners.verifyPassword('alice@example.com', 'correct-horse-battery'), /Incorrect email or password/);
-    assert.equal(owners.verifyPassword('alice@example.com', 'new-strong-password-42'), ownerId);
+    await assert.rejects(() => owners.verifyPassword('alice@example.com', 'correct-horse-battery'), /Incorrect email or password/);
+    assert.equal(await owners.verifyPassword('alice@example.com', 'new-strong-password-42'), ownerId);
 
     // 9. Signed-in password change requires current password
-    assert.throws(() => owners.setPassword(ownerId, 'updated-pass-99', { currentPassword: 'wrong', requireCurrent: true }), /Current password is incorrect/);
-    owners.setPassword(ownerId, 'updated-pass-99', { currentPassword: 'new-strong-password-42', requireCurrent: true });
-    assert.equal(owners.verifyPassword('alice@example.com', 'updated-pass-99'), ownerId);
+    await assert.rejects(() => owners.setPassword(ownerId, 'updated-pass-99', { currentPassword: 'wrong', requireCurrent: true }), /Current password is incorrect/);
+    await owners.setPassword(ownerId, 'updated-pass-99', { currentPassword: 'new-strong-password-42', requireCurrent: true });
+    assert.equal(await owners.verifyPassword('alice@example.com', 'updated-pass-99'), ownerId);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

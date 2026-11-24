@@ -276,7 +276,7 @@ async function encryptedCall(cfg, tool, args, options = {}) {
     // A route found for this call only (the hosted gateway's tailnet path): seal now, send unlocked.
     if (options.directUrl) return {direct:sealCall(cfg, tool, args, options),queueMs,started};
     return {pending:await submitCall(cfg, tool, args, options),queueMs,started};
-  });
+  }, { diskLock: !cfg.inProcessLockOnly });
   const result = submitted.done ?? (submitted.direct ? await directThenRelay(cfg, tool, args, options, submitted.direct) : await finishCall(cfg, submitted.pending));
   if(args?.timing){const timing=result?.timing||{};result.timing={...timing,hostQueueMs:Math.round(submitted.queueMs),hostRoundTripMs:Math.round(performance.now()-submitted.started),responseDeliveryMs:null,screenshotUploadMs:null};}
   return result;
@@ -499,7 +499,7 @@ async function openResult(cfg, name, callId, status, body) {
       const err = new Error(message); err.result = parsed; throw err;
     }
     return parsed.result;
-  });
+  }, { diskLock: !cfg.inProcessLockOnly });
 }
 
 async function encryptedCallLocked(cfg, tool, args, { device } = {}) {

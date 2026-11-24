@@ -104,6 +104,7 @@ test('connections with vault auto-migrates plaintext phone file and keeps counte
   // Calling updates callCounter while keeping secrets sealed on disk
   const grantId = connections.authorize(ownerId, 'client-1', 'Claude', 'all');
   await connections.call('android.shell', { command: 'echo hi' }, grantId);
+  await connections.flush();
   assert.equal(sawConfig.links.Pixel.linkKey, linkKey);
   const diskAfterCall = fs.readFileSync(phonePath, 'utf8');
   assert.equal(diskAfterCall.includes(linkKey), false, 'linkKey stays sealed after counter write');

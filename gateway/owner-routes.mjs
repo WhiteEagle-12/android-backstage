@@ -118,17 +118,17 @@ document.getElementById('signin')?.addEventListener('click',()=>signIn('authenti
     if(limited('verify-ip:'+req.ip,30))return res.status(429).json({error:'Too many attempts. Wait a few minutes.'});
     try{owners.issue(res,owners.verifySignUp(req.body?.email,req.body?.code));res.json({ok:true});}catch(e){res.status(400).json({error:e.message});}
   });
-  app.post('/work/login',(req,res)=>{
+  app.post('/work/login',async(req,res)=>{
     if(limited('login-ip:'+req.ip,20))return res.status(429).json({error:'Too many attempts. Wait a few minutes.'});
-    try{owners.issue(res,owners.verifyPassword(req.body?.email,req.body?.password));res.json({ok:true});}catch(e){res.status(400).json({error:e.message});}
+    try{owners.issue(res,await owners.verifyPassword(req.body?.email,req.body?.password));res.json({ok:true});}catch(e){res.status(400).json({error:e.message});}
   });
   app.post('/work/password/reset/start',async(req,res)=>{
     if(limited('reset-ip:'+req.ip,8))return res.status(429).json({error:'Too many attempts. Wait a few minutes.'});
     try{res.json(await owners.startPasswordReset(req.body?.email));}catch(e){res.status(400).json({error:e.message});}
   });
-  app.post('/work/password/reset/verify',(req,res)=>{
+  app.post('/work/password/reset/verify',async(req,res)=>{
     if(limited('verify-ip:'+req.ip,30))return res.status(429).json({error:'Too many attempts. Wait a few minutes.'});
-    try{owners.issue(res,owners.verifyPasswordReset(req.body?.email,req.body?.code,req.body?.password));res.json({ok:true});}catch(e){res.status(400).json({error:e.message});}
+    try{owners.issue(res,await owners.verifyPasswordReset(req.body?.email,req.body?.code,req.body?.password));res.json({ok:true});}catch(e){res.status(400).json({error:e.message});}
   });
   app.post('/work/email/start',async(req,res)=>{
     if(limited('email-ip:'+req.ip,8))return res.status(429).json({error:'Too many attempts. Wait a few minutes.'});
@@ -181,7 +181,7 @@ document.getElementById('allow').onclick=()=>decide(true);document.getElementByI
   app.post('/work/account/email/start',async(req,res)=>{const id=signedIn(req,res);if(!id)return;if(limited('email-owner:'+id,10))return res.status(429).json({error:'Too many attempts. Wait a few minutes.'});try{res.json(await owners.startEmail(req.body?.email,{linkOwner:id}));}catch(e){res.status(400).json({error:e.message});}});
   app.post('/work/account/email/verify',(req,res)=>{const id=signedIn(req,res);if(!id)return;try{owners.verifyEmail(req.body?.email,req.body?.code,{expectedLinkOwner:id});res.json(owners.methods(id));}catch(e){res.status(400).json({error:e.message});}});
   app.post('/work/account/email/remove',(req,res)=>{const id=signedIn(req,res);if(!id)return;try{owners.removeEmail(id);res.json(owners.methods(id));}catch(e){res.status(400).json({error:e.message});}});
-  app.post('/work/account/password',(req,res)=>{const id=signedIn(req,res);if(!id)return;try{owners.setPassword(id,req.body?.password,{currentPassword:req.body?.currentPassword,requireCurrent:true});res.json(owners.methods(id));}catch(e){res.status(400).json({error:e.message});}});
+  app.post('/work/account/password',async(req,res)=>{const id=signedIn(req,res);if(!id)return;try{await owners.setPassword(id,req.body?.password,{currentPassword:req.body?.currentPassword,requireCurrent:true});res.json(owners.methods(id));}catch(e){res.status(400).json({error:e.message});}});
   app.post('/work/account/recovery',(req,res)=>{const id=signedIn(req,res);if(!id)return;res.json({codes:owners.newRecoveryCodes(id)});});
   app.post('/work/account/passkeys/remove',(req,res)=>{const id=signedIn(req,res);if(!id)return;try{owners.removePasskey(id,String(req.body?.id||''));res.json(owners.methods(id));}catch(e){res.status(400).json({error:e.message});}});
   app.post('/work/passkeys/options',async(req,res)=>{try{res.json(await owners.options(req,res,req.body.mode));}catch{res.status(400).json({error:'Could not start passkey sign-in. Try again.'});}});
