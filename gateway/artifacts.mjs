@@ -33,11 +33,15 @@ export function shredFile(filePath, shred = true) {
   fs.rmSync(filePath, { force: true });
 }
 
-export function createArtifacts({directory,zeroRetention=false,maxBytes=zeroRetention?128*1024*1024:256*1024*1024,ttlMs=zeroRetention?5*60000:45*60000,quotaBytes=zeroRetention?160*1024*1024:1024*1024*1024,maxGrantBytes=zeroRetention?128*1024*1024:256*1024*1024,now=Date.now}) {
+export function createArtifacts({directory,zeroRetention=false,r2=null,maxBytes=zeroRetention?128*1024*1024:256*1024*1024,ttlMs=zeroRetention?5*60000:45*60000,quotaBytes=zeroRetention?160*1024*1024:1024*1024*1024,maxGrantBytes=zeroRetention?128*1024*1024:256*1024*1024,now=Date.now}) {
   fs.mkdirSync(directory,{recursive:true,mode:0o700});
   const meta=id=>path.join(directory,id+'.json'),blob=id=>path.join(directory,id+'.bin');
   const busy=new Set();
-  const purge=id=>{shredFile(blob(id),zeroRetention);shredFile(meta(id),zeroRetention);};
+  const purge=id=>{
+    const row=read(id);
+    if(row?.r2Key&&r2?.deleteObject)void r2.deleteObject(row.r2Key).catch(()=>{});
+    shredFile(blob(id),zeroRetention);shredFile(meta(id),zeroRetention);
+  };
   const valid=id=>/^art_[a-f0-9]{24}$/.test(id||'');
   const read=id=>{if(!valid(id))return null;try {return JSON.parse(fs.readFileSync(meta(id),'utf8'));} catch {return null;}};
   const save=row=>writePrivateJson(meta(row.id),row);
@@ -146,23 +150,27 @@ export function createArtifacts({directory,zeroRetention=false,maxBytes=zeroRete
     purge(id);
     return {artifactId:id,deleted:true};
   }
-  function createFromFile({grantId,name,tempPath,size,sha256,singleUse=zeroRetention}) {
+  function createFromFile({grantId,name,tempPath,size,sha256,singleUse=zeroRetention,r2Key=null,r2Url=null}) {
     sweep();
     if(!Number.isSafeInteger(size)||size<0||size>maxBytes)throw new ConnectionError('invalid_request',`size must be 0–${maxBytes} bytes.`);
     if(!/^[a-f0-9]{64}$/i.test(sha256||''))throw new ConnectionError('invalid_request','sha256 must be lowercase hex.');
     checkGrantQuota(all(),grantId,size);
     const clean=path.basename(String(name||'file.bin')).replace(/[^A-Za-z0-9._-]/g,'_').slice(0,80)||'file.bin';
-    const row={id:'art_'+crypto.randomBytes(12).toString('hex'),grantId,name:clean,size,sha256:sha256.toLowerCase(),offset:size,complete:true,singleUse:!!singleUse,tokenHash:null,createdAt:now(),expiresAt:now()+ttlMs};
+    const row={id:'art_'+crypto.randomBytes(12).toString('hex'),grantId,name:clean,size,sha256:sha256.toLowerCase(),offset:size,complete:true,singleUse:!!singleUse,tokenHash:null,createdAt:now(),expiresAt:now()+ttlMs,...(r2Key&&r2Url?{r2Key,r2Url}:{})};
     const token='artdl_'+crypto.randomBytes(24).toString('base64url');
     row.tokenHash=crypto.createHash('sha256').update(token).digest('hex');
-    try {
-      fs.renameSync(tempPath,blob(row.id));
-    } catch(e) {
-      if(e.code!=='EXDEV')throw e;
-      fs.copyFileSync(tempPath,blob(row.id));
-      shredFile(tempPath,zeroRetention);
+    if (r2Key && r2Url) {
+      if (tempPath) shredFile(tempPath, zeroRetention);
+    } else {
+      try {
+        fs.renameSync(tempPath,blob(row.id));
+      } catch(e) {
+        if(e.code!=='EXDEV')throw e;
+        fs.copyFileSync(tempPath,blob(row.id));
+        shredFile(tempPath,zeroRetention);
+      }
+      fs.chmodSync(blob(row.id),0o600);
     }
-    fs.chmodSync(blob(row.id),0o600);
     save(row);
     return {...publicRow(row),downloadToken:token};
   }
@@ -182,8 +190,16 @@ export function createArtifacts({directory,zeroRetention=false,maxBytes=zeroRete
     if(!row.complete)throw new ConnectionError('artifact_incomplete',`Artifact ${id} is incomplete.`);
     const singleUse=!!row.singleUse;
     if(singleUse)shredFile(meta(id),zeroRetention);
-    return {...publicRow(row),path:blob(id),singleUse,consume:()=>{if(!busy.has(id))shredFile(blob(id),zeroRetention);}};
+    const consume=()=>{
+      if(row.r2Key&&r2?.deleteObject){
+        const t=setTimeout(()=>{void r2.deleteObject(row.r2Key).catch(()=>{});},90_000);
+        t.unref?.();
+      } else if(!busy.has(id)){
+        shredFile(blob(id),zeroRetention);
+      }
+    };
+    return {...publicRow(row),path:blob(id),r2Key:row.r2Key||null,r2Url:row.r2Url||null,singleUse,consume};
   }
   const timer=setInterval(sweep,60000);timer.unref();
-  return {begin,append,status,ready,use,remove,removeForGrants,createFromFile,download,sweep,close:()=>clearInterval(timer),maxBytes,tempDir:directory,zeroRetention};
+  return {begin,append,status,ready,use,remove,removeForGrants,createFromFile,download,sweep,close:()=>clearInterval(timer),maxBytes,ttlMs,r2,tempDir:directory,zeroRetention};
 }

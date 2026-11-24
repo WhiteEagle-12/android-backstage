@@ -223,3 +223,65 @@ test("POST /work/account/delete requires Origin + confirmation and wipes owner, 
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("artifacts with R2 offloads pulled files to presigned 302 redirect and shreds local temp bytes", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bs-art-r2-"));
+  let server;
+  try {
+    const deleted = [];
+    const fakeR2 = {
+      async uploadFile(localPath) {
+        assert.ok(fs.existsSync(localPath));
+        return { id: "obj1", key: "work-pulls/obj1", url: "https://acct.r2.cloudflarestorage.com/bucket/work-pulls/obj1?sig=1", expiresAt: Date.now() + 300_000 };
+      },
+      async deleteObject(key) { deleted.push(key); return true; },
+      close() {},
+    };
+    const artifacts = createArtifacts({ directory: path.join(dir, "artifacts"), zeroRetention: true, r2: fakeR2 });
+    const app = createWorkApp({
+      base: "http://127.0.0.1/work",
+      stateFile: path.join(dir, "oauth.json"),
+      approvalFile: path.join(dir, "approval.json"),
+      artifacts,
+    });
+    server = await new Promise((resolve) => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
+    const base = `http://127.0.0.1:${server.address().port}`;
+
+    const tmp = path.join(dir, "clip.mp4");
+    const payload = Buffer.from("fake-mp4-video-bytes");
+    fs.writeFileSync(tmp, payload);
+    const sha256 = crypto.createHash("sha256").update(payload).digest("hex");
+    const uploaded = await fakeR2.uploadFile(tmp);
+    const saved = artifacts.createFromFile({
+      grantId: "grant_1",
+      name: "clip.mp4",
+      tempPath: tmp,
+      size: payload.length,
+      sha256,
+      r2Key: uploaded.key,
+      r2Url: uploaded.url,
+    });
+    // Local temp file must be shredded immediately once offloaded to R2
+    assert.equal(fs.existsSync(tmp), false);
+
+    // Download with valid single-use downloadToken redirects 302 to R2 presigned URL
+    const dl = await fetch(`${base}/work/artifacts/${saved.artifactId}/download`, {
+      headers: { Authorization: `Bearer ${saved.downloadToken}` },
+      redirect: "manual",
+    });
+    assert.equal(dl.status, 302);
+    assert.equal(dl.headers.get("location"), uploaded.url);
+    assert.equal(dl.headers.get("x-content-sha256"), sha256);
+
+    // Second download with the same single-use token is 404 (burned)
+    const dl2 = await fetch(`${base}/work/artifacts/${saved.artifactId}/download`, {
+      headers: { Authorization: `Bearer ${saved.downloadToken}` },
+      redirect: "manual",
+    });
+    assert.equal(dl2.status, 404);
+    artifacts.close();
+  } finally {
+    await new Promise((r) => (server ? server.close(r) : r()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

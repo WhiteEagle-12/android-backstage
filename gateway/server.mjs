@@ -12,6 +12,7 @@ import {advertisedSchema} from '../cli/advertised-schema.mjs';
 import {invalidArguments} from './validation.mjs';
 import { createConnections, ConnectionError } from './connections.mjs';
 import { createArtifacts, shredFile } from './artifacts.mjs';
+import { createR2FromEnv } from '../relay/r2.mjs';
 import { loadVaultFromEnv } from './vault.mjs';
 import { createDirectRoutes, overTailnet } from './direct-routes.mjs';
 import {createRequestJournal} from './request-journal.mjs';
@@ -156,6 +157,11 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
     const bearer=/^Bearer ([A-Za-z0-9_-]+)$/.exec(req.headers.authorization||'')?.[1]||null;
     try {
       const file=artifacts.download(req.params.id,{uploadToken:bearer,grantId:auth.grantForToken(bearer)});
+      if(file.r2Url){
+        res.set({'X-Content-Sha256':file.sha256,'Cache-Control':'no-store'});
+        if(file.singleUse&&file.consume)try{file.consume();}catch{}
+        return res.redirect(302,file.r2Url);
+      }
       res.set({'Content-Type':'application/octet-stream','Content-Disposition':`attachment; filename="${file.name}"`,'Content-Length':String(file.size),'X-Content-Sha256':file.sha256,'Cache-Control':'no-store'});
       const stream=fs.createReadStream(file.path);
       if(file.singleUse&&file.consume)stream.once('close',()=>{try{file.consume();}catch{}});
@@ -236,7 +242,14 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
         fs.fsyncSync(fd);
         fs.closeSync(fd);fd=-1;
         const sha256=hash.digest('hex');
-        saved=artifacts.createFromFile({grantId,name:path.basename(rest.path),tempPath:tmp,size:offset,sha256});
+        let r2Key=null,r2Url=null;
+        if(artifacts.r2&&offset>0){
+          try {
+            const uploaded=await artifacts.r2.uploadFile(tmp,{ttlSec:Math.round((artifacts.ttlMs||300_000)/1000),contentType:'application/octet-stream'});
+            r2Key=uploaded.key;r2Url=uploaded.url;
+          } catch {}
+        }
+        saved=artifacts.createFromFile({grantId,name:path.basename(rest.path),tempPath:tmp,size:offset,sha256,r2Key,r2Url});
       } catch(e){
         if(fd>=0){try{fs.closeSync(fd);}catch{}}
         shredFile(tmp,zeroRetention||artifacts.zeroRetention);
@@ -325,7 +338,11 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   const directRoutes = (cloudMode || process.env.BACKSTAGE_DIRECT_ROUTES === '0') ? null : createDirectRoutes({log:line=>console.log(line)});
   const connections = createConnections({directory:path.join(dir,'connections'),relayUrl:process.env.BACKSTAGE_RELAY_URL,
     relayInternalUrl:process.env.BACKSTAGE_RELAY_INTERNAL_URL||null,relayInternalToken:process.env.RELAY_INTERNAL_TOKEN||process.env.RELAY_ADMIN_TOKEN||null,directRoutes,vault,log:line=>console.log(line)});
-  const artifacts = createArtifacts({directory:process.env.BACKSTAGE_ARTIFACTS_DIR||path.join(dir,'artifacts'),zeroRetention});
+  const r2 = createR2FromEnv({
+    ...process.env,
+    RELAY_R2_PREFIX: process.env.WORK_R2_PREFIX || process.env.RELAY_R2_PREFIX || 'work-pulls/',
+  });
+  const artifacts = createArtifacts({directory:process.env.BACKSTAGE_ARTIFACTS_DIR||path.join(dir,'artifacts'),zeroRetention,r2});
   const base=process.env.BACKSTAGE_WORK_BASE || 'https://relay.android-backstage.com/work';
   const owners=createOwners({stateFile:path.join(dir,'owners.json'),origin:new URL(base).origin,androidOrigins,mailer:createMailer()});
   const auditEnabled = process.env.BACKSTAGE_AUDIT_LOG === '1';
@@ -334,9 +351,9 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   const bindHost = process.env.HOST || '127.0.0.1';
   const listener = app.listen(Number(process.env.PORT || 18424),bindHost,error=>{
     if(error){console.error('Cannot bind Work listener:',error.code);process.exitCode=1;}
-    else console.log(`Backstage Work listening on ${bindHost} (zero-retention=${zeroRetention?'on':'off'}, vault=${vault?'sealed':'plain'})`);
+    else console.log(`Backstage Work listening on ${bindHost} (zero-retention=${zeroRetention?'on':'off'}, vault=${vault?'sealed':'plain'}, r2=${r2?'on':'off'})`);
   });
   listener.keepAliveTimeout=65000;listener.headersTimeout=70000;
   listener.on('error',()=>{process.exitCode=1;});
-  for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{connections.flushSync?.();listener.close(()=>process.exit(0));setTimeout(()=>process.exit(0),3000).unref();});
+  for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{connections.flushSync?.();r2?.close?.();listener.close(()=>process.exit(0));setTimeout(()=>process.exit(0),3000).unref();});
 }

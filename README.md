@@ -40,21 +40,22 @@ gemini mcp add --transport http android-backstage https://relay.android-backstag
 
 > **Privacy note:** On the hosted MCP path, the gateway holds your device link keys and decrypts commands/results to relay them to cloud assistants (the blind relay and Cloudflare only see ciphertext envelopes for phone traffic). On-device blocked apps are always enforced inside the phone daemon.
 
-### 2. Zero-Knowledge Local E2EE Bridge (relay never sees plaintext)
+### 2. Self-Hosted Relay & Zero-Knowledge Local Bridge
 
-For local MCP clients (Claude Code, Cursor desktop, Codex CLI), run the local stdio bridge so link keys stay strictly on your computer and phone (SPAKE2 + AES-256-GCM):
+Want the entire stack on your own hardware so our hosted servers are never in the path? Run your own open-source relay (`relay/server.mjs`) and use the local stdio E2EE bridge (SPAKE2 + AES-256-GCM; link keys stay strictly on your machine and phone):
 
 ```bash
-node cli/backstage.mjs pair --name phone
+RELAY_ALLOW_PUBLIC_PAIR=1 node relay/server.mjs
+node cli/backstage.mjs pair --relay-url https://your-relay.example --name phone
 ./scripts/backstage-e2ee-mcp.sh --device phone --print-config
 ```
 
-See [`docs/E2EE-BRIDGE.md`](docs/E2EE-BRIDGE.md) and [`docs/SETUP.md`](docs/SETUP.md) for self-hosting your own relay.
+See [`docs/SETUP.md`](docs/SETUP.md) and [`docs/E2EE-BRIDGE.md`](docs/E2EE-BRIDGE.md) for self-hosting instructions.
 
 ## Key Capabilities
 
 - **Hidden Virtual Display + Handoff:** Agents open, read, tap, type, scroll, and record MP4 clips on a private display while your physical screen stays untouched. Hand off to the real screen only when you want.
-- **Fast & Token-Light:** Consolidated 21-tool MCP surface (~1.96k upfront tokens), Binder IPC + pooled `UiAutomation`, compact 1-line screen output with auto-diff, and scaled WebP screenshots.
+- **Fast & Token-Light:** Consolidated 23-tool MCP surface (~2.1k upfront tokens, including opt-in on-device `android_shell`), Binder IPC + pooled `UiAutomation`, compact 1-line screen output with auto-diff, and scaled WebP screenshots.
 - **On-Device Privacy Fence & Live Peek:** Hard-block sensitive apps (banking, vaults, gallery) directly inside the phone daemon; glance at backstage activity live, approve sensitive actions with Prepare & Confirm, or pause/revoke any agent in one tap.
 - **Real-Device Dev & QA Loop:** Build APKs, install onto real hardware without a USB cable, launch backstage, pull crash logs/ANRs/frame-jank stats, and grab MP4 failure recordings in a single call.
 - **Self-Healing Connectivity:** Auto-approves saved password-protected Wi-Fi access points, survives Wi-Fi → 5G handoffs in under a second, and works outbound-only with no open ports.
