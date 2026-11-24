@@ -4,7 +4,7 @@ Package: `android-backstage/`
 Public server: `https://relay.android-backstage.com/work/mcp`
 Type: Universal remote MCP with OAuth authorization code + S256 PKCE.
 Website: `https://android-backstage.com/`
-Publisher brand: Eagle Eye ML
+Publisher brand: Android Backstage
 Public support email: `support@android-backstage.com`
 Support URL: `https://android-backstage.com/support/`
 Privacy URL: `https://android-backstage.com/privacy/`

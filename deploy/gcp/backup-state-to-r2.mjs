@@ -93,7 +93,14 @@ if (cmd === "backup") {
   const tmpTar = path.join(os.tmpdir(), `bs-backup-${process.pid}-${Date.now()}.tar.gz`);
 
   try {
-    execFileSync("tar", ["-czf", tmpTar, "--ignore-failed-read", ...existing], { stdio: "pipe" });
+    execFileSync("tar", [
+      "-czf", tmpTar,
+      "--ignore-failed-read",
+      "--exclude=*/artifacts",
+      "--exclude=*/uploads",
+      "--exclude=*.requests",
+      ...existing,
+    ], { stdio: "pipe" });
     const plain = fs.readFileSync(tmpTar);
     const enc = encryptBuffer(plain, key, `backstage-backup-v1:${nodeName}`);
     const r2 = createR2Store({ endpoint, bucket, accessKeyId, secretAccessKey, region: "auto", prefix: "" });

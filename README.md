@@ -42,7 +42,7 @@ gemini mcp add --transport http android-backstage https://relay.android-backstag
 
 ### 2. Self-Hosted Relay & Zero-Knowledge Local Bridge
 
-Want the entire stack on your own hardware so our hosted servers are never in the path? Run your own open-source relay (`relay/server.mjs`) and use the local stdio E2EE bridge (SPAKE2 + AES-256-GCM; link keys stay strictly on your machine and phone):
+Want the entire stack on your own hardware so our hosted servers are never in the path? Run your own source-available relay (`relay/server.mjs`) and use the local stdio E2EE bridge (SPAKE2 + AES-256-GCM; link keys stay strictly on your machine and phone):
 
 ```bash
 RELAY_ALLOW_PUBLIC_PAIR=1 node relay/server.mjs
@@ -76,4 +76,4 @@ See [`docs/SETUP.md`](docs/SETUP.md) and [`docs/E2EE-BRIDGE.md`](docs/E2EE-BRIDG
 
 - **Phone:** Android 11+ (Wireless debugging pairing).
 - **Relay / Gateway / CLI:** Node.js 22+ (or Docker).
-- **License:** Apache-2.0. Every component—app, daemon, relay, gateway, and CLI—is open source.
+- **License:** [FSL-1.1-ALv2](LICENSE) (Source-available — free to inspect, modify, and self-host for personal or internal company use; competing commercial offerings prohibited; each release converts to Apache-2.0 after 2 years).

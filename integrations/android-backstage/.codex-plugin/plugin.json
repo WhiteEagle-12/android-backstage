@@ -3,7 +3,7 @@
   "version": "0.3.1",
   "description": "Use your Android apps and run phone tasks through a connection you approve in Backstage.",
   "author": {
-    "name": "Eagle Eye ML",
+    "name": "Android Backstage",
     "email": "support@android-backstage.com"
   },
   "homepage": "https://android-backstage.com/",
@@ -12,7 +12,7 @@
   "interface": {
     "displayName": "Android Backstage",
     "shortDescription": "Use your Android phone from your assistant.",
-    "developerName": "Eagle Eye ML",
+    "developerName": "Android Backstage",
     "category": "Productivity",
     "capabilities": [
       "Write"

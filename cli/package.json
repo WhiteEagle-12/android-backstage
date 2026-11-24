@@ -2,7 +2,7 @@
   "name": "android-backstage",
   "version": "2.0.0",
   "type": "module",
-  "license": "Apache-2.0",
+  "license": "FSL-1.1-ALv2",
   "description": "Android Backstage CLI & Local E2EE MCP Bridge — control your Android phone over a blind relay with zero-knowledge AES-256-GCM encryption.",
   "homepage": "https://android-backstage.com",
   "repository": {
