@@ -26,11 +26,12 @@ const MAGIC = Buffer.from("BSBK1", "ascii"); // 5 bytes magic + 12 bytes IV + 16
 function loadKey(keyFile) {
   if (!keyFile || !fs.existsSync(keyFile)) throw new Error(`Missing backup key file: ${keyFile || "(unset)"}`);
   const raw = fs.readFileSync(keyFile, "utf8").trim();
-  const buf = /^[a-f0-9]{64}$/i.test(raw)
-    ? Buffer.from(raw, "hex")
-    : Buffer.from(raw, raw.includes("-") || raw.includes("_") ? "base64url" : "base64");
-  if (buf.length !== 32) throw new Error("Backup key must decode to 32 bytes");
-  return buf;
+  if (!raw || raw.length < 32) throw new Error("Backup key file must contain at least 32 characters");
+  if (/^[a-f0-9]{64}$/i.test(raw)) return Buffer.from(raw, "hex");
+  const b64 = Buffer.from(raw, raw.includes("-") || raw.includes("_") ? "base64url" : "base64");
+  if (b64.length === 32) return b64;
+  // High-entropy passphrase / longer key material (e.g. 48-byte base64): derive 32-byte AES-256 key deterministically.
+  return crypto.createHash("sha256").update(raw, "utf8").digest();
 }
 
 function encryptBuffer(plaintext, key, aad) {
