@@ -3,7 +3,7 @@ import {connectionPage} from './connect-page.mjs';
 import fs from 'node:fs';
 import { writePrivateJson } from '../cli/state.mjs';
 import {validRedirect,fetchClientMetadata,redirectMatches,callbackOriginMatches} from './oauth-clients.mjs';
-import {consentPage,phoneApprovalPage} from './pages.mjs';
+import {page,consentPage,phoneApprovalPage} from './pages.mjs';
 import {ConnectionError} from './connections.mjs';
 const random = () => crypto.randomBytes(32).toString('base64url');
 const APPROVAL_ALPHABET='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -35,7 +35,7 @@ function sanitizeRegisteredName(rawName, redirects) {
 }
 export function createAuth({ base, stateFile, approvalFile, connections, owners, artifacts = null, metadataReader=fetchClientMetadata, allowTestRedirect = false, now = Date.now }) {
   const resource = base + '/mcp';
-  const policy = (redirect, nonce) => `default-src 'none'; style-src 'unsafe-inline';${nonce ? " script-src 'nonce-"+nonce+"'; connect-src 'self';" : ''} form-action 'self'${redirect ? ' '+redirect : ''}; frame-ancestors 'none'`;
+  const policy = (redirect, nonce) => `default-src 'none'; img-src https://android-backstage.com; style-src 'unsafe-inline';${nonce ? " script-src 'nonce-"+nonce+"'; connect-src 'self';" : ''} form-action 'self'${redirect ? ' '+redirect : ''}; frame-ancestors 'none'`;
   let state = { clients: {}, codes: {}, access: {}, refresh: {} };
   if (fs.existsSync(stateFile)) state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   const pending = new Map(), rates = new Map(), invitations = new Map();
@@ -168,8 +168,7 @@ export function createAuth({ base, stateFile, approvalFile, connections, owners,
           return res.type('html').send(await connectionPage({base,ticket,nonce,connection:row.connection}));
         } catch {pending.delete(ticket); return fail(res,'connection_unavailable',503);}
       }
-      res.type('html').send(`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Connect Android Backstage</title><style>body{font:17px system-ui;background:#f5f7f2;color:#14232d;margin:0;padding:32px}main{max-width:460px;margin:8vh auto;background:white;padding:32px;border:1px solid #d5ded5;border-radius:24px}h1{font-size:30px}p{line-height:1.55;color:#52616a}label{display:block;font-weight:600}input,button{box-sizing:border-box;width:100%;padding:16px;margin-top:12px;border-radius:12px;border:1px solid #52616a;font:inherit}button{background:#9bef47;font-weight:700;cursor:pointer}.small{font-size:14px}</style><main><h1>Connect your phone to ChatGPT</h1><p>ChatGPT Work will use the <strong>ChatGPT Work</strong> connection in Backstage. Its chats share this access. You can pause or remove it on your phone.</p><p>This allows phone commands and app control. Tool results go to ChatGPT.</p><form id="approve" method="post" action="${escape(base)}/authorize"><input type="hidden" name="ticket" value="${escape(ticket)}"><label for="code">One-time connection approval code</label><input id="code" name="code" type="password" autocomplete="off" required><button type="submit">Connect ChatGPT Work</button><p id="result" role="status"></p></form><p class="small">Get a code on the computer hosting Backstage: <code>backstage-work-approve</code>. Codes expire in 10 minutes and work once.</p></main><script nonce="${nonce}">
-const form=document.getElementById('approve'),result=document.getElementById('result');
+      res.type('html').send(page('Connect Android Backstage',`<h1>Connect your phone to ChatGPT</h1><p>ChatGPT Work will use the <strong>ChatGPT Work</strong> connection in Backstage. Its chats share this access. You can pause or remove it on your phone.</p><p>This allows phone commands and app control. Tool results go to ChatGPT.</p><form id="approve" method="post" action="${escape(base)}/authorize"><input type="hidden" name="ticket" value="${escape(ticket)}"><label for="code">One-time connection approval code</label><input id="code" name="code" type="password" autocomplete="off" required><button type="submit">Connect ChatGPT Work</button><p id="result" role="status"></p></form><p><small>Get a code on the computer hosting Backstage: <code>backstage-work-approve</code>. Codes expire in 10 minutes and work once.</small></p>`,`const form=document.getElementById('approve'),result=document.getElementById('result');
 form.addEventListener('submit',async event=>{
   event.preventDefault();const button=form.querySelector('button');button.disabled=true;result.textContent='Connecting…';
   try {
@@ -178,8 +177,7 @@ form.addEventListener('submit',async event=>{
     if(!response.ok)throw new Error('This approval expired or was already used. Run backstage-work-approve for a new code, then try again.');
     window.location.assign(data.redirect);
   } catch(error) {result.textContent=error.message || 'Could not connect. Check your internet and try again.';button.disabled=false;}
-});
-</script></html>`);
+});`,nonce));
     });
     // The approval page's "send to my phone": the owner names their account by email.
     app.post('/work/authorize/phone', (req,res) => {

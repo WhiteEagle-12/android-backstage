@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {assistantIcon} from './assistants.mjs';
+import {assistantIconAsset} from './assistants.mjs';
 import {page,escape,scriptJSON} from './pages.mjs';
 import {connectionPage} from './connect-page.mjs';
 import {validDeviceName,ConnectionError} from './connections.mjs';
@@ -17,11 +17,14 @@ export function ownerRoutes(app,{owners,connections,base,auth,artifacts=null,nat
   // Per-address and per-IP limits sit in the account store and here; codes expire in 10 minutes.
   const tries=new Map();
   const limited=(key,max)=>{const t=now();let row=tries.get(key);if(!row||row.until<=t)row={count:0,until:t+600000};row.count++;if(!tries.has(key)&&tries.size>=5000){for(const [k,v] of tries)if(v.until<=t)tries.delete(k);if(tries.size>=5000){const oldest=tries.keys().next().value;if(oldest!==undefined)tries.delete(oldest);}}tries.set(key,row);return row.count>max;};
+  const fmtDate=ts=>new Date(ts).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const fmtDateTime=ts=>new Date(ts).toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});
+
   const renderSignIn=(req,res,defaultMode='login')=>{
     const n=nonce(res),target=safeReturn(req.query.return_to),adding=!!owners.owner(req),email=owners.emailAvailable();
     const initialMode=req.query.mode==='signup'||defaultMode==='signup'?'signup':'login';
-    const body=adding?`<h1>Add a passkey</h1><p>Save another passkey so you can sign in on this device with your fingerprint or screen lock.</p><button id="register">Save a passkey</button>`
-      :`<h1>Android Backstage</h1><p id="subtitle">${initialMode==='signup'?'Create your account to link your phones and assistants.':'Log in to manage your devices and assistants.'}</p>
+    const body=adding?`<h1>Add a passkey</h1><p>Save another passkey so you can sign in on this device with your fingerprint or screen lock.</p><button id="register">Save a passkey</button><a class="button secondary" href="/work/account">Back to account</a>`
+      :`<h1>${initialMode==='signup'?'Create account':'Sign in'}</h1><p id="subtitle">${initialMode==='signup'?'Create your account to link your phones and assistants.':'Log in to manage your devices and assistants.'}</p>
 <div class="tabs" role="tablist" aria-label="Account"><button type="button" role="tab" id="tab-login" aria-selected="${initialMode==='login'}">Log in</button><button type="button" role="tab" id="tab-signup" aria-selected="${initialMode==='signup'}">Create account</button></div>
 <section id="panel-login"${initialMode==='login'?'':' hidden'}>
 <form id="login-form"><label for="login-email">Email</label><input id="login-email" type="email" autocomplete="email" required><label for="login-password">Password</label><input id="login-password" type="password" autocomplete="current-password" required><button>Log in</button></form>
@@ -43,8 +46,8 @@ ${email?`<section id="panel-reset" hidden>
 <hr class="divider">
 <button id="signin" class="secondary">Sign in with a passkey</button>
 <details><summary>Use a recovery code</summary><form id="recovery-form"><label for="recovery">Recovery code</label><input id="recovery" type="text" autocomplete="off" required><button>Sign in</button></form></details>`;
-    res.type('html').send(page(initialMode==='signup'?'Create account':'Log in',`${body}<p id="status" role="status"></p><script nonce="${n}" src="/work/passkeys.js"></script>`, `
-const target=${scriptJSON(target)},status=document.getElementById('status'),subtitle=document.getElementById('subtitle');
+    res.type('html').send(page(adding?'Add a passkey':initialMode==='signup'?'Create account':'Sign in',`${body}<p id="status" role="status"></p><script nonce="${n}" src="/work/passkeys.js"></script>`, `
+const target=${scriptJSON(target)},status=document.getElementById('status'),subtitle=document.getElementById('subtitle'),heading=document.querySelector('h1');
 const busy=on=>document.querySelectorAll('button,input').forEach(b=>b.disabled=on);
 async function post(url,body){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json().catch(()=>({}));if(!r.ok)throw Error(data.error||'Something went wrong. Try again.');return data;}
 const panels={login:document.getElementById('panel-login'),signup:document.getElementById('panel-signup'),reset:document.getElementById('panel-reset'),otp:document.getElementById('panel-otp')};
@@ -53,7 +56,10 @@ function showPanel(name){
   for(const [k,el] of Object.entries(panels))if(el)el.hidden=k!==name;
   if(tabLogin)tabLogin.setAttribute('aria-selected',String(name==='login'));
   if(tabSignup)tabSignup.setAttribute('aria-selected',String(name==='signup'));
-  if(subtitle)subtitle.textContent=name==='signup'?'Create your account to link your phones and assistants.':name==='reset'?'Reset your password.':name==='otp'?'Sign in with a one-time email code.':'Log in to manage your devices and assistants.';
+  if(heading&&subtitle){
+    heading.textContent=name==='signup'?'Create account':name==='reset'?'Reset password':name==='otp'?'Email code':'Sign in';
+    subtitle.textContent=name==='signup'?'Create your account to link your phones and assistants.':name==='reset'?'We will email a 6-digit reset code.':name==='otp'?'Sign in with a one-time email code.':'Log in to manage your devices and assistants.';
+  }
   status.textContent='';
 }
 tabLogin?.addEventListener('click',()=>showPanel('login'));
@@ -151,7 +157,7 @@ document.getElementById('signin')?.addEventListener('click',()=>signIn('authenti
     const ownerId=owners.owner(req);
     if(!ownerId){
       const signInUrl='/work/sign-in?return_to='+encodeURIComponent('/work/connect/approve?request='+view.request);
-      return res.type('html').send(page('Connect '+names,`<h1>Connect ${names}</h1><p class="meta">Check digits: <strong>${escape(view.check)}</strong></p><form id="to-phone"><label for="owner-email">Your Backstage email</label><input id="owner-email" type="email" autocomplete="email" required><button>Send to my phone</button></form><p id="status" role="status"></p><p><small><a href="${escape(signInUrl)}">Approve in browser instead</a></small></p>`,`
+      return res.type('html').send(page('Connect '+names,`<h1>Connect ${names}</h1><div class="big-code"><code>${escape(view.check)}</code></div><form id="to-phone"><label for="owner-email">Your Backstage email</label><input id="owner-email" type="email" autocomplete="email" required><button>Send to my phone</button></form><p id="status" role="status"></p><p style="margin-top:14px"><small><a href="${escape(signInUrl)}">Approve in browser instead</a></small></p>`,`
 const request=${scriptJSON(view.request)},status=document.getElementById('status'),email=document.getElementById('owner-email');
 try{email.value=localStorage.getItem('backstage-email')||'';}catch{}
 if(email.value)document.querySelector('#to-phone button').focus();else email.focus();
@@ -159,7 +165,7 @@ let polling=false;
 async function poll(){if(polling)return;polling=true;while(true){await new Promise(r=>setTimeout(r,1500));try{const r=await fetch('/work/connect/approve/status?request='+encodeURIComponent(request));const d=await r.json();if(d.state==='approved'){status.textContent='Connected. You can close this page.';return;}if(d.state==='denied'){status.textContent='Denied on your phone. You can close this page.';return;}if(d.state==='expired'){status.textContent='This request expired. Ask your agent to connect again.';return;}}catch{}}}
 document.getElementById('to-phone').onsubmit=async e=>{e.preventDefault();const b=e.target.querySelector('button');b.disabled=true;try{const r=await fetch('/work/connect/approve/phone',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request,email:email.value})});const d=await r.json();if(!r.ok)throw Error(d.error||'Could not send.');try{localStorage.setItem('backstage-email',email.value);}catch{}status.textContent='Sent to your phone. Tap Allow in Backstage.';b.textContent='Send again';poll();}catch(err){status.textContent=err.message;}b.disabled=false;};`,n));
     }
-    res.type('html').send(page('Allow access',`<h1>Allow ${names}?</h1><p class="meta">Check digits: <strong>${escape(view.check)}</strong></p><p>${view.names.length>1?'These agents':'This agent'} will be able to use apps and run commands on your devices. You can pause or remove access in Backstage anytime.</p><button id="allow">Allow</button><button id="deny" class="secondary">Deny</button><p id="status" role="status"></p>`,`
+    res.type('html').send(page('Allow access',`<h1>Allow ${names}?</h1><div class="big-code"><code>${escape(view.check)}</code></div><p>${view.names.length>1?'These agents':'This agent'} will be able to use apps and run commands on your devices. You can pause or remove access in Backstage anytime.</p><button id="allow">Allow</button><button id="deny" class="secondary">Deny</button><p id="status" role="status"></p>`,`
 const status=document.getElementById('status'),request=${scriptJSON(view.request)};
 async function decide(allow){document.querySelectorAll('button').forEach(b=>b.disabled=true);try{const r=await fetch('/work/connect/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request,allow})});const data=await r.json();if(!r.ok)throw Error(data.error||'Could not finish.');status.textContent=allow?'Connected. You can close this page.':'Denied. You can close this page.';}catch(e){status.textContent=e.message;document.querySelectorAll('button').forEach(b=>b.disabled=false);}}
 document.getElementById('allow').onclick=()=>decide(true);document.getElementById('deny').onclick=()=>decide(false);`,n));
@@ -187,51 +193,110 @@ document.getElementById('allow').onclick=()=>decide(true);document.getElementByI
   app.post('/work/passkeys/options',async(req,res)=>{try{res.json(await owners.options(req,res,req.body.mode));}catch{res.status(400).json({error:'Could not start passkey sign-in. Try again.'});}});
   app.post('/work/passkeys/verify',async(req,res)=>{try{await owners.verify(req,res,req.body);res.json({ok:true});}catch{res.status(400).json({error:'The passkey could not be verified. Try again with the passkey you saved for Backstage.'});}});
 
-  const statusLabel=d=>d.status==='online'?['ok','Online']:d.status==='offline'?['warn','Offline — open Android Backstage on it and tap Start']:d.status==='needs_reconnect'?['bad','Needs reconnecting — the phone no longer holds this link']:['warn','Status unknown'];
-  const methodsSection=m=>`<div class="card"><strong>Email</strong>${m.email?`<p class="meta"><!--email_off-->${escape(m.email)}<!--/email_off--> · used for log in and verification codes</p><button type="button" class="secondary" id="email-remove">Remove email</button>`:`<p class="meta">${m.emailAvailable?'Add an email to sign in on any device.':'Email sign-in is not set up on this server.'}</p>`}${m.emailAvailable?`<form id="email-add"><label for="new-email">${m.email?'Change email':'Email'}</label><input id="new-email" type="email" autocomplete="email" required><button class="secondary">Send a code</button></form><form id="email-confirm" hidden><label for="email-code">Code from the email</label><input id="email-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="7" required><button>Confirm email</button></form>`:''}</div>
-${m.email?`<div class="card"><strong>Password</strong><p class="meta">${m.hasPassword?'Password is set. You can log in with your email and password.':'No password set yet. Add one to log in with email and password.'}</p><form id="password-form">${m.hasPassword?'<label for="cur-password">Current password</label><input id="cur-password" type="password" autocomplete="current-password" required>':''}<label for="new-password">${m.hasPassword?'New password':'Password'}</label><input id="new-password" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="At least 8 characters" required><button class="secondary">${m.hasPassword?'Change password':'Set password'}</button></form></div>`:''}
-<div class="card"><strong>Passkeys</strong>${m.passkeys.length?m.passkeys.map(k=>`<p class="meta" data-passkey="${escape(k.id)}">${escape(k.label)}${k.createdAt?` · added ${escape(new Date(k.createdAt).toLocaleDateString('en-GB'))}`:''} <button type="button" class="secondary passkey-remove">Remove</button></p>`).join(''):'<p class="meta">No passkey yet. A passkey signs you in with your fingerprint or screen lock.</p>'}<a class="button secondary" href="/work/sign-in?return_to=/work/account">Add a passkey</a></div>
-<div class="card"><strong>Recovery codes</strong><p class="meta">${m.recoveryCodesLeft?`${m.recoveryCodesLeft} unused. Each signs you in once if you lose your other methods.`:'Save recovery codes in case you lose your email and passkeys.'}</p><button type="button" class="secondary" id="recovery-new">${m.recoveryCodesLeft?'Replace recovery codes':'Create recovery codes'}</button><pre id="recovery-codes" hidden></pre></div>`;
+  const statusInfo=d=>d.status==='online'?{cls:'ok',pill:'Online',hint:''}
+    :d.status==='offline'?{cls:'warn',pill:'Offline',hint:'Open Android Backstage on it and tap Start'}
+    :d.status==='needs_reconnect'?{cls:'bad',pill:'Needs reconnecting',hint:'This device no longer holds this link'}
+    :{cls:'warn',pill:'Unknown',hint:''};
+
+  const methodsSection=m=>`<div class="grid">
+<div class="card"><strong>Email</strong>${m.email?`<p class="meta"><!--email_off-->${escape(m.email)}<!--/email_off--> · used for sign-in and verification codes</p>`:`<p class="meta">${m.emailAvailable?'Add an email to sign in on any device.':'Email sign-in is not set up on this server.'}</p>`}${m.emailAvailable?`<form id="email-add"><label for="new-email">${m.email?'Change email':'Email'}</label><input id="new-email" type="email" autocomplete="email" placeholder="you@example.com" required><div class="actions"><button class="secondary">Send code</button>${m.email?'<button type="button" class="secondary" id="email-remove">Remove email</button>':''}</div></form><form id="email-confirm" hidden><label for="email-code">6-digit code</label><input id="email-code" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="7" required><button>Confirm email</button></form>`:(m.email?'<div class="actions"><button type="button" class="secondary" id="email-remove">Remove email</button></div>':'')}</div>
+${m.email?`<div class="card"><strong>Password</strong><p class="meta">${m.hasPassword?'Password is set. You can log in with email and password.':'No password set yet. Add one to log in with email and password.'}</p><form id="password-form">${m.hasPassword?'<label for="cur-password">Current password</label><input id="cur-password" type="password" autocomplete="current-password" required>':''}<label for="new-password">${m.hasPassword?'New password':'Password'}</label><input id="new-password" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="At least 8 characters" required><button class="secondary">${m.hasPassword?'Change password':'Set password'}</button></form></div>`:''}
+<div class="card"><strong>Passkeys</strong>${m.passkeys.length?`<div style="margin:6px 0 12px">${m.passkeys.map(k=>`<div class="pk-row" data-passkey="${escape(k.id)}"><div class="pk-info">${escape(k.label)}${k.createdAt?`<small>Added ${escape(fmtDate(k.createdAt))}</small>`:''}</div><button type="button" class="secondary btn-sm passkey-remove">Remove</button></div>`).join('')}</div>`:'<p class="meta">No passkey yet. A passkey signs you in with your fingerprint or screen lock.</p>'}<a class="button secondary" href="/work/sign-in?return_to=/work/account">Add a passkey</a></div>
+<div class="card"><strong>Recovery codes</strong><p class="meta">${m.recoveryCodesLeft?`${m.recoveryCodesLeft} unused. Each signs you in once if you lose your other methods.`:'Save recovery codes in case you lose access to your email and passkeys.'}</p><div class="actions"><button type="button" class="secondary" id="recovery-new">${m.recoveryCodesLeft?'Replace recovery codes':'Create recovery codes'}</button><button type="button" class="secondary" id="recovery-copy" hidden>Copy codes</button></div><pre id="recovery-codes" hidden></pre></div>
+</div>`;
+
   const methodsScript=`
 const emailAdd=document.getElementById('email-add'),emailConfirm=document.getElementById('email-confirm');
-if(emailAdd){emailAdd.onsubmit=async e=>{e.preventDefault();try{await post('/work/account/email/start',{email:document.getElementById('new-email').value});emailConfirm.hidden=false;status.textContent='We emailed a code to confirm the address.';}catch(err){status.textContent=err.message;}};
-emailConfirm.onsubmit=async e=>{e.preventDefault();try{await post('/work/account/email/verify',{email:document.getElementById('new-email').value,code:document.getElementById('email-code').value});window.location.reload();}catch(err){status.textContent=err.message;}};}
-document.getElementById('password-form')?.addEventListener('submit',async e=>{e.preventDefault();try{const cur=document.getElementById('cur-password')?.value;await post('/work/account/password',{currentPassword:cur,password:document.getElementById('new-password').value});window.location.reload();}catch(err){status.textContent=err.message;}});
-document.getElementById('email-remove')?.addEventListener('click',async()=>{if(!confirm('Remove this email? You will sign in with a passkey or recovery code.'))return;try{await post('/work/account/email/remove',{});window.location.reload();}catch(e){status.textContent=e.message;}});
-document.querySelectorAll('.passkey-remove').forEach(b=>b.onclick=async()=>{if(!confirm('Remove this passkey?'))return;try{await post('/work/account/passkeys/remove',{id:b.parentElement.dataset.passkey});window.location.reload();}catch(e){status.textContent=e.message;}});
-document.getElementById('recovery-new').onclick=async()=>{if(!confirm('Create new recovery codes? Old codes stop working.'))return;try{const data=await post('/work/account/recovery',{});const out=document.getElementById('recovery-codes');out.textContent=data.codes.join('\\n');out.hidden=false;status.textContent='Save these codes somewhere safe. They are shown only once.';}catch(e){status.textContent=e.message;}};`;
+if(emailAdd){emailAdd.onsubmit=async e=>{e.preventDefault();try{await post('/work/account/email/start',{email:document.getElementById('new-email').value});emailConfirm.hidden=false;showStatus('We emailed a 6-digit code to confirm the address.');document.getElementById('email-code')?.focus();}catch(err){showStatus(err.message,true);}};
+emailConfirm.onsubmit=async e=>{e.preventDefault();try{await post('/work/account/email/verify',{email:document.getElementById('new-email').value,code:document.getElementById('email-code').value});window.location.reload();}catch(err){showStatus(err.message,true);}};}
+document.getElementById('password-form')?.addEventListener('submit',async e=>{e.preventDefault();try{const cur=document.getElementById('cur-password')?.value;await post('/work/account/password',{currentPassword:cur,password:document.getElementById('new-password').value});window.location.reload();}catch(err){showStatus(err.message,true);}});
+document.getElementById('email-remove')?.addEventListener('click',async()=>{if(!confirm('Remove this email? You will sign in with a passkey or recovery code.'))return;try{await post('/work/account/email/remove',{});window.location.reload();}catch(e){showStatus(e.message,true);}});
+document.querySelectorAll('.passkey-remove').forEach(b=>b.onclick=async()=>{if(!confirm('Remove this passkey?'))return;try{await post('/work/account/passkeys/remove',{id:b.closest('[data-passkey]').dataset.passkey});window.location.reload();}catch(e){showStatus(e.message,true);}});
+document.getElementById('recovery-new').onclick=async()=>{if(!confirm('Create new recovery codes? Old codes stop working.'))return;try{const data=await post('/work/account/recovery',{});const out=document.getElementById('recovery-codes'),copyBtn=document.getElementById('recovery-copy');out.textContent=data.codes.join('\\n');out.hidden=false;if(copyBtn)copyBtn.hidden=false;showStatus('Save these codes somewhere safe. They are shown only once.');}catch(e){showStatus(e.message,true);}};
+document.getElementById('recovery-copy')?.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(document.getElementById('recovery-codes').textContent);showStatus('Recovery codes copied.');}catch{showStatus('Select and copy the codes above.',true);}});`;
+
   app.get('/work/account',async(req,res)=>{
     const ownerId=signedIn(req,res);if(!ownerId)return;const n=nonce(res),grants=connections.list(ownerId);
     const devices=await Promise.all(connections.devices(ownerId).map(d=>connections.probe(d)));
-    const deviceCards=devices.map(d=>{const [cls,label]=statusLabel(d);return `<div class="card" data-device="${escape(d.id)}"><strong class="device-name">${escape(d.name)}</strong><p class="meta"><span class="${cls}">${label}</span>${d.model?` · ${escape(d.model)}`:''}</p><details><summary><small>Details</small></summary><p class="meta"><small>ID ${escape(d.id)}${d.lastSeen?` · last seen ${escape(new Date(d.lastSeen).toLocaleString('en-GB'))}`:''}</small></p></details><div class="actions"><button class="secondary rename" type="button">Rename</button><a class="button secondary" href="/work/enroll?device=${escape(d.id)}">${d.status==='needs_reconnect'?'Reconnect':'Replace link'}</a><button class="secondary remove" type="button">Remove</button></div></div>`;}).join('');
-    const accessEditor=row=>{const all=row.access==='all',allowed=new Set(Array.isArray(row.access)?row.access:[]);return devices.map(d=>`<label class="row"><input type="checkbox" name="device" value="${escape(d.id)}" ${all||allowed.has(d.id)?'checked':''}> ${escape(d.name)}</label>`).join('')+`<label class="row"><input type="checkbox" name="future" ${all?'checked':''}> Devices I add later</label>`;};
-    const usesText=row=>row.access==='all'?(devices.length>1?'all your devices, including new ones':'your phone'):devices.filter(d=>row.access.includes(d.id)).map(d=>d.name).join(', ')||'no device yet';
-    const iconFor=row=>{const info=auth?.clientInfo?.(row.clientId)||{};const id=assistantIcon(row.name||info.name||'',info.origin||'');return `<img src="https://android-backstage.com/assets/assistants/${id}.${id==='codex'||id==='gemini'?'png':'svg'}" alt="" width="36" height="36" style="vertical-align:middle;margin-right:10px;border-radius:8px">`;};
-    const grantCards=grants.map(row=>`<div class="card" data-grant="${escape(row.id)}"><strong>${iconFor(row)}${escape(row.name||'Assistant')}</strong><p class="meta">Can use ${escape(usesText(row))} · connected ${escape(new Date(row.createdAt).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}))}</p><fieldset><legend>May use</legend>${accessEditor(row)}</fieldset><div class="actions"><button class="save" type="button">Save access</button><button class="secondary revoke" type="button">Remove access</button></div></div>`).join('');
     const accountMethods=owners.methods(ownerId);
-    const planLabel=accountMethods.limits?.name||'Personal';
-    const planMeta=`${planLabel} plan · up to ${accountMethods.limits?.maxDevices??1} ${(accountMethods.limits?.maxDevices??1)===1?'Android device':'Android devices'} · ${(accountMethods.limits?.maxAssistants??1)===1?'1 assistant':'unlimited assistants'} · ${(accountMethods.limits?.maxParallelScreens??1)===1?'1 backstage screen at a time':'parallel backstage screens'}`;
-    res.type('html').send(page('Your devices and assistants',`<h1>Android Backstage</h1><p>One account. Your Android devices join it; your assistants get permission to it.</p><p class="meta">${escape(planMeta)}</p>
-<h2>Devices</h2>${deviceCards||'<p>No device is connected yet.</p>'}${devices.length?`<form id="add" class="inline"><label>Name for the next device<input type="text" name="name" maxlength="32" placeholder="tablet" autocomplete="off"></label><button type="submit" class="secondary">Add a device</button></form>`:`<form id="add" class="inline"><button type="submit">Connect your phone</button></form>`}<p><small>Adding, renaming or removing a device does not disturb the others. Reconnect a device after reinstalling or resetting Android Backstage on it.</small></p>
-<h2>Assistants</h2>${grantCards||'<p>No assistant is connected yet. Connect one from that app’s Android Backstage plugin.</p>'}
+    const limits=accountMethods.limits||{name:'Personal',maxDevices:1,maxAssistants:1,maxParallelScreens:1};
+    const maxDevices=limits.maxDevices??1,maxAssistants=limits.maxAssistants??1,maxParallel=limits.maxParallelScreens??1;
+    const planDetails=`${devices.length} of ${maxDevices} ${maxDevices===1?'device':'devices'} · ${maxAssistants===1?'1 assistant':`up to ${maxAssistants} assistants`} · ${maxParallel===1?'1 virtual display':`up to ${maxParallel} parallel displays`}`;
+
+    const deviceCards=devices.map(d=>{
+      const st=statusInfo(d);
+      return `<div class="card" data-device="${escape(d.id)}"><div class="card-head"><div><strong class="device-name">${escape(d.name)}</strong>${d.model?`<p class="meta" style="margin:2px 0 0">${escape(d.model)}</p>`:''}</div><span class="pill ${st.cls}"><span class="dot"></span>${escape(st.pill)}</span></div>${st.hint?`<p class="meta" style="margin-top:8px">${escape(st.hint)}</p>`:''}<details><summary><small>Details</small></summary><p class="meta" style="margin:6px 0 0"><small>ID <code>${escape(d.id)}</code>${d.lastSeen?` · last seen ${escape(fmtDateTime(d.lastSeen))}`:''}</small></p></details><div class="actions"><button class="secondary rename" type="button">Rename</button><a class="button secondary" href="/work/enroll?device=${escape(d.id)}">${d.status==='needs_reconnect'?'Reconnect':'Replace link'}</a><button class="secondary remove" type="button">Remove</button></div></div>`;
+    }).join('');
+
+    const accessEditor=row=>{const all=row.access==='all',allowed=new Set(Array.isArray(row.access)?row.access:[]);return devices.map(d=>`<label class="row"><input type="checkbox" name="device" value="${escape(d.id)}" data-name="${escape(d.name)}" ${all||allowed.has(d.id)?'checked':''}> ${escape(d.name)}</label>`).join('')+`<label class="row"><input type="checkbox" name="future" ${all?'checked':''}> Devices I add later</label>`;};
+    const usesText=row=>row.access==='all'?(devices.length>1?'all your devices, including new ones':'your phone'):devices.filter(d=>row.access.includes(d.id)).map(d=>d.name).join(', ')||'no device yet';
+    const iconFor=row=>{
+      const info=auth?.clientInfo?.(row.clientId)||{};
+      const asset=assistantIconAsset(row.name||info.name||'',info.origin||'');
+      return `<span class="asst-icon"><img src="${escape(asset.url)}" alt="" width="24" height="24"${asset.invertOnDark?' class="invert"':''}></span>`;
+    };
+    const grantCards=grants.map(row=>{
+      const paused=Boolean(row.paused);
+      return `<div class="card" data-grant="${escape(row.id)}" data-paused="${paused?'1':'0'}"><div class="card-head"><div class="asst-head">${iconFor(row)}<div><strong>${escape(row.name||'Assistant')}</strong><p class="meta" style="margin:2px 0 0"><span class="asst-uses">Can use ${escape(usesText(row))}</span> · connected ${escape(fmtDate(row.createdAt))}</p></div></div><span class="pill warn pause-pill"${paused?'':' hidden'}><span class="dot"></span>Paused</span></div><fieldset><legend>Allowed devices</legend>${accessEditor(row)}</fieldset><div class="actions"><button class="save" type="button">Save access</button><button class="secondary toggle-pause" type="button">${paused?'Resume':'Pause'}</button><button class="danger revoke" type="button">Remove access</button></div></div>`;
+    }).join('');
+
+    const headerRight=`<a class="top-link" href="https://android-backstage.com/support/">Support</a><button id="logout" class="top-btn" type="button">Sign out</button>`;
+    const body=`<h1>Account</h1><p>Manage your linked Android devices, connected assistants, and sign-in methods.</p>
+<div class="plan-bar"><span class="plan-badge">${escape(limits.name||'Personal')} plan</span><p class="plan-stats">${escape(planDetails)}</p></div>
+<h2>Devices</h2>${deviceCards?`<div class="grid">${deviceCards}</div>`:'<div class="card"><p class="meta" style="margin:0">No device is connected yet.</p></div>'}${devices.length?`<form id="add" class="inline"><label>Name for the next device<input type="text" name="name" maxlength="32" placeholder="tablet" autocomplete="off"></label><button type="submit" class="secondary">Add a device</button></form>`:`<form id="add" class="inline"><button type="submit">Connect your phone</button></form>`}<p><small>Adding, renaming or removing a device does not disturb the others. Reconnect a device after reinstalling or resetting Android Backstage on it.</small></p>
+<h2>Assistants</h2>${grantCards||'<div class="card"><p class="meta" style="margin:0">No assistant is connected yet. Connect one from your assistant using the Backstage MCP URL.</p></div>'}
 <p><small>Removing one assistant leaves your devices and other assistants untouched. Pausing access inside the phone app stops every assistant on that phone.</small></p>
-<p><small>The Backstage server holds the link for each device and relays every command, so it sees what your assistants send and what your devices return. The relay component and Cloudflare cannot read the encrypted phone envelopes. <a href="https://android-backstage.com/privacy/">Privacy</a> · <a href="https://android-backstage.com/terms/">Terms</a></small></p>
-<h2>Signing in</h2>${methodsSection(owners.methods(ownerId))}<button id="logout" class="secondary">Sign out</button>
-<div class="card"><strong>Delete account</strong><p class="meta">Permanently remove your email, passkeys, device links, and all assistant access from this server.</p><button type="button" class="secondary bad" id="delete-account">Delete account</button></div><p id="status" role="status"></p>`, `
+<h2>Signing in</h2>${methodsSection(accountMethods)}
+<h2>Danger zone</h2>
+<div class="card"><div class="card-head"><div><strong>Delete account</strong><p class="meta" style="margin:4px 0 0">Permanently remove your email, passkeys, device links, and all assistant access from this server.</p></div></div><div class="actions"><button type="button" class="danger" id="delete-account">Delete account</button></div></div>
+<p class="foot-note">The Backstage server holds the link for each device and relays every command in memory with zero retention for call history. The relay component and Cloudflare cannot read encrypted phone envelopes. <a href="https://android-backstage.com/privacy/">Privacy</a> · <a href="https://android-backstage.com/terms/">Terms</a></p>
+<div id="status" class="toast" role="status" aria-live="polite"></div>`;
+
+    res.type('html').send(page('Account',body,`
 const status=document.getElementById('status');
+let statusTimer=0;
+function showStatus(msg,isError=false){
+  clearTimeout(statusTimer);
+  status.textContent=msg||'';
+  if(isError)status.dataset.tone='error';else delete status.dataset.tone;
+  if(msg)statusTimer=setTimeout(()=>{status.textContent='';delete status.dataset.tone;},5000);
+}
 async function post(route,body){const r=await fetch(route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await r.json().catch(()=>({}));if(!r.ok)throw Error(data.error||'Could not finish. Sign in and try again.');return data;}
 ${methodsScript}
 document.querySelectorAll('.card[data-device]').forEach(card=>{const id=card.dataset.device,name=card.querySelector('.device-name');
- card.querySelector('.rename').onclick=async()=>{const next=prompt('New name for '+name.textContent,name.textContent);if(!next||next===name.textContent)return;try{const data=await post('/work/account/devices/rename',{deviceId:id,name:next});name.textContent=data.name;status.textContent='';}catch(e){status.textContent=e.message;}};
- card.querySelector('.remove').onclick=async()=>{if(!confirm('Remove '+name.textContent+'? Assistants lose access to it until you add it again.'))return;try{await post('/work/account/devices/remove',{deviceId:id});window.location.reload();}catch(e){status.textContent=e.message;}};});
+ card.querySelector('.rename').onclick=async()=>{const next=prompt('New name for '+name.textContent,name.textContent);if(!next||next===name.textContent)return;try{const data=await post('/work/account/devices/rename',{deviceId:id,name:next});name.textContent=data.name;showStatus('Device renamed.');}catch(e){showStatus(e.message,true);}};
+ card.querySelector('.remove').onclick=async()=>{if(!confirm('Remove '+name.textContent+'? Assistants lose access to it until you add it again.'))return;try{await post('/work/account/devices/remove',{deviceId:id});window.location.reload();}catch(e){showStatus(e.message,true);}};});
 document.getElementById('add').onsubmit=e=>{e.preventDefault();const name=(e.target.elements.name?.value||'').trim();window.location.assign('/work/enroll'+(name?'?name='+encodeURIComponent(name):''));};
 document.querySelectorAll('.card[data-grant]').forEach(card=>{const id=card.dataset.grant;
- card.querySelector('.save').onclick=async()=>{const boxes=[...card.querySelectorAll('input[name=device]')],future=card.querySelector('input[name=future]');const all=future.checked&&boxes.every(b=>b.checked);const devices=boxes.filter(b=>b.checked).map(b=>b.value);if(!all&&!devices.length){status.textContent='Tick at least one device, or remove access.';return;}try{await post('/work/account/access',{grantId:id,...(all?{allDevices:true}:{devices})});status.textContent='Saved.';}catch(e){status.textContent=e.message;}};
- card.querySelector('.revoke').onclick=async ev=>{ev.target.disabled=true;try{await post('/work/account/revoke',{grantId:id});card.remove();}catch(e){status.textContent=e.message;ev.target.disabled=false;}};});
+ card.querySelector('.save').onclick=async ev=>{
+  const btn=ev.currentTarget,boxes=[...card.querySelectorAll('input[name=device]')],future=card.querySelector('input[name=future]');
+  const all=future.checked&&boxes.every(b=>b.checked);const checked=boxes.filter(b=>b.checked);const devices=checked.map(b=>b.value);
+  if(!all&&!devices.length){showStatus('Tick at least one device, or remove access.',true);return;}
+  btn.disabled=true;
+  try{
+   await post('/work/account/access',{grantId:id,...(all?{allDevices:true}:{devices})});
+   const uses=card.querySelector('.asst-uses');
+   if(uses)uses.textContent='Can use '+(all?(boxes.length>1?'all your devices, including new ones':'your phone'):checked.map(b=>b.dataset.name).join(', '));
+   btn.textContent='Saved';setTimeout(()=>{btn.textContent='Save access';},1600);
+   showStatus('Access saved.');
+  }catch(e){showStatus(e.message,true);}finally{btn.disabled=false;}
+ };
+ card.querySelector('.toggle-pause')?.addEventListener('click',async ev=>{
+  const btn=ev.currentTarget,nextPaused=card.dataset.paused!=='1';btn.disabled=true;
+  try{
+   const res=await post('/work/account/pause',{grantId:id,paused:nextPaused});
+   const paused=Boolean(res.paused);card.dataset.paused=paused?'1':'0';
+   btn.textContent=paused?'Resume':'Pause';
+   const pill=card.querySelector('.pause-pill');if(pill)pill.hidden=!paused;
+   showStatus(paused?'Assistant paused.':'Assistant resumed.');
+  }catch(e){showStatus(e.message,true);}finally{btn.disabled=false;}
+ });
+ card.querySelector('.revoke').onclick=async ev=>{if(!confirm('Remove access for this assistant?'))return;ev.target.disabled=true;try{await post('/work/account/revoke',{grantId:id});card.remove();showStatus('Assistant removed.');}catch(e){showStatus(e.message,true);ev.target.disabled=false;}};});
 document.getElementById('logout').onclick=async()=>{await fetch('/work/account/sign-out',{method:'POST'});window.location.assign('/work/sign-in');};
-document.getElementById('delete-account').onclick=async()=>{if(prompt('Type DELETE to permanently delete your Android Backstage account, all device links, and all assistant access.')!=='DELETE')return;try{await post('/work/account/delete',{confirm:'DELETE'});window.location.assign('/work/sign-in');}catch(e){status.textContent=e.message;}};`,n));
+document.getElementById('delete-account').onclick=async()=>{if(prompt('Type DELETE to permanently delete your Android Backstage account, all device links, and all assistant access.')!=='DELETE')return;try{await post('/work/account/delete',{confirm:'DELETE'});window.location.assign('/work/sign-in');}catch(e){showStatus(e.message,true);}};`,n,{wide:true,headerRight}));
   });
   app.post('/work/account/revoke',(req,res)=>{const id=signedIn(req,res);if(!id)return;try{connections.revokeOwned(id,req.body.grantId);auth?.revokeGrants?.([req.body.grantId]);artifacts?.removeForGrants?.([req.body.grantId]);res.json({ok:true});}catch(e){problem(res,e,404);}});
+  app.post('/work/account/pause',(req,res)=>{const id=signedIn(req,res);if(!id)return;try{const paused=connections.setPaused(id,String(req.body?.grantId||''),req.body?.paused===true);res.json({ok:true,paused});}catch(e){problem(res,e,404);}});
   app.post('/work/account/access',(req,res)=>{const id=signedIn(req,res);if(!id)return;
     const access=req.body.allDevices===true?'all':Array.isArray(req.body.devices)?req.body.devices.filter(x=>typeof x==='string').slice(0,20):null;
     if(access===null||(Array.isArray(access)&&!access.length))return res.status(400).json({error:'Tick at least one device.'});
@@ -261,13 +326,19 @@ document.getElementById('delete-account').onclick=async()=>{if(prompt('Type DELE
     let deviceId=typeof req.query.device==='string'?req.query.device:null,name=typeof req.query.name==='string'&&validDeviceName(req.query.name)?req.query.name.trim():null;
     // "Connect with your account" from a phone that already has a slot with this name and is not online: reconnect that slot instead of adding "name 2".
     if(!deviceId&&name){const same=connections.devices(ownerId).find(d=>d.name.toLowerCase()===name.toLowerCase());if(same){const live=await connections.probe(same);if(!live.online){deviceId=same.id;name=null;}}}
-    if(deviceId&&!connections.devices(ownerId).some(d=>d.id===deviceId))return res.status(404).type('html').send(page('Device not found','<h1>Device not found</h1><p>It may have been removed. Add it again from your account.</p><a class="button" href="/work/account">Your devices</a>'));
+    if(deviceId&&!connections.devices(ownerId).some(d=>d.id===deviceId))return res.status(404).type('html').send(page('Device not found','<h1>Device not found</h1><p>It may have been removed. Add it again from your account.</p><a class="button" href="/work/account">Back to account</a>'));
     for(const [id,row] of pending)if(row.expires<=now()){pending.delete(id);row.connection.cancel().catch(()=>{});}
     try{
       let entry=[...pending].find(([,row])=>row.ownerId===ownerId&&row.deviceId===deviceId&&row.name===name);
       if(!entry){if(pending.size>=100)throw Error('Busy');const ticket=crypto.randomBytes(32).toString('base64url');const connection=await connections.begin({ownerId,clientName:'Android Backstage',deviceId,name});const row={ownerId,deviceId,name,connection,expires:now()+600000};pending.set(ticket,row);entry=[ticket,row];}
       res.type('html').send(await connectionPage({base,ticket:entry[0],nonce:nonce(res),connection:entry[1].connection,pollPath:'/enroll',heading:deviceId?`Reconnect ${entry[1].connection.deviceName}`:`Connect ${entry[1].connection.deviceName}`}));
-    }catch{res.status(503).type('html').send(page('Could not connect','<h1>Could not connect</h1><p>Return to your account and try again.</p><a href="/work/account">Your devices</a>'));}
+    }catch(e){
+      if(e instanceof ConnectionError){
+        const code=({plan_limit:403,busy:429,unknown_device:404}[e.code]||400);
+        return res.status(code).type('html').send(page('Cannot add device',`<h1>Cannot add device</h1><p>${escape(e.message)}</p><a class="button" href="/work/account">Back to account</a>`));
+      }
+      res.status(503).type('html').send(page('Could not connect','<h1>Could not connect</h1><p>Return to your account and try again.</p><a class="button" href="/work/account">Back to account</a>'));
+    }
   });
   app.post('/work/enroll',async(req,res)=>{
     const ownerId=signedIn(req,res);if(!ownerId)return;const row=pending.get(req.body.ticket);

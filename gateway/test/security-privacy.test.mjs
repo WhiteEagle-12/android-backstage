@@ -500,3 +500,70 @@ test("paused assistants are blocked on all gateway routes, webhooks clear on pau
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("account page renders dark UI, accurate assistant icon assets, web pause route, and plan_limit 403 on enroll", async () => {
+  const { assistantIconAsset } = await import("../assistants.mjs");
+  assert.equal(assistantIconAsset("Antigravity").url, "https://android-backstage.com/assets/assistants/antigravity.png");
+  assert.equal(assistantIconAsset("Grok Build").url, "https://android-backstage.com/assets/assistants/grok.png");
+  assert.equal(assistantIconAsset("ChatGPT").url, "https://android-backstage.com/assets/assistants/chatgpt.svg");
+  assert.equal(assistantIconAsset("ChatGPT").invertOnDark, true);
+  assert.equal(assistantIconAsset("Claude Code").url, "https://android-backstage.com/assets/assistants/claude.svg");
+  assert.equal(assistantIconAsset("Claude Code").invertOnDark, false);
+
+  const express = (await import("express")).default;
+  const { ownerRoutes } = await import("../owner-routes.mjs");
+  const { ConnectionError } = await import("../connections.mjs");
+  const app = express();
+  app.use(express.json());
+  let pausedState = false;
+  const owners = {
+    owner: () => "owner_ui",
+    emailAvailable: () => true,
+    methods: () => ({
+      email: "user@example.com",
+      emailAvailable: true,
+      plan: "free",
+      limits: { id: "free", name: "Personal", maxDevices: 1, maxAssistants: 1, maxParallelScreens: 1 },
+      hasPassword: true,
+      passkeys: [],
+      recoveryCodesLeft: 0,
+    }),
+  };
+  const connections = {
+    devices: () => [{ id: "phone_1", name: "Phone", model: "Pixel", lastSeen: Date.now() }],
+    probe: async (d) => ({ ...d, status: "online" }),
+    list: () => [{ id: "grant_1", name: "Antigravity", clientId: "c1", access: "all", paused: pausedState, createdAt: Date.now() }],
+    setPaused: (_ownerId, grantId, paused) => {
+      assert.equal(grantId, "grant_1");
+      pausedState = paused;
+      return pausedState;
+    },
+    begin: async () => {
+      throw new ConnectionError("plan_limit", "Your Personal plan includes 1 device.");
+    },
+  };
+  const server = await new Promise((resolve) => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  ownerRoutes(app, { owners, connections, base: `${origin}/work`, auth: { clientInfo: () => ({}) } });
+  try {
+    const html = await (await fetch(`${origin}/work/account`)).text();
+    assert.match(html, /antigravity\.png/);
+    assert.match(html, /1 of 1 device/);
+    assert.match(html, /toggle-pause/);
+
+    const pauseRes = await fetch(`${origin}/work/account/pause`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin },
+      body: JSON.stringify({ grantId: "grant_1", paused: true }),
+    });
+    assert.equal(pauseRes.status, 200);
+    assert.deepEqual(await pauseRes.json(), { ok: true, paused: true });
+    assert.equal(pausedState, true);
+
+    const enrollRes = await fetch(`${origin}/work/enroll?name=tablet`);
+    assert.equal(enrollRes.status, 403);
+    assert.match(await enrollRes.text(), /Your Personal plan includes 1 device/);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});

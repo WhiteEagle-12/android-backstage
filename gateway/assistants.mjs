@@ -12,4 +12,18 @@ export function assistantIcon(name='',origin='') {
   if(/opencode/.test(text))return 'opencode';
   return 'mcp';
 }
+
+const PNG_ICONS=new Set(['codex','antigravity','grok','vscode']);
+const DARK_GLYPH_ICONS=new Set(['chatgpt','copilot']);
+
+export function assistantIconAsset(name='',origin='') {
+  const id=assistantIcon(name,origin);
+  const ext=PNG_ICONS.has(id)?'png':'svg';
+  return {
+    id,
+    url:`https://android-backstage.com/assets/assistants/${id}.${ext}`,
+    invertOnDark:DARK_GLYPH_ICONS.has(id),
+  };
+}
+
 export const ASSISTANT_ICONS=['chatgpt','codex','cursor','claude','copilot','antigravity','grok','gemini','opencode','mcp'];
