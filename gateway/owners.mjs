@@ -521,15 +521,15 @@ export function createOwners({stateFile, origin, androidOrigins = [], mailer = n
         if (remaining <= 0 && !row.trialRemindersSent.d0) {
           kind = 'd0';
           subject = 'Your Android Backstage Pro trial ends today — launch promo $4.50/mo';
-          body = `Your 7-day Android Backstage Pro free trial ends today.\n\nNo card was collected, so your account automatically switches to the Personal plan (free forever: 1 device, 1 assistant, 1 virtual display).\n\nWant to keep Pro (5 devices, parallel virtual displays, screen recording, webhooks, and 128 MB transfers)? Subscribe during our first month of launch to lock in 50% off monthly — $4.50/mo instead of $9/mo for as long as you keep your subscription active:\n\n${resolvedAccountUrl}\n`;
+          body = `Your 7-day Android Backstage Pro free trial ends today.\n\nNo card was collected, so your account automatically switches to the Personal plan (free forever: 1 device, 1 assistant, 1 virtual display).\n\nWant to keep Pro (5 devices, parallel virtual displays, screen recording, webhooks, and 128 MB transfers)? Subscribe during our first month of launch to lock in 50% off — $4.50/mo monthly (was $9/mo) or $42/yr yearly ($3.50/mo, was $84/yr) for as long as you keep your subscription active:\n\n${resolvedAccountUrl}\n`;
         } else if (remaining > 0 && remaining <= DAY_MS && !row.trialRemindersSent.d1) {
           kind = 'd1';
           subject = '1 day left on your Android Backstage Pro trial — first-month launch promo';
-          body = `You have 1 day left on your 7-day Android Backstage Pro free trial.\n\nWhen the trial ends tomorrow, your account switches to Personal (free) with no charge. Subscribe during our first month of launch to lock in 50% off monthly — $4.50/mo for as long as you keep your subscription active:\n\n${resolvedAccountUrl}\n`;
+          body = `You have 1 day left on your 7-day Android Backstage Pro free trial.\n\nWhen the trial ends tomorrow, your account switches to Personal (free) with no charge. Subscribe during our first month of launch to lock in 50% off — $4.50/mo monthly or $42/yr yearly ($3.50/mo) for as long as you keep your subscription active:\n\n${resolvedAccountUrl}\n`;
         } else if (remaining > DAY_MS && remaining <= 3 * DAY_MS && !row.trialRemindersSent.d3) {
           kind = 'd3';
           subject = '3 days left on your Android Backstage Pro trial';
-          body = `You have 3 days left on your 7-day Android Backstage Pro free trial.\n\nNo credit card is on file — if you do nothing, your account simply switches to Personal (free) when the trial ends. Subscribe during our first month of launch to lock in 50% off monthly ($4.50/mo instead of $9/mo) for as long as you keep your subscription active:\n\n${resolvedAccountUrl}\n`;
+          body = `You have 3 days left on your 7-day Android Backstage Pro free trial.\n\nNo credit card is on file — if you do nothing, your account simply switches to Personal (free) when the trial ends. Subscribe during our first month of launch to lock in 50% off — $4.50/mo monthly or $42/yr yearly ($3.50/mo) for as long as you keep your subscription active:\n\n${resolvedAccountUrl}\n`;
         }
         if (!kind) continue;
         try {

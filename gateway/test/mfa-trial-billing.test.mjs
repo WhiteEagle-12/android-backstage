@@ -182,6 +182,19 @@ test('Stripe billing creates $4.50/mo promo checkout, verifies webhook HMAC, loc
   assert.equal(params.get('discounts[0][coupon]'), 'coupon_launch50');
   assert.equal(params.get('metadata[promo]'), 'launch50_lifetime');
 
+  // Yearly checkout also stacks the 50% lifetime launch coupon on top of the yearly price ($84 -> $42/yr)
+  await billing.createCheckoutSession({
+    ownerId,
+    email: 'buyer@example.com',
+    offer: 'pro_yearly',
+    successUrl: 'https://relay.android-backstage.com/work/account?billing=success',
+    cancelUrl: 'https://relay.android-backstage.com/work/account?billing=cancelled',
+  });
+  const yearlyParams = new URLSearchParams(stripeCalls[1].body);
+  assert.equal(yearlyParams.get('line_items[0][price]'), 'price_pro_84');
+  assert.equal(yearlyParams.get('discounts[0][coupon]'), 'coupon_launch50');
+  assert.equal(yearlyParams.get('metadata[promo]'), 'launch50_lifetime');
+
   const app = createWorkApp({
     base: 'http://127.0.0.1/work',
     stateFile: path.join(dir, 'oauth.json'),

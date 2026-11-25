@@ -15,6 +15,7 @@ export function createBilling({
   priceProMonthlyPromo = process.env.STRIPE_PRICE_PRO_MONTHLY_PROMO || '',
   couponPro50 = process.env.STRIPE_COUPON_PRO_50_LIFETIME || '',
   priceProYearly = process.env.STRIPE_PRICE_PRO_YEARLY || '',
+  priceProYearlyPromo = process.env.STRIPE_PRICE_PRO_YEARLY_PROMO || '',
   priceTeamMonthly = process.env.STRIPE_PRICE_TEAM_MONTHLY || '',
   apiBase = process.env.STRIPE_API_BASE || 'https://api.stripe.com',
   fetchImpl = fetch,
@@ -23,8 +24,9 @@ export function createBilling({
   const key = String(secretKey || '').trim();
   const whSecret = String(webhookSecret || '').trim();
   const proMonthlyPrice = String(priceProMonthlyPromo || priceProMonthly || '').trim();
-  const useCoupon = !String(priceProMonthlyPromo || '').trim() && Boolean(String(couponPro50 || '').trim());
-  const proYearlyPrice = String(priceProYearly || '').trim();
+  const useCouponMonthly = !String(priceProMonthlyPromo || '').trim() && Boolean(String(couponPro50 || '').trim());
+  const proYearlyPrice = String(priceProYearlyPromo || priceProYearly || '').trim();
+  const useCouponYearly = !String(priceProYearlyPromo || '').trim() && Boolean(String(couponPro50 || '').trim());
   const teamPrice = String(priceTeamMonthly || '').trim();
 
   const configured = () => Boolean(key && (proMonthlyPrice || proYearlyPrice || teamPrice));
@@ -33,7 +35,7 @@ export function createBilling({
   const priceIdToPlan = (priceId) => {
     if (!priceId) return null;
     if (priceId === teamPrice) return 'team';
-    if (priceId === proMonthlyPrice || priceId === String(priceProMonthly || '').trim() || priceId === proYearlyPrice) return 'pro';
+    if (priceId === proMonthlyPrice || priceId === String(priceProMonthly || '').trim() || priceId === proYearlyPrice || priceId === String(priceProYearly || '').trim()) return 'pro';
     return null;
   };
 
@@ -95,14 +97,17 @@ export function createBilling({
       teamMonthly: Boolean(key && teamPrice),
     }),
     async createCheckoutSession({ ownerId, email, customerId, offer = 'pro_monthly_promo', successUrl, cancelUrl }) {
-      let priceId = '', targetPlan = 'pro', promo = '';
+      let priceId = '', targetPlan = 'pro', promo = '', applyCoupon = false;
       if (offer === 'pro_monthly_promo') {
         priceId = proMonthlyPrice;
         targetPlan = 'pro';
         promo = 'launch50_lifetime';
+        applyCoupon = useCouponMonthly;
       } else if (offer === 'pro_yearly') {
         priceId = proYearlyPrice;
         targetPlan = 'pro';
+        promo = 'launch50_lifetime';
+        applyCoupon = useCouponYearly;
       } else if (offer === 'team_monthly') {
         priceId = teamPrice;
         targetPlan = 'team';
@@ -110,7 +115,7 @@ export function createBilling({
         throw new Error('Choose a valid plan option.');
       }
       if (!key || !priceId) {
-        throw new Error('Online checkout is being finalized. Contact support@android-backstage.com to lock in the $4.50/mo Pro launch offer.');
+        throw new Error('Online checkout is being finalized. Contact support@android-backstage.com to lock in the 50% off Pro launch offer.');
       }
       const params = {
         mode: 'subscription',
@@ -127,7 +132,7 @@ export function createBilling({
       if (promo) {
         params['metadata[promo]'] = promo;
         params['subscription_data[metadata][promo]'] = promo;
-        if (useCoupon) params['discounts[0][coupon]'] = String(couponPro50).trim();
+        if (applyCoupon) params['discounts[0][coupon]'] = String(couponPro50).trim();
       }
       if (customerId) params.customer = customerId;
       else if (email) params.customer_email = email;
@@ -169,7 +174,7 @@ export function createBilling({
         const active = ['active', 'trialing', 'past_due'].includes(status);
         const priceId = obj.items?.data?.[0]?.price?.id || '';
         const mappedPlan = obj.metadata?.plan === 'team' ? 'team' : (priceIdToPlan(priceId) || 'pro');
-        const promoLocked = active && (obj.metadata?.promo === 'launch50_lifetime' || priceId === String(priceProMonthlyPromo || '').trim());
+        const promoLocked = active && (obj.metadata?.promo === 'launch50_lifetime' || priceId === String(priceProMonthlyPromo || '').trim() || priceId === String(priceProYearlyPromo || '').trim());
         owners.applySubscription(ownerId, {
           plan: active ? mappedPlan : 'free',
           status,
