@@ -620,13 +620,16 @@ public final class AccessibilityHost {
                 AccessibilityNodeInfo.RangeInfo range=target.getRangeInfo();float wanted;
                 try{wanted=Float.parseFloat(args.getString("text","").strip());}catch(NumberFormatException e){throw new com.deviceagent.tools.InputNotSentException("invalid_argument","Type a number to set this slider.");}
                 if(Float.isNaN(wanted)||wanted<range.getMin()||wanted>range.getMax())throw new com.deviceagent.tools.InputNotSentException("invalid_argument","Type a number from "+range.getMin()+" to "+range.getMax()+".");
+                float tolerance=Math.min(0.5f,(range.getMax()-range.getMin())/100f);
+                // SeekBar refuses a value that it already has, so report that value without sending input.
+                if(Math.abs(range.getCurrent()-wanted)<=tolerance){out.putBoolean("ok",true);out.putBoolean("inputDelivered",false);out.putBoolean("valueMatched",true);out.putDouble("value",range.getCurrent());return out;}
                 Bundle progress=new Bundle();progress.putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,wanted);
                 dispatched=true;
                 if(!target.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.getId(),progress))return textFailure("progress_rejected","The slider rejected the value. Observe it before trying again.",false,true);
                 out.putBoolean("inputDelivered",true);
                 float now=Float.NaN;
-                for(int attempt=0;attempt<5;attempt++){if(target.refresh()&&target.getRangeInfo()!=null){now=target.getRangeInfo().getCurrent();if(Math.abs(now-wanted)<0.5f)break;}Thread.sleep(50);}
-                boolean matched=Math.abs(now-wanted)<0.5f;
+                for(int attempt=0;attempt<5;attempt++){if(target.refresh()&&target.getRangeInfo()!=null){now=target.getRangeInfo().getCurrent();if(Math.abs(now-wanted)<=tolerance)break;}Thread.sleep(50);}
+                boolean matched=Math.abs(now-wanted)<=tolerance;
                 out.putBoolean("ok",matched);out.putBoolean("valueMatched",matched);out.putDouble("value",now);
                 if(!matched){out.putString("code","progress_verification_failed");out.putString("error","The value was sent, but the slider shows "+now+". Observe it before trying again.");}
                 return out;

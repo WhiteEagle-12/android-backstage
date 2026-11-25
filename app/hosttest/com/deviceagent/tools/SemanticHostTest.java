@@ -74,8 +74,13 @@ public final class SemanticHostTest {
         var ref=observations.target((String)view.get("observation"),(String)control(view,"Open").get("id"),2,tree);
         check("button".equals(ref.get("nodeId")),"temporarily missing window title does not change target identity");
         check(!ObservationCondition.matches(Map.of("kind","window","title","Page"),tree,observations,2),"title verification does not invent a missing title");
-        window.put("key","another-window");button.put("windowKey","another-window");
-        ObservationHostTest.rejects(()->Observations.validateTarget(tree,ref));
+        // While the original window is still open, a copy in another window is a different control.
+        var stays=node(1,-1,"label","Header",false);stays.put("windowKey",ref.get("windowKey"));
+        var both=tree(new ArrayList<>(List.of(button,stays)));button.put("windowKey","another-window");
+        ObservationHostTest.rejects(()->Observations.validateTarget(both,ref));
+        // When the original window is gone (the activity was recreated), the same control matches.
+        var recreated=tree(List.of(button));PrimitiveArguments.map(((List<?>)recreated.get("windows")).get(0)).put("key","another-window");
+        check("button".equals(Observations.validateTarget(recreated,ref).get("nodeId")),"a recreated window keeps the control");
     }
     private static void tapPlan(){
         var web=node(0,-1,"web","",false);web.put("class","WebView");web.put("bounds","[0,100][1000,1800]");

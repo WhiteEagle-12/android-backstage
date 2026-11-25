@@ -7,11 +7,16 @@ import java.util.*;
 @android.annotation.SuppressLint("MissingPermission") // Shell-UID service; Android enforces its grants.
 final class DeviceControls {
  private static final Map<String,Integer> STREAMS=Map.of("media",3,"ring",2,"notification",5,"alarm",4,"call",0,"system",1);
- private static Map<String,Object> brightness(Context context){
-  var resolver=context.getContentResolver();
-  int value=android.provider.Settings.System.getInt(resolver,android.provider.Settings.System.SCREEN_BRIGHTNESS,-1);
-  int mode=android.provider.Settings.System.getInt(resolver,android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE,-1);
-  return Json.mapOf("value",value,"min",0,"max",255,"mode",mode==android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_AUTOMATIC?"automatic":"manual");
+ // The shell UID has no app record for the settings provider, so read and write through "settings".
+ private static int systemSetting(String name){
+  byte[] out=LocalShell.run("settings get system "+name,null,4_000L).getByteArray("stdout");
+  try{return Integer.parseInt(new String(out==null?new byte[0]:out,java.nio.charset.StandardCharsets.UTF_8).trim());}catch(NumberFormatException e){return -1;}
+ }
+ private static void putSystemSetting(String name,int value){
+  if(LocalShell.run("settings put system "+name+" "+value,null,4_000L).getInt("exit",-1)!=0)throw new IllegalStateException("Android did not accept the "+name+" setting");
+ }
+ private static Map<String,Object> brightness(){
+  return Json.mapOf("value",systemSetting("screen_brightness"),"min",0,"max",255,"mode",systemSetting("screen_brightness_mode")==1?"automatic":"manual");
  }
  static Map<String,Object> handle(Context context,Map<String,Object> args)throws Exception{
   String op=Json.string(args,"operation");var audio=context.getSystemService(AudioManager.class);
@@ -22,16 +27,16 @@ final class DeviceControls {
    var windows=Class.forName("android.view.WindowManagerGlobal").getMethod("getWindowManagerService").invoke(null);
    boolean frozen=(Boolean)Class.forName("android.view.IWindowManager").getMethod("isDisplayRotationFrozen",int.class).invoke(windows,0);
    int rotation=context.getSystemService(android.hardware.display.DisplayManager.class).getDisplay(0).getRotation()*90;
-   return Json.mapOf("ok",true,"volume",volumes,"wifi",wifi.isWifiEnabled(),"bluetooth",bluetooth!=null&&bluetooth.isEnabled(),"autoRotate",!frozen,"rotation",rotation,"brightness",brightness(context));
+   return Json.mapOf("ok",true,"volume",volumes,"wifi",wifi.isWifiEnabled(),"bluetooth",bluetooth!=null&&bluetooth.isEnabled(),"autoRotate",!frozen,"rotation",rotation,"brightness",brightness());
   }
   if(op.equals("brightness")){
    // Automatic mode ignores screen_brightness, so a set value takes manual mode.
    int value=Json.integer(args,"value",-1);
    if(value<0||value>255)throw new IllegalArgumentException("Choose a brightness from 0 to 255");
-   var resolver=context.getContentResolver();var before=brightness(context);
-   android.provider.Settings.System.putInt(resolver,android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE,android.provider.Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL);
-   android.provider.Settings.System.putInt(resolver,android.provider.Settings.System.SCREEN_BRIGHTNESS,value);
-   var after=brightness(context);
+   var before=brightness();
+   putSystemSetting("screen_brightness_mode",0);
+   putSystemSetting("screen_brightness",value);
+   var after=brightness();
    return Json.mapOf("ok",true,"inputDelivered",!after.equals(before),"brightness",after,"previous",before,"verification",Map.of("status",Integer.valueOf(value).equals(after.get("value"))&&"manual".equals(after.get("mode"))?"verified":"failed"));
   }
   if(op.equals("volume")){

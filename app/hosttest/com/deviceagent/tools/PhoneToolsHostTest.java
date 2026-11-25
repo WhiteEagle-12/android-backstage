@@ -34,6 +34,12 @@ public final class PhoneToolsHostTest {
         ref=obs.target(o,large,2,rerendered,"tap");
         check("r9".equals(ref.get("nodeId")),"re-rendered row re-resolves to its one new node");
         check("r9".equals(Observations.validateTarget(rerendered,ref).get("nodeId")),"refreshed reference validates on the shell side");
+        // A configuration change recreates the activity: a new window holds the same rows.
+        var recreated=radioTree("[0,0][1216,2688]","r20");
+        for(var n:Observations.nodes(recreated))n.put("windowKey","window-recreated");
+        PrimitiveArguments.map(((List<?>)recreated.get("windows")).get(0)).put("key","window-recreated");
+        var moved=obs.target(o,large,2,recreated,"tap");
+        check("r20".equals(moved.get("nodeId"))&&"window-recreated".equals(moved.get("windowKey")),"a recreated window re-resolves to the same control");
         // A label change is reported with the field that changed.
         var renamed=radioTree("[0,0][1216,2688]","r2");
         Observations.nodes(renamed).stream().filter(n->"r2".equals(n.get("nodeId"))).findFirst().orElseThrow().put("text","Huge");

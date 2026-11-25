@@ -123,7 +123,10 @@ public final class Observations {
     }
     private static final List<String> IDENTITY_FIELDS=List.of("label","role","resourceId","class","package","windowKey","checked");
     private static boolean sameIdentity(Map<String,Object> want,Map<String,Object> have,boolean withContext){
-        for(String k:IDENTITY_FIELDS)if(!Objects.equals(want.get(k),have.get(k)))return false;
+        return sameIdentity(want,have,withContext,true);
+    }
+    private static boolean sameIdentity(Map<String,Object> want,Map<String,Object> have,boolean withContext,boolean sameWindow){
+        for(String k:IDENTITY_FIELDS)if((sameWindow||!k.equals("windowKey"))&&!Objects.equals(want.get(k),have.get(k)))return false;
         return !withContext||Objects.equals(want.get("context"),have.get("context"));
     }
     private static String changedFields(Map<String,Object> want,Map<String,Object> have){
@@ -133,7 +136,8 @@ public final class Observations {
     }
     /**
      * Find the control a reference names. The same node must keep its identity; otherwise
-     * exactly one control in the same window must match label, resource, role and context.
+     * exactly one control in the same window (or, when that window is gone, the same app)
+     * must match label, resource, role and context.
      */
     private static Map<String,Object> locate(Map<String,Object> current,Map<String,Object> ref){
         String raw=str(ref.get("identity"));
@@ -146,11 +150,14 @@ public final class Observations {
             if(sameIdentity(want,have,true))return same.get(0);
             changed=changedFields(want,have);traceTarget(raw,Json.stringify(have));
         }
+        // A recreated activity (a configuration change, or leaving and coming back) gets a new window.
+        // When the old window is gone, the same control in the same app still matches.
+        boolean windowGone=appNodes(current).stream().noneMatch(n->windowKey(n).equals(want.get("windowKey")));
         List<Map<String,Object>> found=new ArrayList<>();
         for(var c:layout.controls()){
             var n=c.node();
-            if(!sameIdentity(want,identity(current,layout,n,false),false))continue;
-            if(sameIdentity(want,identity(current,layout,n,true),true))found.add(n);
+            if(!sameIdentity(want,identity(current,layout,n,false),false,!windowGone))continue;
+            if(sameIdentity(want,identity(current,layout,n,true),true,!windowGone))found.add(n);
         }
         if(found.size()==1)return found.get(0);
         if(found.isEmpty())throw new InputNotSentException("stale_target",changed.isEmpty()?"The control is gone. Choose a target from the new observation.":"The control's "+changed+" changed. Choose a target from the new observation.",changed.isEmpty()?Map.of():Map.of("changed",changed));
