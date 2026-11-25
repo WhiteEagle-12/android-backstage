@@ -19,8 +19,8 @@ public final class PhoneToolsHostTest {
     }
     private static String code(Runnable r){try{r.run();return "";}catch(InputNotSentException e){return e.code+":"+e.getMessage();}}
     public static void run(){
-        stableIdentity();stableIds();selectors();defaultScroll();displayTurn();launchOutcome();
-        System.out.println("PASS phone tools: stable target identity, stable ids in full and failure views, tolerant selectors, default scroll container, display turn recovery, launch outcomes");
+        stableIdentity();stableIds();selectors();defaultScroll();displayTurn();launchOutcome();sessionFolders();
+        System.out.println("PASS phone tools: stable target identity, stable ids in full and failure views, tolerant selectors, default scroll container, display turn recovery, launch outcomes, session folder cleanup");
     }
     private static void stableIdentity(){
         // The observation is taken while the activity slides in; the window then settles.
@@ -123,4 +123,33 @@ public final class PhoneToolsHostTest {
         var lost=IntentCommand.launchFailure(false,"","cmd: Failure calling service activity");
         check("input_outcome_unknown".equals(lost.get("code"))&&lost.get("inputDelivered")==null&&String.valueOf(lost.get("output")).contains("Failure"),"an unclear failure stays unknown and keeps the output");
     }
+    private static void sessionFolders(){try{
+        var root=java.nio.file.Files.createTempDirectory("sessions-sweep");long[] clock={1_000_000};
+        Map<String,Object> display=new LinkedHashMap<>(Map.of("active",false));
+        var tasks=new TaskResources(root,(op,args)->switch(op){
+            case "display_status"->new LinkedHashMap<>(display);
+            case "display_start"->{display.putAll(Json.mapOf("active",true,"created",true,"displayId",2,"createdAt",clock[0]));yield new LinkedHashMap<>(display);}
+            case "display_stop"->{display.put("active",false);yield Map.of("ok",true);}
+            default->Map.of("ok",true);},()->clock[0]);
+        String done=(String)tasks.begin(Map.of("leaseMinutes",30),"a").get("sessionId");
+        check(Boolean.TRUE.equals(tasks.finish(Map.of("sessionId",done),"a").get("ok")),"finish works");
+        display.put("active",false);
+        String live=(String)tasks.begin(Map.of("leaseMinutes",30),"a").get("sessionId");
+        // Old records written by earlier versions, finished long ago.
+        for(int i=0;i<TaskResources.SWEEP_READS+50;i++){
+            String id=String.format("session_%032x",i+1);var dir=root.resolve(id);java.nio.file.Files.createDirectories(dir);
+            java.nio.file.Files.writeString(dir.resolve("state.json"),Json.stringify(Json.mapOf("sessionId",id,"owner","a","state","finished","expiresAt",1L)));
+        }
+        tasks.sweep();
+        check(java.nio.file.Files.exists(root.resolve(done)),"a just-finished record stays so a repeated finish gets its answer");
+        check(Boolean.TRUE.equals(tasks.finish(Map.of("sessionId",done),"a").get("ok")),"a repeated finish succeeds");
+        long left=count(root);
+        check(left>=50&&left<TaskResources.SWEEP_READS+50,"one sweep reads a bounded number of records: "+left);
+        tasks.sweep();tasks.sweep();
+        check(count(root)==2,"old finished folders are deleted over a few sweeps");
+        clock[0]+=TaskResources.FINISHED_RETAIN_MS+1;tasks.sweep();
+        check(!java.nio.file.Files.exists(root.resolve(done)),"a finished folder is deleted after the retain time");
+        check(java.nio.file.Files.exists(root.resolve(live))&&tasks.use(live,"a")==2,"an active session is never touched");
+    }catch(java.io.IOException e){throw new AssertionError(e);}}
+    private static long count(java.nio.file.Path root) throws java.io.IOException {try(var s=java.nio.file.Files.list(root)){return s.count();}}
 }

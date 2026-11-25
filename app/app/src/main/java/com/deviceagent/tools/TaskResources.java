@@ -160,8 +160,27 @@ import java.util.function.LongSupplier;
   state.put("state","finished");state.put("finishedAt",clock.getAsLong());save(id,state);
   return Json.mapOf("ok",true,"sessionId",id,"released",released);
  }
+ /** A finished session's record stays this long, so a repeated finish still gets its answer. */
+ static final long FINISHED_RETAIN_MS=10*60000L;
+ /** Records read from storage in one sweep; the rest wait for the next sweep. */
+ static final int SWEEP_READS=200;
+ /** End expired sessions and delete the folders of sessions that finished a while ago. Never touches an active session. */
  public synchronized void sweep(){
   if(!Files.isDirectory(root))return;
-  try(var dirs=Files.list(root)){for(Path dir:dirs.collect(java.util.stream.Collectors.toList())){if(!dir.getFileName().toString().matches("session_[a-f0-9]{32}"))continue;try{var state=read(dir.getFileName().toString());if(!"finished".equals(state.get("state"))&&((Number)state.get("expiresAt")).longValue()<=clock.getAsLong())cleanup(dir.getFileName().toString(),state);}catch(RuntimeException ignored){}}}catch(Exception ignored){}
+  int reads=0;long now=clock.getAsLong();
+  try(var dirs=Files.list(root)){for(Path dir:dirs.collect(java.util.stream.Collectors.toList())){
+   String id=dir.getFileName().toString();if(!id.matches("session_[a-f0-9]{32}"))continue;
+   if(!stateCache.containsKey(id)&&reads++>=SWEEP_READS)continue;
+   try{
+    var state=read(id);
+    if(!"finished".equals(state.get("state"))&&((Number)state.get("expiresAt")).longValue()<=now)cleanup(id,state);
+    if("finished".equals(state.get("state"))&&(state.get("finishedAt") instanceof Number f?f.longValue():((Number)state.get("expiresAt")).longValue())+FINISHED_RETAIN_MS<=now)delete(id);
+   }catch(RuntimeException ignored){}
+  }}catch(Exception ignored){}
+ }
+ private void delete(String id){
+  try(var paths=Files.walk(directory(id))){for(Path path:paths.sorted(Comparator.reverseOrder()).collect(java.util.stream.Collectors.toList()))Files.delete(path);}
+  catch(Exception e){return;}
+  stateCache.remove(id);lastSavedExpiry.remove(id);
  }
 }
