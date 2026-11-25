@@ -2553,7 +2553,7 @@
   },
   {
     "name": "android.type",
-    "description": "Type text into selector/target (mode:replace|insert) or focused:true+screenshotId+mode+clipboard:true.",
+    "description": "Type text into selector/target (mode:replace|insert), or into the focused field with focused:true+screenshotId (from observe image:always).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -5188,7 +5188,7 @@
   },
   {
     "name": "android.scroll",
-    "description": "Scroll container in direction; optional until selector (+maxScrolls).",
+    "description": "Scroll in direction. Container: selector or target+observation; none uses the largest scroll area (app 2.0.10+). until: selector to stop at (+maxScrolls 1-20).",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -5347,6 +5347,27 @@
                   {
                     "required": [
                       "observation"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "target"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "observation"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "selector"
                     ]
                   }
                 ]
@@ -8225,6 +8246,27 @@
                                 }
                               ]
                             }
+                          },
+                          {
+                            "not": {
+                              "anyOf": [
+                                {
+                                  "required": [
+                                    "target"
+                                  ]
+                                },
+                                {
+                                  "required": [
+                                    "observation"
+                                  ]
+                                },
+                                {
+                                  "required": [
+                                    "selector"
+                                  ]
+                                }
+                              ]
+                            }
                           }
                         ]
                       }
@@ -10729,7 +10771,7 @@
   },
   {
     "name": "android.device",
-    "description": "Utilities: clipboard, media, location, control (volume/rotation/wifi/bt), audio.",
+    "description": "Utilities: clipboard (no text reads, text writes), media (no action reads now playing), location, control (volume/rotation/wifi/bluetooth), brightness (no value reads, value 0-255 sets; app 2.0.10+), audio. Screen recording is android.task record_start.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -10740,7 +10782,8 @@
             "media",
             "location",
             "control",
-            "audio"
+            "audio",
+            "brightness"
           ]
         },
         "action": {
@@ -11586,6 +11629,109 @@
                   ]
                 }
               ]
+            },
+            {
+              "properties": {
+                "operation": {
+                  "const": "brightness"
+                },
+                "value": {
+                  "maximum": 255
+                }
+              },
+              "anyOf": [
+                {
+                  "not": {
+                    "required": [
+                      "value"
+                    ]
+                  }
+                },
+                {
+                  "required": [
+                    "requestId"
+                  ]
+                }
+              ],
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "action"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "text"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "package"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "positionMs"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "maxAgeMs"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "accuracyMeters"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "timeoutMs"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "stream"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "rotation"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "enabled"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "path"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "audioId"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "leaseSeconds"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "sampleRate"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "channels"
+                    ]
+                  }
+                ]
+              }
             }
           ]
         }

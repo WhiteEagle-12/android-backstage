@@ -10,9 +10,9 @@ const OMIT_ON_ACTIONS = new Set([
 const OMIT_PER_TOOL = {
   observe: new Set(['observe', 'expectedPackage', 'timeoutMs', 'scale', 'maxItems', 'timing', 'since']),
   open: new Set(['activityTaskId']),
-  type: new Set(['screenshotId']),
+  type: new Set([]),
   key: new Set(['holdMs', 'repeat', 'screenshotId']),
-  scroll: new Set(['amount', 'maxScrolls']),
+  scroll: new Set(['amount']),
   task: new Set(['leaseMinutes', 'width', 'height', 'dpi', 'activityTaskId', 'maxSeconds', 'fps', 'scale']),
   gesture: new Set(['angleDegrees', 'durationMs', 'holdMs']),
   file: new Set(['fileId', 'fileKey', 'sha256']),
@@ -30,7 +30,11 @@ const STRIP_CONSTRAINTS = new Set([
   'minItems', 'maxItems', 'uniqueItems', 'minProperties', 'maxProperties', 'additionalProperties',
   'description',
 ]);
-const COLLAPSE_OBJECT = new Set(['selector', 'until', 'verify', 'before', 'intent', 'share', 'source', 'responses']);
+const COLLAPSE_OBJECT = new Set(['share', 'source', 'responses']);
+// Show the field names, types and enums of these nested shapes, one object level deep.
+const SHALLOW = { selector: 1, until: 1, intent: 2, verify: 2, steps: 2 };
+// Fields kept on a UI action although OMIT_ON_ACTIONS drops them elsewhere.
+const KEEP_ON_ACTION = { wait: new Set(['timeoutMs']) };
 const COLLAPSE_STRING_ARRAY = new Set(['modifiers', 'fields', 'notificationPackages']);
 
 function stripConstraints(node) {
@@ -46,6 +50,19 @@ function stripConstraints(node) {
         : v;
   }
   return out;
+}
+
+// An object at depth 0 shows only its type; arrays pass their depth to their items.
+function shallow(spec, depth) {
+  if (!spec || typeof spec !== 'object') return spec;
+  if (spec.type === 'array') return { type: 'array', ...(spec.items ? { items: shallow(spec.items, depth) } : {}) };
+  if (spec.type !== 'object') return spec;
+  if (depth <= 0 || !spec.properties) return { type: 'object' };
+  return {
+    type: 'object',
+    properties: Object.fromEntries(Object.entries(spec.properties).map(([k, v]) => [k, shallow(v, depth - 1)])),
+    ...(spec.required?.length ? { required: spec.required } : {}),
+  };
 }
 
 function flatten(schema, root = schema) {
@@ -104,11 +121,20 @@ export function advertisedSchema(schema, root = schema, opts = {}) {
   for (const [k, raw] of Object.entries(slim.properties)) {
     if (k === 'requestId') continue;
     if (UI_TOOLS.has(short) && k === 'display') continue;
-    if (UI_ACTIONS.has(short) && OMIT_ON_ACTIONS.has(k) && !slim.required?.includes(k)) continue;
+    if (UI_ACTIONS.has(short) && OMIT_ON_ACTIONS.has(k) && !slim.required?.includes(k) && !KEEP_ON_ACTION[short]?.has(k)) continue;
     if (omitTool?.has(k) && !slim.required?.includes(k)) continue;
     let spec = raw;
     if (COLLAPSE_OBJECT.has(k)) {
       spec = { type: 'object' };
+    } else if (short === 'sequence' && k === 'steps') {
+      const step = shallow(spec, SHALLOW.steps);
+      step.items.properties.arguments = { type: 'object' };
+      step.items.properties.before = { type: 'object' };
+      spec = step;
+    } else if (Object.hasOwn(SHALLOW, k)) {
+      spec = shallow(spec, SHALLOW[k]);
+      // Cached clients still send the older single-condition verify form, which the strict contract accepts.
+      if (k === 'verify') delete spec.required;
     } else if (COLLAPSE_STRING_ARRAY.has(k)) {
       spec = { type: 'array', items: { type: 'string' } };
     } else if (spec.type === 'boolean' && spec.enum) {
@@ -121,10 +147,6 @@ export function advertisedSchema(schema, root = schema, opts = {}) {
       spec = { type: 'string' };
     } else if (short === 'gesture' && k === 'paths') {
       spec = { type: 'array' };
-    } else if (short === 'device' && (k === 'action' || k === 'stream' || k === 'rotation')) {
-      spec = { type: 'string' };
-    } else if (short === 'sequence' && k === 'steps') {
-      spec = { type: 'array', items: { type: 'object' } };
     }
     props[k] = spec;
   }

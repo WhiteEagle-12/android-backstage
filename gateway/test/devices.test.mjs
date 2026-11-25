@@ -125,7 +125,7 @@ test('MCP retry recovers a saved encrypted task result without creating a second
  await h.restart();
  const recovered=await h.call(token,'android_task_begin',args);
  assert.equal(recovered.structuredContent.outcome,'succeeded');assert.equal(recovered.structuredContent.sessionId,'session_recovered');assert.equal(recovered.structuredContent.device.name,'phone');
- const again=await h.call(token,'android_task_begin',args);assert.deepEqual(again.structuredContent,recovered.structuredContent);assert.equal(phone.received.length,1);
+ const again=await h.call(token,'android_task_begin',args);const {timing:t1,...againResult}=again.structuredContent,{timing:t2,...recoveredResult}=recovered.structuredContent;assert.deepEqual(againResult,recoveredResult);assert.equal(t1.replayed,true);assert.equal(phone.received.length,1);
 }));
 
 test('two assistants: per-device access, separate credentials, revocation and removal leave the rest working, all across restart',async t=>withRelay(async ctx=>{
@@ -246,7 +246,7 @@ test('a build travels privately: upload with integrity check, encrypted staging,
   const pushed=await h.call(token,'android_push',{device:'phone',artifactId,remote:'/sdcard/Download/app.apk'},phone,call=>{assert.equal(call.name,'android.fetch');assert.equal(call.arguments.remote,'/sdcard/Download/app.apk');assert.equal(call.arguments.sha256,sha256);return {ok:true};});assert.ok(!pushed.isError,JSON.stringify(pushed.structuredContent));
   const foreignDelete=await h.call(cursorToken,'android_artifact_delete',{artifactId});assert.equal(foreignDelete.structuredContent.code,'unknown_artifact');
   const deleteArgs={artifactId,requestId:crypto.randomUUID()};const deleted=await h.call(token,'android_artifact_delete',deleteArgs);assert.equal(deleted.structuredContent.deleted,true);
-  const repeated=await h.call(token,'android_artifact_delete',deleteArgs);assert.deepEqual(repeated.structuredContent,deleted.structuredContent);
+  const repeated=await h.call(token,'android_artifact_delete',deleteArgs);const {timing:repeatTiming,...repeatedResult}=repeated.structuredContent,{timing:_,...deletedResult}=deleted.structuredContent;assert.deepEqual(repeatedResult,deletedResult);assert.equal(repeatTiming.replayed,true);
   const gone=await h.call(token,'android_artifact_status',{artifactId});assert.equal(gone.structuredContent.code,'unknown_artifact');
   const byUrl=await h.call(token,'android_install',{device:'phone',source:{url:'https://example.com/app.apk'}},phone,call=>{assert.equal(call.name,'android.install');return {ok:true};});assert.ok(!byUrl.isError,JSON.stringify(byUrl.structuredContent));
   // Single-call large file pull (>1 MiB): phone streams 3 chunks, gateway assembles and returns one verified downloadUrl.
@@ -383,4 +383,31 @@ test('write calls auto-generate unique requestId when omitted while preserving e
   assert.ok(!(await (await first).json()).result.isError);
   const conflict=(await (await postMcp('android_task',{device:'phone',operation:'begin',package:'com.example.b',requestId:'explicit-1'})).json()).result;
   assert.equal(conflict.structuredContent.code,'request_id_conflict');
+}));
+
+test('the hosted handler applies aliases, times every call and explains older phones',async t=>withRelay(async ctx=>{
+  const h=await harness(t,ctx);
+  const {phone,token}=await h.enrollFirst(await h.register('http://localhost:1455/callback','Codex'),'PixelTest');
+  await phone.online();
+  const sessionId='session_'+'a'.repeat(32);
+  // Clipboard read: sessionId and action:"get" are dropped before the phone sees the call.
+  const clip=await h.call(token,'android_device',{device:'phone',operation:'clipboard',action:'get',sessionId},phone,call=>{assert.equal(call.name,'android.clipboard');assert.deepEqual(Object.keys(call.arguments).filter(k=>k!=='requestId'&&k!=='display').sort(),[]);return {ok:true,text:'hi',timing:{deviceTotalMs:5}};});
+  assert.ok(!clip.isError,JSON.stringify(clip.structuredContent));
+  const timing=clip.structuredContent.timing;
+  assert.ok(Number.isFinite(timing.gatewayMs)&&Number.isFinite(timing.relayRoundTripMs),JSON.stringify(timing));
+  assert.equal(timing.networkMs,Math.max(0,timing.relayRoundTripMs-5));
+  // Validation errors and unknown tools are timed too, and never ask for requestId.
+  const conflict=await h.call(token,'android_task',{operation:'begin',join:'join_'+'a'.repeat(32),package:'com.android.settings'});
+  assert.equal(conflict.isError,true);assert.match(conflict.structuredContent.error,/join and package cannot be used together/);
+  assert.ok(!/requestId/.test(conflict.structuredContent.error));assert.ok(Number.isFinite(conflict.structuredContent.timing.gatewayMs));
+  const unknown=await h.call(token,'android_teleport',{});assert.equal(unknown.structuredContent.code,'unknown_tool');assert.ok(Number.isFinite(unknown.structuredContent.timing.gatewayMs));
+  // An older phone rejects a scroll with no container; the caller learns how to pass one.
+  const oldReject={ok:false,outcome:'failed',code:'invalid_argument',inputDelivered:false,error:'Expected one of target, selector'};
+  const scroll=await h.call(token,'android_scroll',{device:'phone',sessionId,direction:'down'},phone,call=>{assert.equal(call.name,'android.scroll');assert.equal(call.arguments.direction,'down');assert.ok(call.arguments.requestId);return oldReject;});
+  assert.match(scroll.structuredContent.error,/"label":"Scroll area","role":"scroll"/);assert.equal(scroll.structuredContent.phoneError,oldReject.error);
+  // Brightness goes to android.device unchanged; an older phone gets an update message.
+  const bright=await h.call(token,'android_device',{device:'phone',operation:'brightness',value:120},phone,call=>{assert.equal(call.name,'android.device');assert.equal(call.arguments.operation,'brightness');assert.equal(call.arguments.value,120);return {...oldReject,error:'operation must be one of'};});
+  assert.equal(bright.structuredContent.code,'app_update_required');
+  // A market: URL opens as a VIEW intent on every phone version.
+  await h.call(token,'android_open',{device:'phone',sessionId,url:'market://details?id=org.videolan.vlc'},phone,call=>{assert.deepEqual(call.arguments.intent,{action:'android.intent.action.VIEW',data:'market://details?id=org.videolan.vlc'});assert.ok(!('url' in call.arguments));return {outcome:'succeeded'};});
 }));

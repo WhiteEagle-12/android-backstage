@@ -9,7 +9,8 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import Ajv from 'ajv';
 import {advertisedSchema} from '../cli/advertised-schema.mjs';
-import {invalidArguments} from './validation.mjs';
+import {invalidArguments,schemaAt} from './validation.mjs';
+import {normalizeArguments} from '../cli/tool-aliases.mjs';
 import { createConnections, ConnectionError } from './connections.mjs';
 import { createArtifacts, shredFile } from './artifacts.mjs';
 import { createR2FromEnv } from '../relay/r2.mjs';
@@ -65,10 +66,31 @@ export const catalogue=strictCatalogue.map(t=>({...t,inputSchema:advertisedSchem
 export const TOOL_CONTRACT={version:VERSION,sha256:createHash('sha256').update(JSON.stringify(catalogue)).digest('hex')};
 const ajv=new Ajv({strict:false,allErrors:true});
 const validators=new Map(allStrictCatalogue.map(t=>[t.name,ajv.compile(t.inputSchema)]));
+const strictSchemas=new Map(allStrictCatalogue.map(t=>[t.name,t.inputSchema]));
+const rejectsRequestId=(e,schema)=>e.keyword==='additionalProperties'&&e.params?.additionalProperty==='requestId'
+  ||e.keyword==='not'&&JSON.stringify(schemaAt(schema,e.schemaPath)??'').includes('"requestId"');
+/** Phones before 2.0.10 reject these newer shapes in validation, before any input. Say what to do instead. */
+export function explainOldPhone(name,args,result){
+  if(result?.code!=='invalid_argument'||result.inputDelivered!==false)return result;
+  if(name==='android_device'&&args.operation==='brightness')return {...result,code:'app_update_required',error:'Brightness needs Android Backstage 2.0.10 or later on this phone. Update the app on the phone, then try again.',phoneError:result.error};
+  if(name==='android_scroll'&&!['target','observation','selector'].some(k=>Object.hasOwn(args,k)))return {...result,error:'This phone needs a scroll container. Pass selector, for example {"label":"Scroll area","role":"scroll"}, or target+observation of a scroll control from android_observe. Android Backstage 2.0.10 or later scrolls the largest scroll area when none is given.',phoneError:result.error};
+  return result;
+}
+/** Gateway time for every call, plus the relay round trip and phone time when a phone answered. */
+export function callTiming(timing,started){
+  const out={...(timing&&typeof timing==='object'?timing:{}),gatewayMs:Math.round(performance.now()-started)};
+  if(Number.isFinite(out.relayRoundTripMs)&&Number.isFinite(out.deviceTotalMs))out.networkMs=Math.max(0,out.relayRoundTripMs-out.deviceTotalMs);
+  return out;
+}
 export const SERVER_INSTRUCTIONS=PHONE_INSTRUCTIONS.replace(/\bandroid\./g,'android_')+'\nSafety: Always call android_confirm before irreversible actions (sending messages, posting, paying, or deleting).\nPrivacy: Hosted MCP decrypts commands/results in gateway RAM to relay between this client and your phone (zero call-history retention); use the local E2EE bridge for zero-knowledge setups.\nUploads: android_artifact begin -> android_install / android_file push -> android_artifact delete.';
 
 /** Accept legacy pre-consolidation tool names seamlessly without advertising them in tools/list. */
 export function normalizeToolCall(name, rawArgs = {}) {
+  const call = legacyToolCall(name, rawArgs);
+  return { name: call.name, args: normalizeArguments(call.name, call.args) };
+}
+
+function legacyToolCall(name, rawArgs) {
   const args = rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs) ? { ...rawArgs } : rawArgs;
   const legacyTask = { android_task_begin: 'begin', android_task_inspect: 'inspect', android_task_list: 'list', android_task_finish: 'finish', android_task_share: 'share', android_handoff: 'handoff' };
   if (Object.hasOwn(legacyTask, name)) return { name: 'android_task', args: { operation: legacyTask[name], ...args } };
@@ -91,14 +113,6 @@ export function normalizeToolCall(name, rawArgs = {}) {
   if (name === 'android_audio') {
     const { operation: sub, ...rest } = args || {};
     return { name: 'android_device', args: { operation: 'audio', ...(sub !== undefined ? { action: sub } : {}), ...rest } };
-  }
-  if (name === 'android_sequence' && Array.isArray(args?.steps)) {
-    args.steps = args.steps.map(step => {
-      if (step && typeof step === 'object' && !Array.isArray(step) && typeof step.tool === 'string' && /^android_[a-z_]+$/.test(step.tool)) {
-        return { ...step, tool: 'android.' + step.tool.slice(8) };
-      }
-      return step;
-    });
   }
   return { name, args };
 }
@@ -123,6 +137,7 @@ function toPhoneWire(engine, rest) {
     if (operation === 'control') return ['android.device_control', { operation: action, ...args }];
     if (operation === 'audio') return ['android.audio', { operation: action, ...args }];
     if (operation === 'media') return ['android.media', { action, ...args }];
+    if (operation === 'brightness') return [engine, rest];
     return ['android.' + operation, args];
   }
   return [engine, rest];
@@ -435,36 +450,41 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
     const server = new Server({name:'android-backstage-work',version:VERSION},{capabilities:{tools:{}},instructions:SERVER_INSTRUCTIONS});
     server.setRequestHandler(ListToolsRequestSchema,async () => ({tools:activeCatalogue}));
     server.setRequestHandler(CallToolRequestSchema,async request => {
+      const started = performance.now();
+      // Every result reports the gateway time; phone results add the relay and phone split.
+      const timed = (payload,isError=false) => asToolResult({...payload,timing:callTiming(payload.timing,started)},isError);
       const normalized = normalizeToolCall(request.params.name, request.params.arguments || {});
       const name = normalized.name;
-      if (name === 'android_shell' && !allowShell) return asToolResult({outcome:'failed',code:'tool_disabled',inputDelivered:false,error:'Shell commands are disabled on this server. Use the structured tools instead.'},true);
+      if (name === 'android_shell' && !allowShell) return timed({outcome:'failed',code:'tool_disabled',inputDelivered:false,error:'Shell commands are disabled on this server. Use the structured tools instead.'},true);
       const validate = validators.get(name);
       let args = normalized.args || {};
-      if (!validate) return asToolResult({outcome:'failed',code:'unknown_tool',inputDelivered:false,error:'Unknown tool. Refresh tools/list and use a listed tool name.'},true);
+      if (!validate) return timed({outcome:'failed',code:'unknown_tool',inputDelivered:false,error:'Unknown tool. Refresh tools/list and use a listed tool name.'},true);
+      const schema = strictSchemas.get(name);
       if (args && typeof args === 'object' && !Array.isArray(args) && args.requestId === undefined && !validate(args)) {
+        // requestId is generated here. Report the caller's real mistakes, never a missing requestId.
         const auto = { ...args, requestId: 'auto_' + randomBytes(12).toString('hex') };
-        if (validate(auto)) {
-          args = auto;
-        } else {
-          const autoErrors = validate.errors ? [...validate.errors] : [];
-          const requestIdForbidden = autoErrors.some(e =>
-            (e.keyword === 'additionalProperties' && e.params?.additionalProperty === 'requestId')
-            || (e.keyword === 'not' && e.schemaPath?.includes('/not'))
-          );
-          if (!requestIdForbidden) return asToolResult(invalidArguments(name, auto, autoErrors), true);
+        if (validate(auto)) args = auto;
+        else {
+          const autoErrors = [...validate.errors];
+          if (!autoErrors.some(e => rejectsRequestId(e, schema))) return timed(invalidArguments(name, auto, autoErrors, schema), true);
         }
       }
-      if (!validate(args)) return asToolResult(invalidArguments(name,args,validate.errors),true);
+      if (!validate(args)) return timed(invalidArguments(name,args,validate.errors,schema),true);
       const start = Date.now();
+      let dispatched = false;
       try {
-        const result = await journal(req.backstageGrant,name,args,()=>dispatch(name,args,req.backstageGrant,req.backstageClientName));
+        const result = await journal(req.backstageGrant,name,args,()=>{dispatched=true;return dispatch(name,args,req.backstageGrant,req.backstageClientName);});
         audit({time:new Date().toISOString(),tool:name,ok:!['failed','unknown'].includes(result?.outcome)&&result?.ok!==false,outcome:result?.outcome,code:result?.code,jobId:result?.jobId,durationMs:Date.now()-start,device:args.device||null,route:result?.device?.id&&connections?.routeOf?connections.routeOf(result.device.id):null});
-        const response = asToolResult(result);
-        return response;
+        // A replayed receipt keeps its result; its old relay and phone times do not describe this call.
+        const shown=explainOldPhone(name,args,result);
+        if(!dispatched)return timed({...shown,timing:{replayed:true}});
+        // A phone result (it names its device) gets the gateway-to-phone round trip, so networkMs can be derived.
+        const phoneTiming=shown?.device&&typeof shown.device==='object'?{...(shown.timing&&typeof shown.timing==='object'?shown.timing:{}),relayRoundTripMs:Date.now()-start}:shown?.timing;
+        return timed({...shown,...(phoneTiming?{timing:phoneTiming}:{})});
       } catch (e) {
         audit({time:new Date().toISOString(),tool:name,ok:false,code:e instanceof ConnectionError?e.code:'tool_failed',durationMs:Date.now()-start,device:args.device||null});
         const response=failure(e);
-        return asToolResult({...response.structuredContent,inputDelivered:response.structuredContent.jobId?null:false,outcome:response.structuredContent.jobId?'unknown':'failed'},true);
+        return timed({...response.structuredContent,inputDelivered:response.structuredContent.jobId?null:false,outcome:response.structuredContent.jobId?'unknown':'failed'},true);
       }
     });
     const transport = new StreamableHTTPServerTransport({sessionIdGenerator:undefined,enableJsonResponse:true});

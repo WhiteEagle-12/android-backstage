@@ -29,7 +29,7 @@ const primitives={
  type:{...obj({...common,...target,text:{type:'string',maxLength:10000},mode:en('replace','insert'),focused:{const:true},screenshotId:str(),clipboard:{const:true}},['text']),oneOf:[...targetOnly.map(s=>({...s,allOf:[{not:{anyOf:['focused','screenshotId','clipboard'].map(k=>({required:[k]}))}}]})),{required:['focused','screenshotId','clipboard','mode'],not:{anyOf:['target','observation','selector'].map(k=>({required:[k]}))}}]},
  key:obj({...common,key:en(...keyboardKeys),modifiers:{type:'array',maxItems:6,uniqueItems:true,items:en('CTRL','ALT','SHIFT','META','SYM','FUNCTION')},holdMs:num(0,3000),repeat:num(1,100),screenshotId:str()},['key']),
  gesture:obj({...common,screenshotId:str(),preset:en('swipe','drag','pinch','paths'),x1:num(0,100000),y1:num(0,100000),x2:num(0,100000),y2:num(0,100000),centerX:num(0,100000),centerY:num(0,100000),startSpan:{type:'number',exclusiveMinimum:0,maximum:32767},endSpan:{type:'number',exclusiveMinimum:0,maximum:32767},angleDegrees:{type:'number',minimum:-360,maximum:360},durationMs:num(1,5000),holdMs:num(0,3000),paths:{type:'array',minItems:1,maxItems:5,items:{type:'array',minItems:2,maxItems:100,items:obj({x:{type:'number',minimum:0},y:{type:'number',minimum:0}},['x','y'])}}},['preset']),
- scroll:{...obj({...common,...target,direction:en('up','down','left','right'),amount:num(1,5),until:{$ref:'#/$defs/selector'},maxScrolls:num(1,20)}),oneOf:targetOnly,allOf:[{anyOf:[{not:{required:['maxScrolls']}},{required:['until']}]}],required:['direction']},
+ scroll:{...obj({...common,...target,direction:en('up','down','left','right'),amount:num(1,5),until:{$ref:'#/$defs/selector'},maxScrolls:num(1,20)}),oneOf:[...targetOnly,{not:{anyOf:['target','observation','selector'].map(k=>({required:[k]}))}}],allOf:[{anyOf:[{not:{required:['maxScrolls']}},{required:['until']}]}],required:['direction']},
  wait:obj(common,['verify'])
 };
 primitives.gesture.oneOf=[...['swipe','drag'].map(p=>({properties:{preset:{const:p}},required:['x1','y1','x2','y2']})),{properties:{preset:{const:'pinch'}},required:['centerX','centerY','startSpan','endSpan']},{properties:{preset:{const:'paths'}},required:['paths']}];
@@ -37,10 +37,10 @@ const descriptions={
  observe:'Read UI controls/content (auto-diffs; full:true forces full, image:always|if_needed|only, detail:debug).',
  open:'Open package (+activity), url, settingsAction, activityTaskId, intent, or share.',
  tap:'Tap selector, target+observation, or x+y (+screenshotId). holdMs long-presses.',
- type:'Type text into selector/target (mode:replace|insert) or focused:true+screenshotId+mode+clipboard:true.',
+ type:'Type text into selector/target (mode:replace|insert), or into the focused field with focused:true+screenshotId (from observe image:always).',
  key:'Send key (BACK, ENTER, TAB, DEL, SPACE, A-Z, 0-9, DPAD_*, HOME, VOLUME_*, etc.).',
  gesture:'Run swipe/drag (x1,y1,x2,y2), pinch (centerX,centerY,startSpan,endSpan), or paths ([[{x,y}]]).',
- scroll:'Scroll container in direction; optional until selector (+maxScrolls).',
+ scroll:'Scroll in direction. Container: selector or target+observation; none uses the largest scroll area (app 2.0.10+). until: selector to stop at (+maxScrolls 1-20).',
  wait:'Wait for verify {conditions:[{kind,...}],match?:all|any}.'
 };
 const requestId=str({pattern:'^[A-Za-z0-9_-]{1,128}$'});
@@ -92,9 +92,9 @@ add('file','Files: pull (single-call for large files with saveTo or download URL
   {properties:{operation:{const:'fetch'}},required:['url','remote','requestId'],not:{anyOf:['path','offset','length','fileId','saveTo','local'].map(k=>({required:[k]}))}}
  ]
 });
-add('device','Utilities: clipboard, media, location, control (volume/rotation/wifi/bt), audio.',{
+add('device','Utilities: clipboard (no text reads, text writes), media (no action reads now playing), location, control (volume/rotation/wifi/bluetooth), brightness (no value reads, value 0-255 sets; app 2.0.10+), audio. Screen recording is android.task record_start.',{
  ...obj({
-  operation:en('clipboard','media','location','control','audio'),
+  operation:en('clipboard','media','location','control','audio','brightness'),
   action:en('status','play','pause','next','previous','seek','volume','rotation','wifi','bluetooth','capture','inject','stop','renew'),
   text:{type:'string'},package:str(),sessionId:str(),positionMs:num(0,9007199254740991),
   maxAgeMs:num(0,3600000),accuracyMeters:{type:'number',minimum:1,maximum:100000},timeoutMs:num(0,20000),
@@ -118,7 +118,8 @@ add('device','Utilities: clipboard, media, location, control (volume/rotation/wi
    {properties:{action:{const:'status'}},required:['audioId'],not:{anyOf:['package','path','sampleRate','channels','leaseSeconds','requestId'].map(k=>({required:[k]}))}},
    {properties:{action:{const:'stop'}},required:['audioId','requestId'],not:{anyOf:['package','path','sampleRate','channels','leaseSeconds'].map(k=>({required:[k]}))}},
    {properties:{action:{const:'renew'}},required:['audioId','requestId','leaseSeconds'],not:{anyOf:['package','path','sampleRate','channels'].map(k=>({required:[k]}))}}
-  ]}]}
+  ]}]},
+  {properties:{operation:{const:'brightness'},value:{maximum:255}},anyOf:[{not:{required:['value']}},{required:['requestId']}],not:{anyOf:['action','text','package','positionMs','maxAgeMs','accuracyMeters','timeoutMs','stream','rotation','enabled','path','audioId','leaseSeconds','sampleRate','channels'].map(k=>({required:[k]}))}}
  ]
 });
 add('developer','Run package stop/uninstall/grant/clear_data or instrumentation test.',obj({operation:en('stop','uninstall','grant','clear_data','instrument'),package:str(),permission:str(),component:str(),class:str(),args:str(),timeoutMs:num(1,600000),requestId},['operation','requestId']),false,{surface:'developer'});

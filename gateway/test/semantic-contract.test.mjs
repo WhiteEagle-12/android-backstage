@@ -5,17 +5,17 @@ import {strictCatalogue as catalogue,catalogue as advertised} from '../server.mj
 import {mcpTools} from '../../cli/tools.mjs';
 import {compareClientTools} from '../../scripts/check-client-tools.mjs';
 
-test('ultra-lean discovery stays typed and under ~2k tokens while strict validation enforces full schemas',()=>{
+test('lean discovery advertises one nested level while strict validation enforces full schemas',()=>{
  for(const tools of [advertised,mcpTools()]){
   const get=n=>tools.find(t=>t.name.replace('android.','android_')==='android_'+n).inputSchema;
   assert.equal(get('wait').properties.verify.type,'object');
   assert.equal(get('tap').properties.selector.type,'object');
   assert.ok(JSON.stringify(get('tap')).length<600);
-  assert.ok(JSON.stringify(get('sequence')).length<400);
+  assert.ok(JSON.stringify(get('sequence')).length<520);
   assert.equal(get('sequence').properties.steps.items.type,'object');
  }
  const localBytes=mcpTools().reduce((n,t)=>n+JSON.stringify(t).length,0);
- assert.ok(localBytes<10500,`mcpTools() grew to ${localBytes} B (~${Math.round(localBytes/4)} tok)`);
+ assert.ok(localBytes<14500,`mcpTools() grew to ${localBytes} B (~${Math.round(localBytes/4)} tok)`);
  for(const tool of [...advertised,...mcpTools()]){assert.equal(typeof tool.annotations?.readOnlyHint,'boolean',tool.name);}
  assert.equal(compareClientTools({tools:advertised}).nestedChecked,true);
  const broken=structuredClone(advertised);
