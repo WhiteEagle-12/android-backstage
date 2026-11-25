@@ -40,6 +40,11 @@ public final class AccessibilityHost {
     private static final long IDLE_DISCONNECT_MS = 60_000L;
     private static final long PID_CACHE_MS = 10_000L;
     private static final long FAST_TARGET_MS = 500L;
+    /** One read holds the shared lock, so a stuck app must not stall every other screen. */
+    private static final long READ_BUDGET_MS = 4_000L;
+    private static final long SLOW_READ_LOG_MS = 2_000L;
+    private long readDeadline = Long.MAX_VALUE;
+    private static final class SlowRead extends RuntimeException { SlowRead() { super(null, null, false, false); } }
 
     private static final Method GET_SOURCE_NODE_ID = findSourceNodeIdMethod();
     private static Method findSourceNodeIdMethod() {
@@ -281,6 +286,22 @@ public final class AccessibilityHost {
 
     private Map<String, Object> readTreeMap(UiAutomation automation, int displayId, boolean allNodes, int attempts, String windowId) throws Exception {
         long start = System.currentTimeMillis();
+        readDeadline = android.os.SystemClock.uptimeMillis() + READ_BUDGET_MS;
+        try {
+            Map<String, Object> out = readTreeMapWithin(automation, displayId, allNodes, attempts, windowId, start);
+            long ms = System.currentTimeMillis() - start;
+            if (ms > SLOW_READ_LOG_MS) System.err.println(java.time.Instant.now() + " [backstage] slow UI read display=" + displayId + " ms=" + ms + " ok=" + out.get("ok") + " nodes=" + out.get("count") + " settle=" + out.get("settleRounds"));
+            return out;
+        } catch (SlowRead e) {
+            liveNodes.clear();
+            System.err.println(java.time.Instant.now() + " [backstage] UI read stopped display=" + displayId + " ms=" + (System.currentTimeMillis() - start));
+            return Json.mapOf("ok", false, "code", "ui_slow", "error", "the app on this screen did not answer within 4 seconds");
+        } finally {
+            readDeadline = Long.MAX_VALUE;
+        }
+    }
+
+    private Map<String, Object> readTreeMapWithin(UiAutomation automation, int displayId, boolean allNodes, int attempts, String windowId, long start) throws Exception {
         List<Map<String, Object>> rows = new ArrayList<>();
         List<Map<String, Object>> windowRows = new ArrayList<>();
         int[] counter = new int[]{0};
@@ -323,6 +344,7 @@ public final class AccessibilityHost {
                 // Android can reassign numeric window IDs on every connection. Read
                 // each root's identity, but traverse only the selected window's controls.
                 com.deviceagent.tools.ActionDeadline.check();
+                if (android.os.SystemClock.uptimeMillis() > readDeadline) throw new SlowRead();
                 boolean selected = windowId == null && window.isFocused();
                 AccessibilityNodeInfo root = root(window, selected);
                 if (root != null) {
@@ -423,6 +445,7 @@ public final class AccessibilityHost {
     private void walk(AccessibilityNodeInfo node, int depth, boolean allNodes,
                       List<Map<String, Object>> rows, int[] counter, int windowId, int parent, String windowKey) {
         com.deviceagent.tools.ActionDeadline.check();
+        if (android.os.SystemClock.uptimeMillis() > readDeadline) throw new SlowRead();
         if (node == null || depth > MAX_DEPTH || counter[0] >= MAX_NODES) return;
         counter[0]++;
         String text = str(node.getText());
