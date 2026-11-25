@@ -90,9 +90,11 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,rela
     const file=phoneFile(id),raw=readJson(file,null);
     if(raw?.agentId)agentIndex.set(raw.agentId,id);
     if(!raw)return null;
-    if(!vault){phoneCache.set(id,structuredClone(raw));return raw;}
-    const {config,migrated}=vault.openPhoneConfig(raw,id);
-    if(migrated)writePrivateJson(file,vault.sealPhoneConfig(config,id));
+    let config=raw;
+    if(vault){const opened=vault.openPhoneConfig(raw,id);config=opened.config;if(opened.migrated)writePrivateJson(file,vault.sealPhoneConfig(config,id));}
+    // Counters used after the last flush (a crash, or calls still running at shutdown) never reach disk,
+    // and the phone refuses a number twice. Counters start from the clock, so moving up to it skips them.
+    for(const link of Object.values(config.links||{}))if(link?.callCounter&&BigInt(link.callCounter)<BigInt(now()))link.callCounter=String(now());
     phoneCache.set(id,structuredClone(config));
     return config;
   };
@@ -481,7 +483,11 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,rela
         return result;
       } catch(e) {
         if(e instanceof ConnectionError)throw e;
-        throw classifyCallError(e,target,id=>markLink(id,{needsReconnect:true,lastError:'The phone removed this link.'}));
+        throw classifyCallError(e,target,id=>markLink(id,{needsReconnect:true,lastError:'The phone removed this link.'}),()=>{
+          if(target.legacy)return;const fresh=readPhoneFile(target.id);if(!fresh)return;
+          for(const link of Object.values(fresh.links||{}))if(link?.callCounter)link.callCounter=String(BigInt(link.callCounter)>BigInt(now())?BigInt(link.callCounter)+1024n:BigInt(now()));
+          writePhoneFile(target.id,fresh);
+        });
       } finally {
         if(fs.existsSync(grantFile(grantId)+'.revoked'))fs.rmSync(grantFile(grantId),{force:true});
       }
@@ -515,7 +521,7 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,rela
 }
 
 /** Turn transport failures into distinct, actionable codes. */
-export function classifyCallError(e,device,markRevoked=()=>{}) {
+export function classifyCallError(e,device,markRevoked=()=>{},resync=()=>{}) {
   const text=String(e?.message||e),jobId=e?.jobId||/job (call-[a-f0-9]+)/.exec(text)?.[1]||null;
   const name=device?.name||'the device';
   if(e?.inputDelivered===false&&e?.code==='relay_busy')return new ConnectionError('relay_busy',`The relay is busy. No command was sent to "${name}". Try again shortly.`,{inputDelivered:false});
@@ -525,6 +531,8 @@ export function classifyCallError(e,device,markRevoked=()=>{}) {
     return new ConnectionError('uncertain',`No result from "${name}" in time. The command may still have run. Check with android_job_status before repeating a write.`,{jobId});
   if(/is offline|last seen/i.test(text))return new ConnectionError('device_offline',`"${name}" is offline. Open Android Backstage on that phone and tap Start. Not using another device.`,{jobId});
   if(/paused|permit expired|access is paused|resume access/i.test(text))return new ConnectionError('device_paused',`Access on "${name}" is paused. Ask the user to resume access in Android Backstage on that phone.`,{jobId});
+  // A reused call number is the gateway's fault, not a removed link. Move past it so the next call works.
+  if(/\breplay\b/i.test(text)){resync(device);return new ConnectionError('uncertain',`"${name}" refused a repeated call number. Backstage fixed the numbering. Check the phone state, then try again.`,{jobId});}
   if(/unauthorized|cannot access that phone|wrong connection identity/i.test(text)){if(device?.id&&!device.legacy)markRevoked(device.id);return new ConnectionError('device_link_revoked',`"${name}" no longer accepts this link (the app was reset or the link was removed on the phone). Reconnect it at the Backstage account page.`,{jobId});}
   if(/no longer matches|result from mismatch/i.test(text))return new ConnectionError('device_link_revoked',`"${name}" is not the phone that was enrolled. Reconnect or replace it at the Backstage account page.`,{jobId});
   if(e?.inputDelivered===false)return new ConnectionError('submission_rejected',text,{inputDelivered:false});
