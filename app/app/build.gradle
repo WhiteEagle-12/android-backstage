@@ -10,8 +10,8 @@ android {
         minSdk 30
         targetSdk 35
         testInstrumentationRunner "com.deviceagent.app.SetupUiCheck"
-        versionCode 254
-        versionName "2.0.10"
+        versionCode 255
+        versionName "2.0.11"
     }
     signingConfigs {
         development {
