@@ -5,6 +5,10 @@ import {writePrivateJson} from './persist.mjs';
 // A single-writer durable job ledger. Never redeliver a claimed job after a
 // restart: its external side effect may have happened before the result saved.
 export const MAX_LANES = 16;
+// A phone that confirms receipt does so within moments. A delivered job with no
+// receipt after this window was lost on the way to the phone; queue it again.
+export const RECEIPT_WINDOW_MS = 9000;
+export const MAX_REDELIVERIES = 3;
 
 export function createQueue({
   dataDir,
@@ -13,12 +17,16 @@ export function createQueue({
   quotaBytes = 512 * 1024 * 1024,
   maxAccountJobs = 500,
   maxAccountBytes = 128 * 1024 * 1024,
+  receiptWindowMs = RECEIPT_WINDOW_MS,
+  log = console,
 } = {}) {
   // polls holds waiting long-polls per device; polling counts open polls. A phone
   // advertises how many jobs it runs at once (lanes); older phones run one.
-  const jobs = new Map(), results = new Map(), watchers = new Map(), polls = new Map(), polling = new Map(), lanes = new Map();
+  const jobs = new Map(), results = new Map(), watchers = new Map(), polls = new Map(), polling = new Map(), lanes = new Map(), receipts = new Set();
   const INFLIGHT_HEADROOM = 256 * 1024;
   const laneLimit = deviceId => lanes.get(deviceId) || 1;
+  // A delivered job back in 'queued' may already be running on the phone; it is not "never sent".
+  const delivered = job => job.state === 'queued' && job.deliveries > 0;
   const dir = dataDir && path.join(dataDir, 'jobs');
   if (dir) fs.mkdirSync(dir, {recursive:true, mode:0o700});
   const sizes = new Map();
@@ -39,17 +47,26 @@ export function createQueue({
   if (dir) for (const file of fs.readdirSync(dir).filter(f=>f.endsWith('.json'))) {
     const job = JSON.parse(fs.readFileSync(path.join(dir,file),'utf8'));
     if (!/^[a-zA-Z0-9_-]+$/.test(job.id)) throw new Error('invalid stored job id');
-    if (job.state === 'running') { job.state='unknown'; job.outcome={error:{message:'relay restarted during execution; outcome unknown; do not retry blindly'}}; persist(job); }
+    if (job.state === 'running' || delivered(job)) { job.state='unknown'; job.outcome={error:{message:'relay restarted during execution; outcome unknown; do not retry blindly'}}; persist(job); }
     jobs.set(job.id, job);sizes.set(job.id,Buffer.byteLength(JSON.stringify(job)));
   }
   function sweep() {
+    const redeliver = new Set();
     for (const [id,job] of jobs) {
+      if (delivered(job) && job.expiresAt <= Date.now()) finish(job,'unknown',{error:{message:'Execution deadline passed; outcome unknown; inspect before retry'}});
       if (job.state === 'queued' && job.expiresAt <= Date.now()) finish(job,'expired');
       if (job.state === 'running' && job.expiresAt <= Date.now()) finish(job,'unknown',{error:{message:'Execution deadline passed; outcome unknown; inspect before retry'}});
+      if (job.state === 'running' && job.ackBy && job.ackBy <= Date.now()) {
+        const again = (job.redeliveries || 0) < MAX_REDELIVERIES;
+        const updated = again ? {...job,state:'queued',ackBy:null,redeliveries:(job.redeliveries||0)+1,updatedAt:Date.now()} : {...job,ackBy:null};
+        persist(updated); Object.assign(job,updated);
+        if (again) { log.log(`job ${id} redelivered to ${job.deviceId}: no receipt (attempt ${job.redeliveries})`); redeliver.add(job.deviceId); }
+      }
       if (Date.now() - job.updatedAt > retentionMs && !['queued','running'].includes(job.state)) {
         jobs.delete(id);sizes.delete(id); if(dir) fs.rmSync(path.join(dir,id+'.json'),{force:true});
       }
     }
+    for (const deviceId of redeliver) wake(deviceId);
   }
   const sweeper = setInterval(sweep,1000); sweeper.unref(); sweep();
   function capacity(deviceId, accountId = null) {
@@ -81,7 +98,9 @@ export function createQueue({
       else if (!nextQueued && j.state === 'queued') nextQueued = j;
     }
     if (running >= laneLimit(deviceId) || !nextQueued) return null;
-    const updated={...nextQueued,state:'running',updatedAt:Date.now()}; persist(updated);Object.assign(nextQueued,updated);
+    const updated={...nextQueued,state:'running',updatedAt:Date.now(),deliveries:(nextQueued.deliveries||0)+1,
+      ackBy:receipts.has(deviceId) && !nextQueued.acked ? Date.now()+receiptWindowMs : null};
+    persist(updated);Object.assign(nextQueued,updated);
     return {id:nextQueued.id,envelope:nextQueued.envelope};
   }
   function wake(deviceId) {
@@ -123,8 +142,16 @@ export function createQueue({
   function release(jobId, deviceId) {
     const job=jobs.get(jobId);
     if(!job || job.deviceId!==deviceId || job.state!=='running' || job.expiresAt<=Date.now())return false;
-    const updated={...job,state:'queued',updatedAt:Date.now()};persist(updated);Object.assign(job,updated);
+    const updated={...job,state:'queued',ackBy:null,deliveries:job.deliveries-1,updatedAt:Date.now()};persist(updated);Object.assign(job,updated);
     wake(deviceId);return true;
+  }
+  // The phone confirms it got the job. A late receipt for a job queued again takes it back.
+  function ack(jobId, deviceId) {
+    const job=jobs.get(jobId);
+    if(!job || job.deviceId!==deviceId)return false;
+    if(job.state!=='running' && !delivered(job))return job.state==='complete';
+    const updated={...job,state:'running',acked:true,ackBy:null};persist(updated);Object.assign(job,updated);
+    return true;
   }
   function waitForResult(jobId, timeoutMs, {deviceId}={}) {
     const job=jobs.get(jobId);
@@ -134,8 +161,10 @@ export function createQueue({
       const timer=setTimeout(()=>{
         results.delete(jobId);
         const job=jobs.get(jobId);
+        const ran=job && (job.state==='running' || delivered(job));
+        if(job && delivered(job))finish(job,'unknown',{error:{message:'device call timed out; outcome unknown; do not retry blindly'}});
         if(job?.state==='queued')finish(job,'expired');
-        const err=new Error(job?.state==='running'?'device call timed out; outcome unknown; do not retry blindly':'device call timed out');err.code='TIMEOUT';reject(err);
+        const err=new Error(ran?'device call timed out; outcome unknown; do not retry blindly':'device call timed out');err.code='TIMEOUT';reject(err);
       },timeoutMs);
       results.set(jobId,{resolve,reject,timer,deviceId,expiresAt});
     });
@@ -144,23 +173,24 @@ export function createQueue({
     const job=jobs.get(jobId), waiter=results.get(jobId);
     if(!job || (deviceId && job.deviceId!==deviceId))return false;
     if(job.state==='complete') return JSON.stringify(job.outcome)===JSON.stringify(outcome);
-    if(!['running','unknown'].includes(job.state))return false;
+    if(!['running','unknown'].includes(job.state) && !delivered(job))return false;
     finish(job,'complete',outcome);wake(job.deviceId);return true;
   }
   function cancel(id) {
     const job=jobs.get(id);if(!job)return null;
-    if(job.state==='queued')finish(job,'cancelled');
-    else if(job.state==='running') {persist({...job,cancelRequested:true});job.cancelRequested=true;}
+    if(job.state==='queued' && !delivered(job))finish(job,'cancelled');
+    // It may be running on the phone: never send it again; the deadline or a late result decides.
+    else if(job.state==='running' || delivered(job)) {const updated={...job,state:'running',ackBy:null,cancelRequested:true};persist(updated);Object.assign(job,updated);}
     return job;
   }
   function recoverDevice(id) {
-    for (const job of jobs.values()) if (job.deviceId === id && job.state === 'running')
+    for (const job of jobs.values()) if (job.deviceId === id && (job.state === 'running' || delivered(job)))
       finish(job,'unknown',{error:{message:'device restarted during execution; outcome unknown; inspect before retry'}});
   }
   function dropDevice(id) {
     for(const job of jobs.values())if(job.deviceId===id && ['queued','running'].includes(job.state))finish(job,'revoked');
     for(const waiter of polls.get(id)||[]){clearTimeout(waiter.timer);waiter.resolve(null);}polls.delete(id);
-    polling.delete(id);
+    polling.delete(id); receipts.delete(id);
   }
   function waitForChange(jobId, timeoutMs, signal) {
     const job = jobs.get(jobId);
@@ -188,10 +218,13 @@ export function createQueue({
     for(const w of results.values()){clearTimeout(w.timer);const e=new Error('relay closed; query job status before retry');e.code='CLOSED';w.reject(e);}results.clear();
     for(const id of [...watchers.keys()]) wakeWatchers(id);
   }
-  return {enqueue,waitForJob,release,waitForResult,waitForChange,complete,cancel,dropDevice,recoverDevice,close,capacity,
+  return {enqueue,waitForJob,release,ack,waitForResult,waitForChange,complete,cancel,dropDevice,recoverDevice,close,capacity,
     // A device may hold one open poll per lane; further polls are duplicates.
     setLanes:(id,count)=>{const n=Number.isInteger(count)?Math.min(Math.max(count,1),MAX_LANES):1;lanes.set(id,n);wake(id);return n;},
     lanes:laneLimit,
+    // Phones that confirm receipt get lost jobs again; older phones never do, so they get each job once.
+    setReceipts:(id,on)=>{if(on)receipts.add(id);else receipts.delete(id);},
+    receipts:id=>receipts.has(id),
     beginPoll:id=>{const open=polling.get(id)||0;if(open>=laneLimit(id))return false;polling.set(id,open+1);return true;},
     endPoll:id=>{const open=(polling.get(id)||1)-1;if(open>0)polling.set(id,open);else polling.delete(id);},
     isPolling:id=>(polling.get(id)||0)>0,

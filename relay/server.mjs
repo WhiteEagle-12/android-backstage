@@ -243,6 +243,7 @@ function sessionPath(url) {
  *   publicUrl?: string,
  *   adminToken?: string,
  *   pollMs?: number,
+ *   receiptWindowMs?: number,
  *   offlineMs?: number,
  *   maxFileMb?: number,
  *   maxFileBytes?: number,
@@ -281,6 +282,8 @@ export async function createRelay(opts = {}) {
     dataDir: zeroRetention ? null : dataDir,
     retentionMs: zeroRetention ? 5 * 60_000 : 86_400_000,
     quotaBytes: zeroRetention ? 96 * 1024 * 1024 : 512 * 1024 * 1024,
+    receiptWindowMs: opts.receiptWindowMs,
+    log,
   });
   const files = createFiles({
     dataDir,
@@ -607,6 +610,9 @@ export async function createRelay(opts = {}) {
         }
         // Phones that run several jobs at once say how many; older phones run one.
         patch.parallelJobs = queue.setLanes(device.id, body.parallelJobs);
+        // Phones that confirm each job at /v1/device/ack say so; jobs they never confirm are sent again.
+        patch.receipts = body.receipts === true;
+        queue.setReceipts(device.id, patch.receipts);
 
         const updated = store.updateDevice(device.id, patch);
         json(res, 200, { ok: true, name: updated.name, pollMs, parallelJobs: patch.parallelJobs });
@@ -624,6 +630,7 @@ export async function createRelay(opts = {}) {
         }
         // After a relay restart, restore the lane count the phone last reported.
         if (device.parallelJobs && queue.lanes(device.id) !== device.parallelJobs) queue.setLanes(device.id, device.parallelJobs);
+        if (device.receipts && !queue.receipts(device.id)) queue.setReceipts(device.id, true);
         if (!queue.beginPoll(device.id)) {
           json(res, 200, { idle: true, duplicate: true });
           return;
@@ -647,6 +654,15 @@ export async function createRelay(opts = {}) {
           res.off("close", closed);
           queue.endPoll(device.id);
         }
+        return;
+      }
+
+      if (url.pathname === "/v1/device/ack" && req.method === "POST") {
+        const device = requireDeviceAuth(req, store);
+        const body = parseJsonBody(await readBody(req));
+        if (!body.id) throw new HttpError(400, "id is required");
+        if (!queue.ack(String(body.id), device.id)) throw new HttpError(404, "unknown job for this device");
+        json(res, 200, { ok: true });
         return;
       }
 

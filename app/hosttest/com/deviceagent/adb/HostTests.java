@@ -27,6 +27,7 @@ public final class HostTests {
         com.deviceagent.crypto.HardeningHostTest.run();
         com.deviceagent.crypto.RequestJournalHostTest.run();
         com.deviceagent.daemon.StartupHostTest.run();
+        com.deviceagent.rpc.ReceivedJobsHostTest.run();
         System.out.println("PASS Startup: failed retries retain counters and revocations");
         LocalAdbAddressHostTest.run();
         System.out.println("PASS LocalAdbAddress");

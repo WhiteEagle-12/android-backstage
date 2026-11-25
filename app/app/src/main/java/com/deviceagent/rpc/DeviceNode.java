@@ -26,6 +26,7 @@ public final class DeviceNode {
     private static final int NEXT_TIMEOUT_MS = 40_000;
     private static final int HELLO_TIMEOUT_MS = 12_000;
     private static final int RESULT_TIMEOUT_MS = 15_000;
+    private static final int ACK_TIMEOUT_MS = 5_000;
     private static final int BACKOFF_MIN_MS = 1_000;
     private static final int BACKOFF_MAX_MS = 30_000;
     /** Jobs this phone runs at once. The relay may grant fewer; older relays grant one. */
@@ -40,6 +41,7 @@ public final class DeviceNode {
     private final AndroidTools tools;
     private final LinkStore links;
     private final Set<HttpURLConnection> activePolls = ConcurrentHashMap.newKeySet();
+    private final ReceivedJobs received = new ReceivedJobs(System::currentTimeMillis);
     private final Runnable onNetworkChange = this::abortActivePolls;
     private volatile String deviceId;
     private volatile boolean running = true;
@@ -131,7 +133,8 @@ public final class DeviceNode {
                         "screenshots", true, "logcat", true, "intents", true, "clipboard", true,
                         "notifications", true, "settings", true, "virtual_display", true, "root", false),
                 "lanAddresses", lan,
-                "parallelJobs", PARALLEL_JOBS));
+                "parallelJobs", PARALLEL_JOBS,
+                "receipts", true));
         DaemonLog.print("hello → " + relayUrl + "/v1/device/hello lan=" + lan);
         String raw = SimpleHttp.postJsonOnce(relayUrl + "/v1/device/hello", body, HELLO_TIMEOUT_MS, token, activePolls);
         Map<String, Object> reply = Json.object(raw.isEmpty() ? "{}" : raw);
@@ -274,13 +277,46 @@ public final class DeviceNode {
         String pendingId = Json.string(reply, "id");
         Object envelope = reply.get("envelope");
         DaemonLog.print("job id=" + pendingId + " envelope=" + (envelope != null));
-        EnvelopeCall.Outcome outcome = EnvelopeCall.handle(links, deviceId, envelope, tools);
-        Map<String, Object> result = outcome.relayResult(pendingId);
-        String safeId = pendingId != null && pendingId.matches("[A-Za-z0-9_-]{1,128}") ? pendingId : java.util.UUID.randomUUID().toString();
+        boolean validId = pendingId != null && pendingId.matches("[A-Za-z0-9_-]{1,128}");
+        String safeId = validId ? pendingId : java.util.UUID.randomUUID().toString();
         java.nio.file.Path pending = java.nio.file.Paths.get(links.statePath("pending-result-" + safeId + ".json"));
-        com.deviceagent.crypto.PrivateState.write(pending, Json.stringify(result));
+        if (validId) {
+            ack(pendingId);
+            ReceivedJobs.Seen seen = received.receive(pendingId);
+            if (seen != ReceivedJobs.Seen.NEW) {
+                // The relay sent it again because a receipt was lost. Never run it twice.
+                DaemonLog.print("job id=" + pendingId + " already " + seen);
+                if (seen == ReceivedJobs.Seen.DONE) deliverPending(pending);
+                return true;
+            }
+        }
+        try {
+            EnvelopeCall.Outcome outcome = EnvelopeCall.handle(links, deviceId, envelope, tools);
+            com.deviceagent.crypto.PrivateState.write(pending, Json.stringify(outcome.relayResult(pendingId)));
+        } finally {
+            if (validId) received.done(pendingId);
+        }
         deliverPending(pending);
         return true;
+    }
+
+    /** Tells the relay this job arrived, so it does not send it again. Older relays answer 404. */
+    private void ack(String jobId) {
+        String json = Json.stringify(Json.mapOf("id", jobId));
+        Thread t = new Thread(() -> {
+            for (int attempt = 0; attempt < 2; attempt++) {
+                try {
+                    SimpleHttp.postJsonOnce(relayUrl + "/v1/device/ack", json, ACK_TIMEOUT_MS, token);
+                    return;
+                } catch (SimpleHttp.HttpException e) {
+                    return;
+                } catch (IOException e) {
+                    DaemonLog.print("ack failed id=" + jobId + ": " + e.getMessage());
+                }
+            }
+        }, "backstage-job-ack");
+        t.setDaemon(true);
+        t.start();
     }
 
     public void stop() {

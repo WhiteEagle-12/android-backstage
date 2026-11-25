@@ -57,6 +57,7 @@ mapfile -t SRC_FILES < <(
     echo "$SRC/com/deviceagent/app/ConnectionRecovery.java"
     echo "$SRC/com/deviceagent/app/RelayLinker.java"
     echo "$SRC/com/deviceagent/rpc/SimpleHttp.java"
+    echo "$SRC/com/deviceagent/rpc/ReceivedJobs.java"
     echo "$SRC/com/deviceagent/daemon/DaemonConfig.java"
     echo "$SRC/com/deviceagent/daemon/DaemonLog.java"
     echo "$SRC/com/deviceagent/daemon/Starter.java"
