@@ -169,6 +169,20 @@ public final class AndroidTools {
         this.inbox = new SharedInbox(baseDir == null ? null : baseDir.resolve("inbox.json"));
         var sweeper=java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r->{Thread t=new Thread(r,"session-lease-cleanup");t.setDaemon(true);return t;});
         sweeper.scheduleWithFixedDelay(()->tasks().sweep(),30,30,java.util.concurrent.TimeUnit.SECONDS);
+        this.lastSelfUpdate=finishSelfUpdate(baseDir);
+    }
+    /** Set when this daemon started after a self-update: the version it replaced and the version now running. */
+    private final Map<String,Object> lastSelfUpdate;
+    private static Map<String,Object> finishSelfUpdate(Path dir){
+        if(dir==null)return null;
+        Path marker=dir.resolve("self-update.json");
+        try{
+            if(!Files.isRegularFile(marker))return null;
+            var started=Json.object(new String(Files.readAllBytes(marker),java.nio.charset.StandardCharsets.UTF_8));Files.delete(marker);
+            var out=Json.mapOf("fromVersion",started.get("fromVersion"),"version",BuildInfo.VERSION,"expectedVersionCode",started.get("expectedVersionCode"),"requestedAt",started.get("requestedAt"),"restartedAt",System.currentTimeMillis());
+            com.deviceagent.daemon.DaemonLog.print("self-update finished: "+started.get("fromVersion")+" -> "+BuildInfo.VERSION);
+            return out;
+        }catch(Exception e){return null;}
     }
 
     public PrivacyFence privacyFence() { return privacyFence; }
@@ -397,7 +411,7 @@ public final class AndroidTools {
             case "clipboard" -> device.interaction("clipboard",sub);
             case "media" -> device.interaction("media",sub);
             case "location" -> device.interaction("location",sub);
-            case "control" -> {Object act=sub.remove("action");if(act!=null)sub.put("operation",act);yield device.interaction("device_control",sub);}
+            case "control" -> {Object act=sub.remove("action");if(act!=null)sub.put("operation",act);var reply=new LinkedHashMap<>(device.interaction("device_control",sub));if("status".equals(act)){reply.put("appVersion",BuildInfo.VERSION);if(lastSelfUpdate!=null)reply.put("lastSelfUpdate",lastSelfUpdate);}yield reply;}
             case "audio" -> {if(sub.get("package") instanceof String p)privacyFence.requireAllowed(p);Object act=sub.remove("action");if(act!=null)sub.put("operation",act);yield device.interaction("audio",sub);}
             default -> throw new IllegalArgumentException("Unknown device operation");
         };
@@ -676,6 +690,7 @@ public final class AndroidTools {
         }
         status.put("model", lines.length > 2 ? lines[2].trim() : "");
         status.put("serial", lines.length > 3 ? lines[3].trim() : "");
+        if (lastSelfUpdate != null) status.put("lastSelfUpdate", lastSelfUpdate);
         status.put("capabilities", Json.mapOf(
                 "shell", true, "install_packages", true, "input_injection", true,
                 "screenshots", true, "logcat", true, "intents", true, "clipboard", true,
@@ -1162,6 +1177,9 @@ public final class AndroidTools {
             }
         }
 
+        long expectedCode = info.get("versionCode") instanceof Number n ? n.longValue() : 0L;
+        // The new daemon reads this marker at start and reports the finished update in status.
+        try{Files.write(java.nio.file.Paths.get(Starter.DIR,"self-update.json"),Json.stringify(Json.mapOf("fromVersion",BuildInfo.VERSION,"expectedVersionCode",expectedCode,"requestedAt",System.currentTimeMillis())).getBytes(java.nio.charset.StandardCharsets.UTF_8));}catch(Exception ignored){}
         // Stop taking relay jobs: anything started now would die with this process.
         com.deviceagent.rpc.DeviceNode.drain();
         ProcessResult install = device.exec(
@@ -1203,8 +1221,10 @@ public final class AndroidTools {
         out.put("apk", remote);
         out.put("bytes", size);
         out.put("log", log);
-        out.put("expect", "inbound :18422 drops now and returns in a few seconds; poll /health, then read "
-                + log + " with android.shell");
+        out.put("restartExpected", true);
+        out.put("fromVersion", BuildInfo.VERSION);
+        out.put("expectedVersionCode", expectedCode);
+        out.put("expect", "The phone restarts its service now and is back in a few seconds. Then android.device control status shows lastSelfUpdate with the new version.");
         return out;
     }
 
