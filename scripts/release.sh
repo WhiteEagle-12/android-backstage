@@ -32,6 +32,7 @@ got="$("$bt/apksigner" verify --print-certs "$out/signed.apk" | sed -n 's/.*cert
 
 dest="$repo/app/app/build/outputs/apk/release/app-release.apk"
 mkdir -p "$(dirname "$dest")"; cp "$out/signed.apk" "$dest"
-"$bt/aapt2" dump badging "$dest" | head -1 | grep -o "versionCode='[0-9]*' versionName='[^']*'"
+"$bt/aapt2" dump badging "$dest" > "$out/badging"
+grep -m1 -o "versionCode='[0-9]*' versionName='[^']*'" "$out/badging"
 echo "Signed: $dest (sha256 $(sha256sum "$dest" | cut -d' ' -f1), commit $(git rev-parse --short HEAD))"
 if [[ "$publish" == 1 ]]; then bash "$repo/scripts/publish-apk.sh" --github-release "$dest"; fi
