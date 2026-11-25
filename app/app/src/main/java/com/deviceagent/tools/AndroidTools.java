@@ -456,6 +456,7 @@ public final class AndroidTools {
         if(!(begun.get("display") instanceof Number d))return begun;
         int display=d.intValue();
         DisplayTurn turn=displayLock(display);
+        boolean refused=false;
         try{
             if(!takeTurn(turn))return begun;
             try(var scope=device.accessibilityScope()){
@@ -470,10 +471,13 @@ public final class AndroidTools {
                     try{opened.put("activityTasks",tasksOnDisplay(display));}catch(RuntimeException ignored){}
                 }
                 Map<String,Object> merged=new LinkedHashMap<>(opened);
+                if("app_open_elsewhere".equals(opened.get("code"))&&!args.containsKey("join")){merged.put("sessionFinished",true);refused=true;return merged;}
                 for(String k:List.of("sessionId","mode","display","leaseExpiresAt","temporaryDirectory"))if(begun.containsKey(k))merged.put(k,begun.get(k));
                 return merged;
             }finally{turn.release();}
         }catch(InterruptedException e){Thread.currentThread().interrupt();return begun;}
+        // The app cannot open on this private screen, so the new session has nothing to do. Release it.
+        finally{if(refused)tasks().finish(Json.mapOf("sessionId",begun.get("sessionId")),owner);}
     }
     private Map<String,Object> recordDisplay(Map<String,Object> args){
         int display=((Number)args.get("display")).intValue();

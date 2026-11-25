@@ -118,5 +118,6 @@ public final class SemanticHostTest {
         String session="session_"+"a".repeat(32);
         ToolCatalog.validate("android.wait",Map.of("sessionId",session,"verify",condition));
         ToolCatalog.validate("android.wait",Map.of("sessionId",session,"verify",EvidenceHostTest.exists("Done")));
+        ToolCatalog.validate("android.wait",Map.of("sessionId",session,"verify",Map.of("kind","exists","selector",Map.of("label","Brightness","role","slider"))));
     }
 }

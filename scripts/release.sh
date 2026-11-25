@@ -18,7 +18,7 @@ bt="$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/build-tools/*/ | sort -V | tail
 out="$(mktemp -d)"; trap 'rm -rf "$out"' EXIT
 
 # Tests, lint and an APK signed with the public development key; the production key never leaves this PC.
-hxbuild -C "$repo" -a app/app/build/outputs/apk/release/app-release.apk -o "$out" -- bash -c \
+hxbuild -C "$repo" --include app/keystore/development.jks -a app/app/build/outputs/apk/release/app-release.apk -o "$out" -- bash -c \
   'bash app/hosttest/run.sh && cd app && BACKSTAGE_KEYSTORE="$PWD/keystore/development.jks" BACKSTAGE_STORE_PASSWORD=android BACKSTAGE_KEY_ALIAS=development BACKSTAGE_KEY_PASSWORD=android ./gradlew :app:testReleaseUnitTest :app:lintVitalRelease :app:assembleRelease --no-daemon'
 raw="$(find "$out" -name app-release.apk | head -1)"
 [[ -f "$raw" ]] || { echo "The build made no APK." >&2; exit 1; }

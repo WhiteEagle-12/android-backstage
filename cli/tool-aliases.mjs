@@ -75,6 +75,8 @@ export function normalizeArguments(tool, rawArgs) {
   if (short === 'file' && args.operation === 'fetch' && has(args, 'path') && !has(args, 'remote')) {
     args.remote = args.path; delete args.path;
   }
+  // {role:"scroll"} alone names no container; the phone then picks the main scroll area.
+  if (short === 'scroll' && isObject(args.selector) && Object.keys(args.selector).length === 1 && args.selector.role === 'scroll') delete args.selector;
   if ((short === 'scroll' || short === 'scroll_until') && isObject(args.until)) {
     let until = { ...args.until };
     if (has(until, 'maxScrolls') && !has(args, 'maxScrolls')) { args.maxScrolls = until.maxScrolls; delete until.maxScrolls; }

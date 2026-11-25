@@ -118,7 +118,7 @@ function legacyToolCall(name, rawArgs) {
 }
 
 /** Translate consolidated MCP tool calls to phone wire names so every 2.x phone (old and new) executes them seamlessly. */
-function toPhoneWire(engine, rest) {
+export function toPhoneWire(engine, rest) {
   if (engine === 'android.task') {
     const { operation, ...args } = rest;
     if (operation === 'handoff') return ['android.handoff', args];
@@ -137,7 +137,8 @@ function toPhoneWire(engine, rest) {
     if (operation === 'control') return ['android.device_control', { operation: action, ...args }];
     if (operation === 'audio') return ['android.audio', { operation: action, ...args }];
     if (operation === 'media') return ['android.media', { action, ...args }];
-    if (operation === 'brightness') return [engine, rest];
+    // The phone sets brightness as a device control; a read comes back in control status.
+    if (operation === 'brightness') return ['android.device_control', { operation: args.value === undefined ? 'status' : 'brightness', ...args }];
     return ['android.' + operation, args];
   }
   return [engine, rest];

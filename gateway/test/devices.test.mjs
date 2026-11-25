@@ -405,8 +405,8 @@ test('the hosted handler applies aliases, times every call and explains older ph
   const oldReject={ok:false,outcome:'failed',code:'invalid_argument',inputDelivered:false,error:'Expected one of target, selector'};
   const scroll=await h.call(token,'android_scroll',{device:'phone',sessionId,direction:'down'},phone,call=>{assert.equal(call.name,'android.scroll');assert.equal(call.arguments.direction,'down');assert.ok(call.arguments.requestId);return oldReject;});
   assert.match(scroll.structuredContent.error,/"label":"Scroll area","role":"scroll"/);assert.equal(scroll.structuredContent.phoneError,oldReject.error);
-  // Brightness goes to android.device unchanged; an older phone gets an update message.
-  const bright=await h.call(token,'android_device',{device:'phone',operation:'brightness',value:120},phone,call=>{assert.equal(call.name,'android.device');assert.equal(call.arguments.operation,'brightness');assert.equal(call.arguments.value,120);return {...oldReject,error:'operation must be one of'};});
+  // Brightness goes to the phone as a device control; an older phone gets an update message.
+  const bright=await h.call(token,'android_device',{device:'phone',operation:'brightness',value:120},phone,call=>{assert.equal(call.name,'android.device_control');assert.equal(call.arguments.operation,'brightness');assert.equal(call.arguments.value,120);return {...oldReject,error:'operation must be one of'};});
   assert.equal(bright.structuredContent.code,'app_update_required');
   // A market: URL opens as a VIEW intent on every phone version.
   await h.call(token,'android_open',{device:'phone',sessionId,url:'market://details?id=org.videolan.vlc'},phone,call=>{assert.deepEqual(call.arguments.intent,{action:'android.intent.action.VIEW',data:'market://details?id=org.videolan.vlc'});assert.ok(!('url' in call.arguments));return {outcome:'succeeded'};});

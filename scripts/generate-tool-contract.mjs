@@ -4,7 +4,7 @@ const str=(extra={})=>({type:'string',minLength:1,...extra});
 const num=(min,max)=>({type:'integer',minimum:min,maximum:max});
 const obj=(properties,required=[])=>({type:'object',properties,required,additionalProperties:false});
 const en=(...values)=>({type:'string',enum:values});
-const selector={...obj({label:str({maxLength:1000}),role:en('button','field','scroll','switch','checkbox','radio','link'),context:str({maxLength:1000}),resourceId:str({maxLength:1000})}),anyOf:[{required:['label']},{required:['resourceId']}]};
+const selector={...obj({label:str({maxLength:1000}),role:en('button','field','scroll','slider','switch','checkbox','radio','link'),context:str({maxLength:1000}),resourceId:str({maxLength:1000})}),anyOf:[{required:['label']},{required:['resourceId']}]};
 const leaves=[
  ...['exists','absent'].map(kind=>obj({kind:{const:kind},selector},['kind','selector'])),
  obj({kind:{const:'appeared'},selector,observation:str()},['kind','selector','observation']),
@@ -92,7 +92,7 @@ add('file','Files: pull (single-call for large files with saveTo or download URL
   {properties:{operation:{const:'fetch'}},required:['url','remote','requestId'],not:{anyOf:['path','offset','length','fileId','saveTo','local'].map(k=>({required:[k]}))}}
  ]
 });
-add('device','Utilities: clipboard (no text reads, text writes), media (no action reads now playing), location, control (volume/rotation/wifi/bluetooth), brightness (no value reads, value 0-255 sets; app 2.0.10+), audio. Screen recording is android.task record_start.',{
+add('device','Utilities: clipboard (no text reads, text writes), media (no action reads now playing), location, control (volume/rotation/wifi/bluetooth), brightness (no value reads; value 0-255 sets, in a foreground session like control; app 2.0.10+), audio. Screen recording is android.task record_start.',{
  ...obj({
   operation:en('clipboard','media','location','control','audio','brightness'),
   action:en('status','play','pause','next','previous','seek','volume','rotation','wifi','bluetooth','capture','inject','stop','renew'),

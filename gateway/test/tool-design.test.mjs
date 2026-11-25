@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import Ajv from 'ajv';
-import {strictCatalogue,catalogue as advertised,normalizeToolCall,explainOldPhone,callTiming,SERVER_INSTRUCTIONS} from '../server.mjs';
+import {strictCatalogue,catalogue as advertised,normalizeToolCall,explainOldPhone,callTiming,toPhoneWire,SERVER_INSTRUCTIONS} from '../server.mjs';
 import {mcpTools} from '../../cli/tools.mjs';
 import {invalidArguments,exampleArguments} from '../validation.mjs';
 
@@ -174,4 +174,19 @@ test('timing keeps phone fields and adds gateway and network time',()=>{
 test('instructions say where recording, clipboard, media, brightness, files and install live',()=>{
  for(const words of [/screen recording `android_task` `record_start`/,/clipboard, media/,/brightness/,/files `android_file`/,/APK install `android_install`/])assert.match(SERVER_INSTRUCTIONS,words);
  assert.match(advertised.find(t=>t.name==='android_device').description,/Screen recording is android_task record_start/);
+});
+
+test('brightness goes to the phone as a device control',()=>{
+ assert.deepEqual(toPhoneWire('android.device',{operation:'brightness',value:120,sessionId}),['android.device_control',{operation:'brightness',value:120,sessionId}]);
+ assert.deepEqual(toPhoneWire('android.device',{operation:'brightness'}),['android.device_control',{operation:'status'}]);
+});
+
+test('a scroll selector with only role scroll means the main scroll area',()=>{
+ const n=normalizeToolCall('android_scroll',{sessionId,direction:'down',selector:{role:'scroll'}});
+ assert.equal(n.args.selector,undefined);assert.ok(call('android_scroll',{sessionId,direction:'down',selector:{role:'scroll'}}).ok);
+ assert.deepEqual(normalizeToolCall('android_scroll',{sessionId,direction:'down',selector:{role:'scroll',label:'Feed'}}).args.selector,{role:'scroll',label:'Feed'});
+});
+
+test('selectors accept the slider role',()=>{
+ assert.ok(call('android_tap',{sessionId,selector:{label:'Brightness',role:'slider'}}).ok);
 });
