@@ -48,15 +48,28 @@ final class SetupFlow {
 
     private void header() {
         LinearLayout row = k.row(); row.setPadding(0, k.dp(4), 0, k.dp(8));
+        boolean main = "main".equals(a.session.page);
+        if (!main) {
+            android.widget.FrameLayout back = k.iconButton(
+                    AppIcons.ARROW_LEFT, k.ink, k.raised, k.stroke,
+                    38, 19, 19, AppCopy.BACK,
+                    guard(() -> { a.session.page = "main"; a.session.message = ""; a.renderNow(); }));
+            LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(k.dp(38), k.dp(38));
+            bp.setMarginEnd(k.dp(10));
+            row.addView(back, bp);
+        }
         ImageView mark = new ImageView(a); mark.setImageResource(R.drawable.backstage_art); mark.setScaleType(ImageView.ScaleType.FIT_CENTER);
         mark.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        row.addView(mark, new LinearLayout.LayoutParams(k.dp(36), k.dp(36)));
+        row.addView(mark, new LinearLayout.LayoutParams(k.dp(34), k.dp(34)));
         TextView name = k.text(null, AppCopy.APP_NAME, 19, k.ink, true); name.setPadding(k.dp(10), 0, 0, 0);
         row.addView(name, new LinearLayout.LayoutParams(0, -2, 1));
-        boolean main = "main".equals(a.session.page);
-        android.widget.Button nav = k.buttonView(main ? AppCopy.HELP : AppCopy.BACK, UiKit.QUIET);
-        nav.setOnClickListener(v -> guard(() -> { a.session.page = main ? "help" : "main"; a.session.message = ""; a.renderNow(); }).run());
-        row.addView(nav);
+        if (main) {
+            android.widget.FrameLayout help = k.iconButton(
+                    AppIcons.HELP, k.muted, k.raised, k.stroke,
+                    38, 19, 19, AppCopy.HELP,
+                    guard(() -> { a.session.page = "help"; a.session.message = ""; a.renderNow(); }));
+            row.addView(help, new LinearLayout.LayoutParams(k.dp(38), k.dp(38)));
+        }
         root.addView(row);
     }
 

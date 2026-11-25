@@ -10,7 +10,9 @@ import android.graphics.drawable.Drawable;
 
 /** Line icons drawn on a 24-unit grid, so they stay crisp at any density and take any tint. */
 final class AppIcons extends Drawable {
-    static final int LIVE = 0, ACTIVITY = 1, ASSISTANTS = 2, SETTINGS = 3, CHEVRON = 4, SEARCH = 5;
+    static final int LIVE = 0, ACTIVITY = 1, ASSISTANTS = 2, SETTINGS = 3, CHEVRON = 4, SEARCH = 5,
+            ARROW_LEFT = 6, CHEVRON_LEFT = 7, STOP = 8, KEYBOARD = 9, SEND = 10, BACKSPACE = 11,
+            RETURN_KEY = 12, HANDOFF = 13, USER = 14, AGENT = 15, CLOSE = 16, HELP = 17;
 
     private static final float[] SLIDER_Y = {6.5f, 12f, 17.5f}, SLIDER_X = {15.5f, 8.5f, 13.5f};
     private final int kind;
@@ -37,7 +39,7 @@ final class AppIcons extends Drawable {
         canvas.save();
         canvas.translate(getBounds().left + (getBounds().width() - size) / 2f, getBounds().top + (getBounds().height() - size) / 2f);
         canvas.scale(u, u);
-        stroke.setStrokeWidth(1.8f);
+        stroke.setStrokeWidth(1.85f);
         path.reset();
         switch (kind) {
             case LIVE:
@@ -70,9 +72,95 @@ final class AppIcons extends Drawable {
                 path.moveTo(9.5f, 6f); path.lineTo(15.5f, 12f); path.lineTo(9.5f, 18f);
                 canvas.drawPath(path, stroke);
                 break;
+            case CHEVRON_LEFT:
+                path.moveTo(14.5f, 6f); path.lineTo(8.5f, 12f); path.lineTo(14.5f, 18f);
+                canvas.drawPath(path, stroke);
+                break;
+            case ARROW_LEFT:
+                canvas.drawLine(19f, 12f, 5.5f, 12f, stroke);
+                path.moveTo(11.5f, 6f); path.lineTo(5.5f, 12f); path.lineTo(11.5f, 18f);
+                canvas.drawPath(path, stroke);
+                break;
             case SEARCH:
                 canvas.drawCircle(10.5f, 10.5f, 6f, stroke);
                 canvas.drawLine(15f, 15f, 20f, 20f, stroke);
+                break;
+            case STOP:
+                oval.set(6.5f, 6.5f, 17.5f, 17.5f);
+                canvas.drawRoundRect(oval, 2.6f, 2.6f, fill);
+                break;
+            case KEYBOARD:
+                oval.set(2.8f, 6f, 21.2f, 18f);
+                canvas.drawRoundRect(oval, 2.5f, 2.5f, stroke);
+                canvas.drawCircle(6.8f, 9.8f, 0.9f, fill);
+                canvas.drawCircle(10.3f, 9.8f, 0.9f, fill);
+                canvas.drawCircle(13.7f, 9.8f, 0.9f, fill);
+                canvas.drawCircle(17.2f, 9.8f, 0.9f, fill);
+                canvas.drawCircle(8.5f, 12.6f, 0.9f, fill);
+                canvas.drawCircle(12f, 12.6f, 0.9f, fill);
+                canvas.drawCircle(15.5f, 12.6f, 0.9f, fill);
+                canvas.drawLine(8.2f, 15.2f, 15.8f, 15.2f, stroke);
+                break;
+            case SEND:
+                stroke.setStrokeWidth(2.1f);
+                canvas.drawLine(12f, 18.5f, 12f, 5.5f, stroke);
+                path.moveTo(6.5f, 11f); path.lineTo(12f, 5.5f); path.lineTo(17.5f, 11f);
+                canvas.drawPath(path, stroke);
+                break;
+            case BACKSPACE:
+                path.moveTo(9.2f, 6.5f); path.lineTo(20.2f, 6.5f); path.lineTo(20.2f, 17.5f);
+                path.lineTo(9.2f, 17.5f); path.lineTo(3.8f, 12f); path.close();
+                canvas.drawPath(path, stroke);
+                canvas.drawLine(12.3f, 9.8f, 16.5f, 14.2f, stroke);
+                canvas.drawLine(16.5f, 9.8f, 12.3f, 14.2f, stroke);
+                break;
+            case RETURN_KEY:
+                path.moveTo(18.5f, 6.5f); path.lineTo(18.5f, 13.5f); path.lineTo(6f, 13.5f);
+                canvas.drawPath(path, stroke);
+                path.reset();
+                path.moveTo(10f, 9.5f); path.lineTo(6f, 13.5f); path.lineTo(10f, 17.5f);
+                canvas.drawPath(path, stroke);
+                break;
+            case HANDOFF:
+                // Phone frame with outward arrow to top-right.
+                path.moveTo(12.2f, 4.5f); path.lineTo(6.8f, 4.5f);
+                path.quadTo(4.8f, 4.5f, 4.8f, 6.5f);
+                path.lineTo(4.8f, 17.8f);
+                path.quadTo(4.8f, 19.8f, 6.8f, 19.8f);
+                path.lineTo(13.2f, 19.8f);
+                path.quadTo(15.2f, 19.8f, 15.2f, 17.8f);
+                path.lineTo(15.2f, 13.5f);
+                canvas.drawPath(path, stroke);
+                canvas.drawLine(8.8f, 17.1f, 11.2f, 17.1f, stroke);
+                canvas.drawLine(12.5f, 11.5f, 19.5f, 4.5f, stroke);
+                path.reset();
+                path.moveTo(14.8f, 4.5f); path.lineTo(19.5f, 4.5f); path.lineTo(19.5f, 9.2f);
+                canvas.drawPath(path, stroke);
+                break;
+            case USER:
+                canvas.drawCircle(12f, 8.2f, 3.3f, filled ? fill : stroke);
+                path.moveTo(5.6f, 19f);
+                path.quadTo(5.6f, 14.2f, 12f, 14.2f);
+                path.quadTo(18.4f, 14.2f, 18.4f, 19f);
+                canvas.drawPath(path, stroke);
+                break;
+            case AGENT:
+                spark(path, 12f, 12f, 7.6f, 2.2f);
+                canvas.drawPath(path, filled ? fill : stroke);
+                break;
+            case CLOSE:
+                canvas.drawLine(6.5f, 6.5f, 17.5f, 17.5f, stroke);
+                canvas.drawLine(17.5f, 6.5f, 6.5f, 17.5f, stroke);
+                break;
+            case HELP:
+                canvas.drawCircle(12f, 12f, 8.8f, stroke);
+                path.moveTo(9.4f, 9.6f);
+                path.cubicTo(9.4f, 7.8f, 10.6f, 7f, 12f, 7f);
+                path.cubicTo(13.6f, 7f, 14.7f, 8f, 14.7f, 9.4f);
+                path.cubicTo(14.7f, 10.7f, 13.6f, 11.3f, 12.5f, 12f);
+                path.cubicTo(12f, 12.3f, 12f, 12.8f, 12f, 13.6f);
+                canvas.drawPath(path, stroke);
+                canvas.drawCircle(12f, 16.5f, 1f, fill);
                 break;
             default:
         }

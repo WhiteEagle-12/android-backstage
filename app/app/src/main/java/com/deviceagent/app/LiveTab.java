@@ -11,7 +11,6 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.animation.DecelerateInterpolator;
-import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -223,21 +222,21 @@ final class LiveTab extends TabPage {
         int total = sessions.size();
         int frontIdx = resolveDeckIndex();
 
-        // Header row: eyebrow + deck switcher controls when multiple screens are stacked
+        // Header row: clean section title + vector deck arrows when multiple screens are stacked
         LinearLayout header = k.row();
-        header.setPadding(k.dp(2), k.dp(20), k.dp(2), k.dp(4));
-        TextView secLabel = k.text(null, AppCopy.SECTION_ACTIVE_SCREENS.toUpperCase(java.util.Locale.ROOT), 11, k.dim, false);
-        secLabel.setTypeface(android.graphics.Typeface.MONOSPACE);
-        secLabel.setLetterSpacing(0.12f);
+        header.setPadding(k.dp(4), k.dp(20), k.dp(2), k.dp(4));
+        TextView secLabel = k.text(null, AppCopy.SECTION_ACTIVE_SCREENS, 13.5f, k.muted, true);
         secLabel.setAccessibilityHeading(true);
         header.addView(secLabel, new LinearLayout.LayoutParams(0, -2, 1));
         if (total > 1) {
             k.pill(header, (frontIdx + 1) + " / " + total, k.green, k.greenSoft);
-            Button prev = deckArrowButton("‹", () -> flipDeck(header, -1));
-            Button next = deckArrowButton("›", () -> flipDeck(header, 1));
-            LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(k.dp(34), k.dp(30));
+            FrameLayout prev = k.iconButton(AppIcons.CHEVRON_LEFT, k.ink, k.raised, k.strokeStrong,
+                    32, 16, 16, AppCopy.DESC_PREV_SCREEN, () -> flipDeck(header, -1));
+            FrameLayout next = k.iconButton(AppIcons.CHEVRON, k.ink, k.raised, k.strokeStrong,
+                    32, 16, 16, AppCopy.DESC_NEXT_SCREEN, () -> flipDeck(header, 1));
+            LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(k.dp(32), k.dp(32));
             np.setMarginStart(k.dp(6));
-            header.addView(prev, new LinearLayout.LayoutParams(k.dp(34), k.dp(30)));
+            header.addView(prev, new LinearLayout.LayoutParams(k.dp(32), k.dp(32)));
             header.addView(next, np);
         }
         box.addView(header, new LinearLayout.LayoutParams(-1, -2));
@@ -285,15 +284,6 @@ final class LiveTab extends TabPage {
 
         box.addView(deck, new LinearLayout.LayoutParams(-1, -2));
         lastPreviewAt = 0;
-    }
-
-    private Button deckArrowButton(String glyph, Runnable action) {
-        Button b = k.buttonView(glyph, UiKit.SECONDARY);
-        b.setTextSize(16);
-        b.setMinHeight(k.dp(30)); b.setMinimumHeight(k.dp(30));
-        b.setPadding(0, 0, 0, 0);
-        b.setOnClickListener(v -> action.run());
-        return b;
     }
 
     private void attachDeckSwipe(View front, View nextCard) {
@@ -374,17 +364,23 @@ final class LiveTab extends TabPage {
         card.setPadding(k.dp(14), k.dp(14), k.dp(14), k.dp(14));
         card.setBackground(k.shape(k.card, 14, inControl ? k.amber : k.strokeStrong));
 
-        // Header row: App name + live state pills
+        // Header row: App name + live state pill + compact vector Stop button
         LinearLayout head = k.row();
         LinearLayout titleCol = k.column();
         k.title(titleCol, label);
         head.addView(titleCol, new LinearLayout.LayoutParams(0, -2, 1));
-        if (inControl) k.pill(head, AppCopy.LABEL_IN_CONTROL_SHORT, k.amber, k.amberSoft);
-        else k.pill(head, foreground ? AppCopy.LABEL_MAIN_SCREEN : AppCopy.LABEL_AGENT_ACTIVE, k.green, k.greenSoft);
+        if (inControl) k.pill(head, AppCopy.CONTROL_YOU, k.amber, k.amberSoft);
+        else k.pill(head, foreground ? AppCopy.LABEL_MAIN_SCREEN : AppCopy.CONTROL_AGENT, k.green, k.greenSoft);
         if (Boolean.TRUE.equals(s.get("recording"))) k.pill(head, AppCopy.LABEL_RECORDING, k.danger, k.dangerSoft);
+        FrameLayout stopIcon = k.iconButton(
+                AppIcons.STOP, k.danger, k.dangerSoft, android.graphics.Color.parseColor("#4A1E21"),
+                32, 14, 16, AppCopy.ACTION_STOP, () -> stop(id));
+        LinearLayout.LayoutParams stp = new LinearLayout.LayoutParams(k.dp(32), k.dp(32));
+        stp.setMarginStart(k.dp(2));
+        head.addView(stopIcon, stp);
         card.addView(head, new LinearLayout.LayoutParams(-1, -2));
 
-        // Full-width live preview canvas (tap to open edge-to-edge live takeover viewer)
+        // Full-width live preview canvas (tap to open edge-to-edge live viewer)
         if (display > 0) {
             long w = DaemonClient.num(s, "width"), h = DaemonClient.num(s, "height");
             int availW = Math.max(k.dp(240), Math.min(screenWidth, k.dp(640)) - k.dp(56));
@@ -410,18 +406,17 @@ final class LiveTab extends TabPage {
             card.addView(frame, fp);
         }
 
-        // Full-width action row
-        LinearLayout actions = k.buttonRow(card);
+        // Clean 2-action control bar aligned with LiveScreenActivity
         if (!foreground && display > 0) {
+            LinearLayout actions = k.buttonRow(card);
             if (inControl) {
-                k.rowButton(actions, AppCopy.ACTION_TAKE_OVER, UiKit.AMBER, () -> openLive(id, display, pkg, true, "", "confirm", "", "", false));
+                k.rowButton(actions, AppCopy.ACTION_OPEN_SCREEN, UiKit.AMBER, () -> openLive(id, display, pkg, true, "", "confirm", "", "", false));
                 k.rowButton(actions, AppCopy.ACTION_HAND_BACK, UiKit.PRIMARY, () -> setTakeover(id, false));
             } else {
-                k.rowButton(actions, AppCopy.ACTION_TAKE_OVER, UiKit.PRIMARY, () -> openLive(id, display, pkg, false, "", "confirm", "", "", true));
-                k.rowButton(actions, AppCopy.ACTION_WATCH, UiKit.SECONDARY, () -> openLive(id, display, pkg, false, "", "confirm", "", "", false));
+                k.rowButton(actions, AppCopy.ACTION_OPEN_SCREEN, UiKit.SECONDARY, () -> openLive(id, display, pkg, false, "", "confirm", "", "", false));
+                k.rowButton(actions, AppCopy.ACTION_TAKE_CONTROL, UiKit.PRIMARY, () -> openLive(id, display, pkg, false, "", "confirm", "", "", true));
             }
         }
-        k.rowButton(actions, AppCopy.ACTION_STOP, UiKit.DANGER, () -> stop(id));
         return card;
     }
 
@@ -459,7 +454,7 @@ final class LiveTab extends TabPage {
         loadSessions();
         if (a.pendingConfirmations > 0 || !confirmations.isEmpty() || a.focusConfirm != null) loadConfirmations();
         long now = SystemClock.elapsedRealtime();
-        if (now - lastPreviewAt >= 700) { lastPreviewAt = now; loadPreviews(); }
+        if (now - lastPreviewAt >= 500) { lastPreviewAt = now; loadPreviews(); }
     }
 
     private void loadSessions() {

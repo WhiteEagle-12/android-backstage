@@ -14,6 +14,8 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -110,13 +112,38 @@ final class UiKit {
         TextView v = text(parent, value, 14, muted, false); v.setPadding(0, dp(4), 0, 0); return v;
     }
 
-    /** Monospace eyebrow section label matching .eyebrow on android-backstage.com. */
+    /** Clean title-case section heading without all-caps eyebrow clutter. */
     TextView section(LinearLayout parent, CharSequence value) {
-        TextView v = text(parent, value == null ? "" : value.toString().toUpperCase(java.util.Locale.ROOT), 11, dim, false);
-        v.setTypeface(Typeface.MONOSPACE);
-        v.setLetterSpacing(0.12f); v.setPadding(dp(2), dp(22), 0, dp(4));
+        TextView v = text(parent, value == null ? "" : value, 13.5f, muted, true);
+        v.setPadding(dp(4), dp(20), 0, dp(4));
         v.setAccessibilityHeading(true);
         return v;
+    }
+
+    /** Crisp vector icon button with ripple feedback and centered 24-unit AppIcons drawable. */
+    FrameLayout iconButton(
+            int iconKind, int iconColor, int fillColor, int strokeColor,
+            int sizeDp, int iconDp, float radiusDp, CharSequence contentDesc, Runnable action) {
+        FrameLayout btn = new FrameLayout(context);
+        btn.setMinimumWidth(dp(sizeDp)); btn.setMinimumHeight(dp(sizeDp));
+        btn.setBackground(ripple(shape(fillColor, radiusDp, strokeColor), radiusDp));
+        btn.setClickable(true); btn.setFocusable(true);
+        if (contentDesc != null) btn.setContentDescription(contentDesc);
+        AppIcons icon = new AppIcons(iconKind, iconColor);
+        ImageView iv = new ImageView(context);
+        iv.setImageDrawable(icon);
+        iv.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        FrameLayout.LayoutParams ip = new FrameLayout.LayoutParams(dp(iconDp), dp(iconDp), Gravity.CENTER);
+        btn.addView(iv, ip);
+        btn.setTag(icon);
+        if (action != null) btn.setOnClickListener(v -> action.run());
+        return btn;
+    }
+
+    void styleIconButton(FrameLayout btn, int iconColor, int fillColor, int strokeColor, float radiusDp) {
+        if (btn == null) return;
+        btn.setBackground(ripple(shape(fillColor, radiusDp, strokeColor), radiusDp));
+        if (btn.getTag() instanceof AppIcons) ((AppIcons) btn.getTag()).setColor(iconColor);
     }
 
     void space(LinearLayout parent, int height) {

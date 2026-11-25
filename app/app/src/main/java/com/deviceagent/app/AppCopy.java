@@ -59,6 +59,8 @@ public final class AppCopy {
     public static final String SECTION_CONFIRMATIONS = "Needs your input";
     public static final String ACTION_APPROVE = "Approve";
     public static final String ACTION_TAKE_OVER = "Take over";
+    public static final String ACTION_TAKE_CONTROL = "Take control";
+    public static final String ACTION_OPEN_SCREEN = "Open screen";
     public static final String ACTION_WATCH = "Watch";
     public static final String ACTION_HAND_BACK = "Hand back";
     public static final String ACTION_DONE_HAND_BACK = "Done — hand back";
@@ -68,6 +70,13 @@ public final class AppCopy {
     public static final String ACTION_ENTER = "Enter";
     public static final String ACTION_DELETE_KEY = "Del";
     public static final String TYPE_HINT = "Type on screen…";
+    public static final String CONTROL_AGENT = "Agent";
+    public static final String CONTROL_YOU = "You";
+    public static final String LABEL_PAUSED_FOR_YOU = "Paused for you";
+    public static final String DESC_VIRTUAL_BACK = "Back on virtual screen";
+    public static final String DESC_KEYBOARD = "Type on screen";
+    public static final String DESC_PREV_SCREEN = "Previous screen";
+    public static final String DESC_NEXT_SCREEN = "Next screen";
 
     // Live tab — Watch Backstage Live
     public static final String SECTION_ACTIVE_SCREENS = "Active screens";
