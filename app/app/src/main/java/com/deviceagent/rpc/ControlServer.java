@@ -312,6 +312,19 @@ public final class ControlServer {
                 if (!keepAlive) return false;
                 continue;
             }
+            if ("POST".equals(req.method) && "/session/surface/attach".equals(req.path)) {
+                handleSurfaceAttach(sock, req, session, keepAlive);
+                if (!keepAlive) return false;
+                continue;
+            }
+            if ("POST".equals(req.method) && "/session/surface/detach".equals(req.path)) {
+                handleSurfaceDetach(sock, req, session, keepAlive);
+                if (!keepAlive) return false;
+                continue;
+            }
+            if ("POST".equals(req.method) && "/session/touch-stream".equals(req.path)) {
+                return handleTouchStreamUpgrade(sock, in, req, session);
+            }
             if ("POST".equals(req.method) && "/session/takeover".equals(req.path)) {
                 Map<String, Object> body = parseObject(req.body);
                 String sid = Json.string(body, "sessionId");
@@ -439,6 +452,7 @@ public final class ControlServer {
         float scale = 0.5f;
         int quality = 85;
         long sinceFrame = -1L;
+        String format = "webp";
         if (req.query != null) {
             for (String part : req.query.split("&")) {
                 int eq = part.indexOf('=');
@@ -449,6 +463,7 @@ public final class ControlServer {
                     else if ("scale".equals(k)) scale = Float.parseFloat(v);
                     else if ("quality".equals(k)) quality = Integer.parseInt(v);
                     else if ("sinceFrame".equals(k)) sinceFrame = Long.parseLong(v);
+                    else if ("format".equals(k)) format = v;
                 } catch (NumberFormatException ignored) {}
             }
         }
@@ -463,6 +478,7 @@ public final class ControlServer {
         if (displayId > 0) args.putInt("displayId", displayId);
         args.putFloat("scale", scale);
         args.putInt("quality", quality);
+        args.putString("format", format);
         if (sinceFrame > 0) args.putLong("sinceFrame", sinceFrame);
         android.os.Bundle shot = virtualDisplay.handle("screenshot", args);
         if (!shot.getBoolean("ok", false)) {
@@ -487,6 +503,164 @@ public final class ControlServer {
             return;
         }
         write(sock, 200, mime, bytes, session, !keepAlive, extraHeaders);
+    }
+
+    private void handleSurfaceAttach(Socket sock, HttpReq req, String session, boolean keepAlive) throws IOException {
+        if (virtualDisplay == null) {
+            writeJson(sock, 404, "{\"ok\":false,\"error\":\"virtual display unavailable\"}", session, keepAlive);
+            return;
+        }
+        Map<String, Object> body = parseObject(req.body);
+        int displayId = body.get("displayId") instanceof Number n ? n.intValue() : -1;
+        String authority = Json.string(body, "authority");
+        String token = Json.string(body, "token");
+        if (displayId <= 0 || authority == null || authority.isBlank() || token == null || token.isBlank()) {
+            writeJson(sock, 400, "{\"ok\":false,\"error\":\"displayId, authority and token are required\"}", session, keepAlive);
+            return;
+        }
+        String top = com.deviceagent.shell.SystemBinders.topActivityOnDisplay(displayId);
+        if (tools.privacyFence().isBlocked(tools.privacyFence().packageOfComponent(top))) {
+            writeJson(sock, 403, "{\"ok\":false,\"error\":\"blocked_app\"}", session, keepAlive);
+            return;
+        }
+        android.os.Bundle args = new android.os.Bundle();
+        args.putInt("displayId", displayId);
+        args.putString("authority", authority);
+        args.putString("token", token);
+        android.os.Bundle res = virtualDisplay.handle("attach_surface", args);
+        boolean ok = res.getBoolean("ok", false);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("ok", ok);
+        if (ok) {
+            out.put("displayId", res.getInt("displayId", displayId));
+            out.put("width", res.getInt("width", 0));
+            out.put("height", res.getInt("height", 0));
+        } else {
+            out.put("error", String.valueOf(res.getString("error")));
+        }
+        writeJson(sock, ok ? 200 : 400, Json.stringify(out), session, keepAlive);
+    }
+
+    private void handleSurfaceDetach(Socket sock, HttpReq req, String session, boolean keepAlive) throws IOException {
+        if (virtualDisplay == null) {
+            writeJson(sock, 200, "{\"ok\":true}", session, keepAlive);
+            return;
+        }
+        Map<String, Object> body = parseObject(req.body);
+        int displayId = body.get("displayId") instanceof Number n ? n.intValue() : -1;
+        String token = Json.string(body, "token");
+        android.os.Bundle args = new android.os.Bundle();
+        if (displayId > 0) args.putInt("displayId", displayId);
+        if (token != null && !token.isBlank()) args.putString("token", token);
+        virtualDisplay.handle("detach_surface", args);
+        writeJson(sock, 200, "{\"ok\":true}", session, keepAlive);
+    }
+
+    private boolean handleTouchStreamUpgrade(Socket sock, InputStream in, HttpReq req, String session) throws IOException {
+        int displayId = -1;
+        String sessionId = "";
+        if (req.query != null) {
+            for (String part : req.query.split("&")) {
+                int eq = part.indexOf('=');
+                if (eq <= 0) continue;
+                String k = part.substring(0, eq), v = part.substring(eq + 1);
+                if ("displayId".equals(k)) {
+                    try { displayId = Integer.parseInt(v); } catch (NumberFormatException ignored) {}
+                } else if ("sessionId".equals(k)) {
+                    sessionId = v;
+                }
+            }
+        }
+        if (displayId <= 0) {
+            writeJson(sock, 400, "{\"ok\":false,\"error\":\"displayId is required\"}", session, false);
+            return false;
+        }
+        String top = com.deviceagent.shell.SystemBinders.topActivityOnDisplay(displayId);
+        if (tools.privacyFence().isBlocked(tools.privacyFence().packageOfComponent(top))) {
+            writeJson(sock, 403, "{\"ok\":false,\"error\":\"blocked_app\"}", session, false);
+            return false;
+        }
+        OutputStream out = sock.getOutputStream();
+        out.write("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\n\r\n".getBytes(StandardCharsets.UTF_8));
+        out.flush();
+        final int targetDisplay = displayId;
+        final String targetSession = sessionId;
+        Thread t = new Thread(() -> runTouchStream(sock, in, targetDisplay, targetSession), "backstage-live-touch-" + targetDisplay);
+        t.setDaemon(true);
+        t.start();
+        return true;
+    }
+
+    private void runTouchStream(Socket sock, InputStream in, int displayId, String sessionId) {
+        com.deviceagent.shell.LiveTouchInjector injector = new com.deviceagent.shell.LiveTouchInjector();
+        int[] ids = new int[10];
+        float[] xs = new float[10];
+        float[] ys = new float[10];
+        long lastFenceCheck = 0L;
+        long lastTouchMark = 0L;
+        boolean blocked = false;
+        try (Socket s = sock) {
+            s.setTcpNoDelay(true);
+            s.setSoTimeout(0);
+            java.io.DataInputStream din = new java.io.DataInputStream(in);
+            while (server != null) {
+                int type;
+                try {
+                    type = din.read();
+                } catch (IOException e) {
+                    break;
+                }
+                if (type < 0) break;
+                if (type == 2) continue; // Heartbeat
+                long now = android.os.SystemClock.uptimeMillis();
+                if (type == 1) {
+                    int action = din.readInt();
+                    int relTimeMs = din.readInt();
+                    int count = din.readUnsignedByte();
+                    if (count < 1 || count > 10) break;
+                    for (int i = 0; i < count; i++) {
+                        ids[i] = din.readInt();
+                        xs[i] = din.readFloat();
+                        ys[i] = din.readFloat();
+                    }
+                    int masked = action & android.view.MotionEvent.ACTION_MASK;
+                    if (masked == android.view.MotionEvent.ACTION_DOWN || now - lastFenceCheck > 400L) {
+                        lastFenceCheck = now;
+                        String top = com.deviceagent.shell.SystemBinders.topActivityOnDisplay(displayId);
+                        blocked = tools.privacyFence().isBlocked(tools.privacyFence().packageOfComponent(top));
+                    }
+                    if (blocked) {
+                        injector.cancelIfDown(displayId);
+                        continue;
+                    }
+                    if (masked == android.view.MotionEvent.ACTION_DOWN) {
+                        if (sessionId != null && !sessionId.isEmpty()) {
+                            tools.setUserTakeoverAdmin(sessionId, true, "");
+                        }
+                        if (virtualDisplay != null && now - lastTouchMark > 5000L) {
+                            lastTouchMark = now;
+                            android.os.Bundle touchArgs = new android.os.Bundle();
+                            touchArgs.putInt("displayId", displayId);
+                            virtualDisplay.handle("touch", touchArgs);
+                        }
+                    }
+                    injector.injectTouch(displayId, action, relTimeMs, count, ids, xs, ys);
+                } else if (type == 3) {
+                    int keyCode = din.readInt();
+                    String top = com.deviceagent.shell.SystemBinders.topActivityOnDisplay(displayId);
+                    if (tools.privacyFence().isBlocked(tools.privacyFence().packageOfComponent(top))) continue;
+                    if (sessionId != null && !sessionId.isEmpty()) {
+                        tools.setUserTakeoverAdmin(sessionId, true, "");
+                    }
+                    injector.injectKey(displayId, keyCode);
+                } else {
+                    break;
+                }
+            }
+        } catch (IOException ignored) {
+        } finally {
+            injector.cancelIfDown(displayId);
+        }
     }
 
     private void handleConfigure(Socket sock, HttpReq req, String session) throws IOException {

@@ -5,13 +5,13 @@ import android.app.Activity;
 import android.app.NotificationManager;
 import android.content.Context;
 import android.content.Intent;
-import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Outline;
 import android.graphics.Paint;
-import android.graphics.Path;
 import android.graphics.RectF;
 import android.graphics.Typeface;
+import android.os.Binder;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -20,24 +20,42 @@ import android.view.Gravity;
 import android.view.HapticFeedbackConstants;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.Surface;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.ViewOutlineProvider;
 import android.view.WindowInsets;
 import android.view.animation.DecelerateInterpolator;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 import com.deviceagent.tools.Json;
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 /**
- * Edge-to-edge live viewer and smooth takeover controller for a backstage virtual display.
- * Touching the screen or sliding the control switcher immediately hands control between Agent and You.
+ * Native-speed live viewer and continuous multi-touch controller for a backstage virtual display.
+ * Composites the virtual display straight onto a SurfaceView via SurfaceFlinger (zero-copy GPU)
+ * and streams raw MotionEvents over a persistent TCP_NODELAY socket into InputManager.
  */
 public final class LiveScreenActivity extends Activity {
     static final String EXTRA_SESSION_ID = "sessionId";
@@ -51,10 +69,9 @@ public final class LiveScreenActivity extends Activity {
     static final String EXTRA_CONFIRM_SUMMARY = "confirmSummary";
     static final String EXTRA_AUTO_TAKEOVER = "autoTakeover";
 
-    private static final long FRAME_ACTIVE_MS = 32L;
-    private static final long FRAME_IDLE_MS = 120L;
-    private static final long FRAME_ERROR_MS = 260L;
-    private static final long INPUT_BOOST_MS = 1400L;
+    private static final long FALLBACK_FRAME_ACTIVE_MS = 32L;
+    private static final long FALLBACK_FRAME_IDLE_MS = 120L;
+    private static final long FALLBACK_FRAME_ERROR_MS = 260L;
     private static final long SESSION_POLL_MS = 2200L;
     private static final long CONTROL_OPTIMISTIC_MS = 2000L;
 
@@ -78,8 +95,10 @@ public final class LiveScreenActivity extends Activity {
     }
 
     private final Handler ui = new Handler(Looper.getMainLooper());
+    private final Binder aliveBinder = new Binder();
     private UiKit k;
     private DaemonClient daemon;
+    private LiveTouchClient touchClient;
 
     private String sessionId = "";
     private int displayId = -1;
@@ -93,23 +112,31 @@ public final class LiveScreenActivity extends Activity {
     private String lastConfirmSig = "";
 
     private boolean active, frameInFlight, sessionInFlight, typeVisible;
+    private boolean surfaceReady, surfaceAttached, attachInFlight;
+    private String activeSurfaceToken = "";
     private long lastFrameSeq = -1L;
-    private long boostUntil, controlOptimisticUntil;
+    private long controlOptimisticUntil, lastAttachAttemptAt;
     private int sourceWidth = 1080, sourceHeight = 2400;
 
     private TextView titleView, subtitleView, emptyNote, confirmTitleView, confirmSummaryView;
     private LinearLayout confirmBanner, confirmQuickActions, typeBar;
-    private FrameLayout keyboardBtn;
+    private FrameLayout stage, surfaceFrame, keyboardBtn;
+    private SurfaceView surfaceView;
+    private ImageView fallbackImage;
+    private TouchBorderOverlay touchOverlay;
     private EditText typeInput;
-    private LiveCanvasView canvasView;
     private ControlSwitcherView controlSwitcher;
 
-    private final Runnable frameLoop = this::fetchFrame;
+    private final Runnable fallbackFrameLoop = this::fetchFallbackFrame;
 
     private final Runnable sessionLoop = new Runnable() {
         @Override public void run() {
             if (!active) return;
             syncSessionState();
+            if (surfaceReady && !surfaceAttached && !attachInFlight && displayId > 0
+                    && SystemClock.uptimeMillis() - lastAttachAttemptAt > 2500L) {
+                tryAttachLiveSurface();
+            }
             ui.postDelayed(this, SESSION_POLL_MS);
         }
     };
@@ -118,6 +145,7 @@ public final class LiveScreenActivity extends Activity {
         super.onCreate(savedInstanceState);
         k = new UiKit(this);
         daemon = new DaemonClient(this);
+        touchClient = new LiveTouchClient();
         buildUi();
         applyIntent(getIntent());
     }
@@ -132,22 +160,33 @@ public final class LiveScreenActivity extends Activity {
         super.onResume();
         active = true;
         lastFrameSeq = -1L;
-        ui.removeCallbacks(frameLoop);
+        ui.removeCallbacks(fallbackFrameLoop);
         ui.removeCallbacks(sessionLoop);
-        ui.post(frameLoop);
         ui.post(sessionLoop);
+        if (displayId > 0) {
+            touchClient.start(displayId, sessionId);
+            if (surfaceReady && !surfaceAttached) {
+                tryAttachLiveSurface();
+            } else if (!surfaceAttached) {
+                scheduleFallbackFrame(0L);
+            }
+        }
     }
 
     @Override protected void onPause() {
         active = false;
-        ui.removeCallbacks(frameLoop);
+        ui.removeCallbacks(fallbackFrameLoop);
         ui.removeCallbacks(sessionLoop);
+        detachLiveSurface();
+        touchClient.stop();
         super.onPause();
     }
 
     @Override protected void onDestroy() {
         active = false;
         ui.removeCallbacksAndMessages(null);
+        detachLiveSurface();
+        if (touchClient != null) touchClient.stop();
         if (daemon != null) daemon.shutdown();
         super.onDestroy();
     }
@@ -164,6 +203,7 @@ public final class LiveScreenActivity extends Activity {
 
     private void applyIntent(Intent intent) {
         if (intent == null) return;
+        int prevDisplay = displayId;
         String sid = intent.getStringExtra(EXTRA_SESSION_ID);
         int disp = intent.getIntExtra(EXTRA_DISPLAY_ID, -1);
         if (sid != null && !sid.isEmpty()) sessionId = sid;
@@ -188,9 +228,16 @@ public final class LiveScreenActivity extends Activity {
         boolean autoTakeover = intent.getBooleanExtra(EXTRA_AUTO_TAKEOVER, false);
         if (initialControl) userInControl = true;
         lastFrameSeq = -1L;
+        if (prevDisplay > 0 && prevDisplay != displayId) {
+            detachLiveSurface();
+        }
         syncChrome(false);
         if (autoTakeover && !sessionId.isEmpty()) {
             engageTakeover(true, false);
+        }
+        if (active && displayId > 0) {
+            touchClient.start(displayId, sessionId);
+            if (surfaceReady && !surfaceAttached) tryAttachLiveSurface();
         }
     }
 
@@ -262,11 +309,58 @@ public final class LiveScreenActivity extends Activity {
         cbp.setMargins(k.dp(12), 0, k.dp(12), k.dp(6));
         root.addView(confirmBanner, cbp);
 
-        // ---- Rounded edge-to-edge live screen stage ----
-        FrameLayout stage = new FrameLayout(this);
+        // ---- Native GPU SurfaceView stage (exact aspect ratio, rounded corners, zero-lag touch) ----
+        stage = new FrameLayout(this);
         stage.setBackgroundColor(k.canvas);
-        canvasView = new LiveCanvasView(this);
-        stage.addView(canvasView, new FrameLayout.LayoutParams(-1, -1));
+        stage.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or_, ob) -> layoutSurfaceFrame());
+
+        final float cornerPx = k.dp(16);
+        ViewOutlineProvider roundedProvider = new ViewOutlineProvider() {
+            @Override public void getOutline(View view, Outline outline) {
+                outline.setRoundRect(0, 0, view.getWidth(), view.getHeight(), cornerPx);
+            }
+        };
+
+        surfaceFrame = new FrameLayout(this);
+        surfaceFrame.setBackgroundColor(Color.BLACK);
+        surfaceFrame.setOutlineProvider(roundedProvider);
+        surfaceFrame.setClipToOutline(true);
+
+        surfaceView = new SurfaceView(this);
+        surfaceView.setOutlineProvider(roundedProvider);
+        surfaceView.setClipToOutline(true);
+        surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
+            @Override public void surfaceCreated(SurfaceHolder holder) {
+                surfaceReady = true;
+                if (sourceWidth > 0 && sourceHeight > 0) {
+                    holder.setFixedSize(sourceWidth, sourceHeight);
+                }
+                if (active && displayId > 0) tryAttachLiveSurface();
+            }
+
+            @Override public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+                surfaceReady = true;
+                if (active && displayId > 0 && !surfaceAttached && !attachInFlight) {
+                    tryAttachLiveSurface();
+                }
+            }
+
+            @Override public void surfaceDestroyed(SurfaceHolder holder) {
+                surfaceReady = false;
+                detachLiveSurface();
+            }
+        });
+        surfaceFrame.addView(surfaceView, new FrameLayout.LayoutParams(-1, -1));
+
+        fallbackImage = new ImageView(this);
+        fallbackImage.setScaleType(ImageView.ScaleType.FIT_XY);
+        fallbackImage.setVisibility(View.GONE);
+        surfaceFrame.addView(fallbackImage, new FrameLayout.LayoutParams(-1, -1));
+
+        touchOverlay = new TouchBorderOverlay(this);
+        surfaceFrame.addView(touchOverlay, new FrameLayout.LayoutParams(-1, -1));
+
+        stage.addView(surfaceFrame, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
 
         emptyNote = k.text(null, AppCopy.PREVIEW_UNAVAILABLE, 14, k.muted, false);
         emptyNote.setGravity(Gravity.CENTER);
@@ -310,14 +404,14 @@ public final class LiveScreenActivity extends Activity {
 
         FrameLayout enterBtn = k.iconButton(
                 AppIcons.RETURN_KEY, k.ink, k.raised, k.strokeStrong,
-                40, 18, 20, AppCopy.ACTION_ENTER, () -> sendKey("ENTER"));
+                40, 18, 20, AppCopy.ACTION_ENTER, () -> sendFastKey(KeyEvent.KEYCODE_ENTER, "ENTER"));
         LinearLayout.LayoutParams ebp = new LinearLayout.LayoutParams(k.dp(40), k.dp(40));
         ebp.setMarginEnd(k.dp(6));
         typeBar.addView(enterBtn, ebp);
 
         FrameLayout delBtn = k.iconButton(
                 AppIcons.BACKSPACE, k.ink, k.raised, k.strokeStrong,
-                40, 19, 20, AppCopy.ACTION_DELETE_KEY, () -> sendKey("DEL"));
+                40, 19, 20, AppCopy.ACTION_DELETE_KEY, () -> sendFastKey(KeyEvent.KEYCODE_DEL, "DEL"));
         typeBar.addView(delBtn, new LinearLayout.LayoutParams(k.dp(40), k.dp(40)));
         root.addView(typeBar, new LinearLayout.LayoutParams(-1, -2));
 
@@ -335,7 +429,7 @@ public final class LiveScreenActivity extends Activity {
                 AppIcons.CHEVRON_LEFT, k.ink, k.raised, k.strokeStrong,
                 46, 21, 23, AppCopy.DESC_VIRTUAL_BACK, () -> {
                     dock.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                    sendKey("BACK");
+                    sendFastKey(KeyEvent.KEYCODE_BACK, "BACK");
                 });
         LinearLayout.LayoutParams nbp = new LinearLayout.LayoutParams(k.dp(46), k.dp(46));
         nbp.setMarginEnd(k.dp(8));
@@ -352,6 +446,92 @@ public final class LiveScreenActivity extends Activity {
         root.requestApplyInsets();
     }
 
+    private void layoutSurfaceFrame() {
+        if (stage == null || surfaceFrame == null) return;
+        int vw = stage.getWidth(), vh = stage.getHeight();
+        if (vw <= 0 || vh <= 0 || sourceWidth <= 0 || sourceHeight <= 0) return;
+        float availW = Math.max(1f, vw - k.dp(16));
+        float availH = Math.max(1f, vh - k.dp(8));
+        float scale = Math.min(availW / sourceWidth, availH / sourceHeight);
+        int dw = Math.max(1, Math.round(sourceWidth * scale));
+        int dh = Math.max(1, Math.round(sourceHeight * scale));
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) surfaceFrame.getLayoutParams();
+        if (lp.width != dw || lp.height != dh) {
+            lp.width = dw;
+            lp.height = dh;
+            lp.gravity = Gravity.CENTER;
+            surfaceFrame.setLayoutParams(lp);
+        }
+    }
+
+    // ---- Zero-copy native SurfaceView attach / detach over Binder ----
+
+    private void tryAttachLiveSurface() {
+        if (!active || !surfaceReady || displayId <= 0 || attachInFlight || surfaceAttached) return;
+        Surface surface = surfaceView.getHolder().getSurface();
+        if (surface == null || !surface.isValid()) return;
+        attachInFlight = true;
+        lastAttachAttemptAt = SystemClock.uptimeMillis();
+        String token = UUID.randomUUID().toString();
+        activeSurfaceToken = token;
+        LiveSurfaceProvider.register(token, surface, aliveBinder);
+        Map<String, Object> body = Json.mapOf(
+                "displayId", displayId,
+                "authority", getPackageName() + ".livesurface",
+                "token", token);
+        daemon.post("/session/surface/attach", body, (reply, err) -> {
+            attachInFlight = false;
+            if (!active || !surfaceReady || !token.equals(activeSurfaceToken)) {
+                LiveSurfaceProvider.clear(token);
+                if (reply != null && Boolean.TRUE.equals(reply.get("ok"))) {
+                    daemon.post("/session/surface/detach", Json.mapOf("displayId", displayId, "token", token), null);
+                }
+                return;
+            }
+            if (err == null && reply != null && Boolean.TRUE.equals(reply.get("ok"))) {
+                int w = (int) DaemonClient.num(reply, "width");
+                int h = (int) DaemonClient.num(reply, "height");
+                if (w > 0 && h > 0 && (w != sourceWidth || h != sourceHeight)) {
+                    sourceWidth = w;
+                    sourceHeight = h;
+                    surfaceView.getHolder().setFixedSize(sourceWidth, sourceHeight);
+                    layoutSurfaceFrame();
+                }
+                surfaceAttached = true;
+                ui.removeCallbacks(fallbackFrameLoop);
+                fallbackImage.setVisibility(View.GONE);
+                fallbackImage.setImageDrawable(null);
+                emptyNote.setVisibility(View.GONE);
+            } else {
+                LiveSurfaceProvider.clear(token);
+                surfaceAttached = false;
+                if (reply != null && "blocked_app".equals(DaemonClient.str(reply, "error"))) {
+                    emptyNote.setText(AppCopy.PREVIEW_HIDDEN_BLOCKED);
+                    emptyNote.setVisibility(View.VISIBLE);
+                } else {
+                    // Graceful fallback (e.g., screen recording active) using fast JPEG frames.
+                    fallbackImage.setVisibility(View.VISIBLE);
+                    scheduleFallbackFrame(0L);
+                }
+            }
+        });
+    }
+
+    private void detachLiveSurface() {
+        String token = activeSurfaceToken;
+        boolean wasAttached = surfaceAttached || attachInFlight;
+        activeSurfaceToken = "";
+        surfaceAttached = false;
+        attachInFlight = false;
+        if (!token.isEmpty()) LiveSurfaceProvider.clear(token);
+        if (wasAttached && displayId > 0 && daemon != null) {
+            Map<String, Object> body = new java.util.LinkedHashMap<>();
+            body.put("displayId", displayId);
+            if (!token.isEmpty()) body.put("token", token);
+            daemon.post("/session/surface/detach", body, null);
+        }
+    }
+
     private void syncChrome(boolean animate) {
         String label = !appLabel.isEmpty() ? appLabel : (!packageName.isEmpty() ? resolveLabel(packageName) : AppCopy.LABEL_PRIVATE_SCREEN);
         titleView.setText(label);
@@ -365,7 +545,7 @@ public final class LiveScreenActivity extends Activity {
         }
 
         controlSwitcher.setUserInControl(userInControl, animate);
-        canvasView.setActiveControl(userInControl, animate);
+        touchOverlay.setActiveControl(userInControl, animate);
 
         boolean showType = userInControl && typeVisible;
         typeBar.setVisibility(showType ? View.VISIBLE : View.GONE);
@@ -416,7 +596,6 @@ public final class LiveScreenActivity extends Activity {
             controlSwitcher.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
         }
         syncChrome(true);
-        boostFrames();
         Map<String, Object> payload = Json.mapOf("sessionId", sessionId, "active", takeOver);
         if (takeOver && !confirmId.isEmpty()) payload.put("confirmId", confirmId);
         daemon.postOrdered("/session/takeover", payload, (reply, err) -> {
@@ -426,41 +605,46 @@ public final class LiveScreenActivity extends Activity {
         });
     }
 
-    private void ensureTakeoverBeforeInput() {
+    private void markUserControlFromTouch() {
         if (!userInControl && !sessionId.isEmpty()) {
-            engageTakeover(true, true);
+            userInControl = true;
+            controlOptimisticUntil = SystemClock.uptimeMillis() + CONTROL_OPTIMISTIC_MS;
+            if (controlSwitcher != null) controlSwitcher.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+            syncChrome(true);
+            // If confirmId is pending, also mark confirmation taken over via HTTP.
+            if (!confirmId.isEmpty()) {
+                daemon.postOrdered("/session/takeover", Json.mapOf("sessionId", sessionId, "active", true, "confirmId", confirmId), null);
+            }
         }
     }
 
-    private void sendInput(Map<String, Object> body) {
+    private void sendFastKey(int keyCode, String fallbackName) {
+        markUserControlFromTouch();
+        if (touchClient != null && touchClient.sendKey(keyCode)) return;
+        sendHttpInput(Json.mapOf("action", "key", "key", fallbackName));
+    }
+
+    private void sendHttpInput(Map<String, Object> body) {
         if (displayId <= 0 && sessionId.isEmpty()) return;
-        ensureTakeoverBeforeInput();
-        boostFrames();
+        if (!userInControl && !sessionId.isEmpty()) engageTakeover(true, true);
         Map<String, Object> req = new java.util.LinkedHashMap<>(body);
         if (!sessionId.isEmpty()) req.put("sessionId", sessionId);
         if (displayId > 0) req.put("displayId", displayId);
         daemon.postOrdered("/session/input", req, (reply, err) -> {
-            if (active) {
-                boostFrames();
-                scheduleNextFrame(24L);
-            }
+            if (active && !surfaceAttached) scheduleFallbackFrame(24L);
         });
-    }
-
-    private void sendKey(String key) {
-        sendInput(Json.mapOf("action", "key", "key", key));
     }
 
     private void sendTypedText() {
         String text = typeInput.getText() == null ? "" : typeInput.getText().toString();
         if (text.isEmpty()) return;
         typeInput.setText("");
-        sendInput(Json.mapOf("action", "text", "text", text));
+        sendHttpInput(Json.mapOf("action", "text", "text", text));
     }
 
     private void toggleTypeBar() {
         if (!typeVisible) {
-            ensureTakeoverBeforeInput();
+            if (!userInControl && !sessionId.isEmpty()) engageTakeover(true, true);
             typeVisible = true;
             syncChrome(true);
             typeInput.requestFocus();
@@ -501,6 +685,7 @@ public final class LiveScreenActivity extends Activity {
     }
 
     private void moveToMainScreen() {
+        detachLiveSurface();
         String cid = confirmId;
         if (!cid.isEmpty()) {
             confirmId = "";
@@ -521,6 +706,7 @@ public final class LiveScreenActivity extends Activity {
     }
 
     private void stopSession() {
+        detachLiveSurface();
         if (!confirmId.isEmpty()) {
             String cid = confirmId;
             confirmId = "";
@@ -540,59 +726,57 @@ public final class LiveScreenActivity extends Activity {
         if (nm != null) nm.cancel(id.hashCode());
     }
 
-    // ---- Adaptive high-FPS live preview stream & session sync ----
+    // ---- Fast JPEG fallback preview (only runs if native SurfaceView attach is unavailable) ----
 
-    private void boostFrames() {
-        boostUntil = SystemClock.uptimeMillis() + INPUT_BOOST_MS;
+    private void scheduleFallbackFrame(long delayMs) {
+        if (!active || surfaceAttached) return;
+        ui.removeCallbacks(fallbackFrameLoop);
+        ui.postDelayed(fallbackFrameLoop, delayMs);
     }
 
-    private void scheduleNextFrame(long delayMs) {
-        if (!active) return;
-        ui.removeCallbacks(frameLoop);
-        ui.postDelayed(frameLoop, delayMs);
-    }
-
-    private void fetchFrame() {
-        if (!active) return;
+    private void fetchFallbackFrame() {
+        if (!active || surfaceAttached) return;
         if (displayId <= 0) {
-            scheduleNextFrame(FRAME_ERROR_MS);
+            scheduleFallbackFrame(FALLBACK_FRAME_ERROR_MS);
             return;
         }
         if (frameInFlight) return;
         frameInFlight = true;
-        StringBuilder path = new StringBuilder("/preview?displayId=").append(displayId).append("&scale=0.68&quality=76");
+        StringBuilder path = new StringBuilder("/preview?displayId=").append(displayId).append("&scale=0.68&quality=76&format=jpeg");
         if (lastFrameSeq > 0) path.append("&sinceFrame=").append(lastFrameSeq);
         daemon.bytes(path.toString(), (shot, err) -> {
             frameInFlight = false;
-            if (!active) return;
-            boolean boosted = SystemClock.uptimeMillis() < boostUntil;
+            if (!active || surfaceAttached) return;
             if (shot == null) {
-                scheduleNextFrame(FRAME_ERROR_MS);
+                scheduleFallbackFrame(FALLBACK_FRAME_ERROR_MS);
                 return;
             }
-            if (shot.sourceWidth > 0 && shot.sourceHeight > 0) {
+            if (shot.sourceWidth > 0 && shot.sourceHeight > 0
+                    && (shot.sourceWidth != sourceWidth || shot.sourceHeight != sourceHeight)) {
                 sourceWidth = shot.sourceWidth;
                 sourceHeight = shot.sourceHeight;
+                layoutSurfaceFrame();
             }
             if (shot.status == 304) {
-                scheduleNextFrame(boosted ? FRAME_ACTIVE_MS : FRAME_IDLE_MS);
+                scheduleFallbackFrame(FALLBACK_FRAME_IDLE_MS);
                 return;
             }
             if (shot.status == 403) {
-                canvasView.setFrame(null);
+                fallbackImage.setImageDrawable(null);
                 emptyNote.setText(AppCopy.PREVIEW_HIDDEN_BLOCKED);
                 emptyNote.setVisibility(View.VISIBLE);
-                scheduleNextFrame(500L);
+                scheduleFallbackFrame(500L);
                 return;
             }
             if (shot.status == 200 && shot.bitmap != null) {
                 if (shot.frameSeq > 0) lastFrameSeq = shot.frameSeq;
-                canvasView.setFrame(shot.bitmap);
+                fallbackImage.setVisibility(View.VISIBLE);
+                fallbackImage.setImageBitmap(shot.bitmap);
                 emptyNote.setVisibility(View.GONE);
-                scheduleNextFrame(FRAME_ACTIVE_MS);
+                scheduleFallbackFrame(FALLBACK_FRAME_ACTIVE_MS);
                 return;
             }
-            scheduleNextFrame(FRAME_IDLE_MS);
+            scheduleFallbackFrame(FALLBACK_FRAME_IDLE_MS);
         });
     }
 
@@ -613,15 +797,30 @@ public final class LiveScreenActivity extends Activity {
                 finish();
                 return;
             }
+            int prevDisp = displayId;
             sessionId = DaemonClient.str(match, "sessionId");
             int disp = (int) DaemonClient.num(match, "display");
             if (disp > 0) displayId = disp;
             int w = (int) DaemonClient.num(match, "width"), h = (int) DaemonClient.num(match, "height");
-            if (w > 0 && h > 0) { sourceWidth = w; sourceHeight = h; }
+            if (w > 0 && h > 0 && (w != sourceWidth || h != sourceHeight)) {
+                sourceWidth = w;
+                sourceHeight = h;
+                if (surfaceReady) surfaceView.getHolder().setFixedSize(sourceWidth, sourceHeight);
+                layoutSurfaceFrame();
+            }
             String pkg = DaemonClient.str(match, "package");
             if (!pkg.isEmpty() && !pkg.equals(packageName)) {
                 packageName = pkg;
                 appLabel = resolveLabel(pkg);
+            }
+            boolean blocked = Boolean.TRUE.equals(match.get("blocked"));
+            if (blocked) {
+                if (surfaceAttached) detachLiveSurface();
+                emptyNote.setText(AppCopy.PREVIEW_HIDDEN_BLOCKED);
+                emptyNote.setVisibility(View.VISIBLE);
+            } else if (displayId > 0 && (prevDisp != displayId || !touchClient.isRunningFor(displayId))) {
+                touchClient.start(displayId, sessionId);
+                if (surfaceReady && !surfaceAttached && !attachInFlight) tryAttachLiveSurface();
             }
             boolean remoteControl = Boolean.TRUE.equals(match.get("userInControl"));
             if (SystemClock.uptimeMillis() >= controlOptimisticUntil) {
@@ -672,6 +871,272 @@ public final class LiveScreenActivity extends Activity {
         int g = Math.round(Color.green(from) + (Color.green(to) - Color.green(from)) * c);
         int b = Math.round(Color.blue(from) + (Color.blue(to) - Color.blue(from)) * c);
         return Color.argb(a, r, g, b);
+    }
+
+    // ---- Persistent TCP_NODELAY binary touch & key stream client ----
+
+    private final class LiveTouchClient {
+        private final LinkedBlockingQueue<Packet> queue = new LinkedBlockingQueue<>(64);
+        private volatile boolean running;
+        private volatile boolean connected;
+        private volatile int targetDisplay = -1;
+        private volatile String targetSession = "";
+        private volatile Socket activeSocket;
+        private Thread worker;
+
+        private final class Packet {
+            final byte[] bytes;
+            final boolean coalescable;
+            Packet(byte[] bytes, boolean coalescable) {
+                this.bytes = bytes;
+                this.coalescable = coalescable;
+            }
+        }
+
+        synchronized boolean isRunningFor(int disp) {
+            return running && targetDisplay == disp;
+        }
+
+        synchronized void start(int disp, String sid) {
+            if (disp <= 0) return;
+            if (running && targetDisplay == disp && (sid == null || sid.equals(targetSession))) return;
+            stop();
+            targetDisplay = disp;
+            targetSession = sid == null ? "" : sid;
+            running = true;
+            queue.clear();
+            worker = new Thread(this::loop, "backstage-touch-client");
+            worker.setDaemon(true);
+            worker.start();
+        }
+
+        synchronized void stop() {
+            running = false;
+            connected = false;
+            queue.clear();
+            Socket s = activeSocket;
+            activeSocket = null;
+            if (s != null) {
+                try { s.close(); } catch (IOException ignored) { }
+            }
+            if (worker != null) {
+                worker.interrupt();
+                worker = null;
+            }
+        }
+
+        void sendMotion(MotionEvent ev, int viewW, int viewH) {
+            if (!running || viewW <= 0 || viewH <= 0 || sourceWidth <= 0 || sourceHeight <= 0) return;
+            int count = Math.min(10, ev.getPointerCount());
+            if (count <= 0) return;
+            int action = ev.getAction();
+            int masked = ev.getActionMasked();
+            int relTime = (int) Math.max(0L, Math.min(Integer.MAX_VALUE, ev.getEventTime() - ev.getDownTime()));
+            try {
+                ByteArrayOutputStream baos = new ByteArrayOutputStream(10 + count * 12);
+                DataOutputStream dos = new DataOutputStream(baos);
+                dos.writeByte(1);
+                dos.writeInt(action);
+                dos.writeInt(relTime);
+                dos.writeByte(count);
+                float sx = (float) sourceWidth / (float) viewW;
+                float sy = (float) sourceHeight / (float) viewH;
+                for (int i = 0; i < count; i++) {
+                    float mx = Math.max(0f, Math.min(sourceWidth - 1f, ev.getX(i) * sx));
+                    float my = Math.max(0f, Math.min(sourceHeight - 1f, ev.getY(i) * sy));
+                    dos.writeInt(ev.getPointerId(i));
+                    dos.writeFloat(mx);
+                    dos.writeFloat(my);
+                }
+                dos.flush();
+                enqueue(new Packet(baos.toByteArray(), masked == MotionEvent.ACTION_MOVE));
+            } catch (IOException ignored) {
+            }
+        }
+
+        boolean sendKey(int keyCode) {
+            if (!running || !connected) return false;
+            try {
+                ByteArrayOutputStream baos = new ByteArrayOutputStream(5);
+                DataOutputStream dos = new DataOutputStream(baos);
+                dos.writeByte(3);
+                dos.writeInt(keyCode);
+                dos.flush();
+                enqueue(new Packet(baos.toByteArray(), false));
+                return true;
+            } catch (IOException e) {
+                return false;
+            }
+        }
+
+        private void enqueue(Packet p) {
+            if (p.coalescable && queue.size() >= 3) {
+                // Keep queue latency under 1 frame by dropping stale intermediate MOVE packets.
+                for (Packet existing : queue) {
+                    if (existing.coalescable) queue.remove(existing);
+                }
+            }
+            if (!queue.offer(p) && !p.coalescable) {
+                queue.poll();
+                queue.offer(p);
+            }
+        }
+
+        private void loop() {
+            while (running) {
+                Socket sock = null;
+                try {
+                    AgentConfig c = daemon.currentConfig();
+                    String path = "/session/touch-stream?displayId=" + targetDisplay
+                            + (targetSession.isEmpty() ? "" : "&sessionId=" + targetSession);
+                    String auth = com.deviceagent.crypto.LocalAuth.requestHeader(c.localToken, "POST", path, "");
+                    sock = new Socket();
+                    sock.setTcpNoDelay(true);
+                    sock.connect(new InetSocketAddress("127.0.0.1", c.daemonPort), 2000);
+                    sock.setSoTimeout(3000);
+                    activeSocket = sock;
+                    OutputStream out = new BufferedOutputStream(sock.getOutputStream(), 4096);
+                    String req = "POST " + path + " HTTP/1.1\r\n"
+                            + "Host: 127.0.0.1\r\n"
+                            + "X-Backstage-Auth: " + auth + "\r\n"
+                            + "Connection: Upgrade\r\n"
+                            + "Content-Length: 0\r\n\r\n";
+                    out.write(req.getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+
+                    if (!readUpgradeOk(sock.getInputStream())) {
+                        closeQuiet(sock);
+                        sleepBrief();
+                        continue;
+                    }
+                    sock.setSoTimeout(0);
+                    connected = true;
+                    while (running) {
+                        Packet pkt = queue.poll(15, TimeUnit.SECONDS);
+                        if (!running) break;
+                        if (pkt == null) {
+                            out.write(2); // Keepalive heartbeat
+                            out.flush();
+                            continue;
+                        }
+                        out.write(pkt.bytes);
+                        // Drain any immediately queued packets into the same TCP write for efficiency.
+                        Packet next;
+                        while ((next = queue.poll()) != null) {
+                            out.write(next.bytes);
+                        }
+                        out.flush();
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    connected = false;
+                    closeQuiet(sock);
+                    if (running) sleepBrief();
+                } finally {
+                    connected = false;
+                    activeSocket = null;
+                    closeQuiet(sock);
+                }
+            }
+        }
+
+        private boolean readUpgradeOk(InputStream in) throws IOException {
+            StringBuilder sb = new StringBuilder();
+            int b;
+            while ((b = in.read()) != -1) {
+                sb.append((char) b);
+                int len = sb.length();
+                if (len >= 4
+                        && sb.charAt(len - 4) == '\r'
+                        && sb.charAt(len - 3) == '\n'
+                        && sb.charAt(len - 2) == '\r'
+                        && sb.charAt(len - 1) == '\n') {
+                    return sb.toString().startsWith("HTTP/1.1 101");
+                }
+                if (len > 4096) return false;
+            }
+            return false;
+        }
+
+        private void sleepBrief() {
+            try { Thread.sleep(250L); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        }
+
+        private void closeQuiet(Socket s) {
+            if (s != null) {
+                try { s.close(); } catch (IOException ignored) { }
+            }
+        }
+    }
+
+    // ---- Transparent border + real-time multi-touch capture overlay ----
+
+    private final class TouchBorderOverlay extends View {
+        private final Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF borderRect = new RectF();
+        private final float cornerRadius;
+        private final int idleBorder = Color.parseColor("#242424");
+        private ValueAnimator borderAnim;
+        private float controlBlend;
+
+        TouchBorderOverlay(Context context) {
+            super(context);
+            cornerRadius = k.dp(16);
+            borderPaint.setStyle(Paint.Style.STROKE);
+            borderPaint.setStrokeWidth(k.dp(1.5f));
+        }
+
+        void setActiveControl(boolean user, boolean animate) {
+            float goal = user ? 1f : 0f;
+            if (!animate) {
+                if (borderAnim != null) borderAnim.cancel();
+                controlBlend = goal;
+                invalidate();
+                return;
+            }
+            if (Math.abs(controlBlend - goal) < 0.005f) return;
+            if (borderAnim != null) borderAnim.cancel();
+            borderAnim = ValueAnimator.ofFloat(controlBlend, goal);
+            borderAnim.setDuration(220L);
+            borderAnim.setInterpolator(new DecelerateInterpolator());
+            borderAnim.addUpdateListener(va -> {
+                controlBlend = (float) va.getAnimatedValue();
+                invalidate();
+            });
+            borderAnim.start();
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            int w = getWidth(), h = getHeight();
+            if (w <= 0 || h <= 0) return;
+            borderPaint.setColor(blendColor(idleBorder, k.amber, controlBlend));
+            float inset = borderPaint.getStrokeWidth() * 0.5f;
+            borderRect.set(inset, inset, w - inset, h - inset);
+            canvas.drawRoundRect(borderRect, cornerRadius, cornerRadius, borderPaint);
+        }
+
+        @Override public boolean performClick() {
+            return super.performClick();
+        }
+
+        @Override public boolean onTouchEvent(MotionEvent ev) {
+            int w = getWidth(), h = getHeight();
+            if (w <= 0 || h <= 0) return false;
+            int masked = ev.getActionMasked();
+            if (masked == MotionEvent.ACTION_DOWN) {
+                markUserControlFromTouch();
+                getParent().requestDisallowInterceptTouchEvent(true);
+            } else if (masked == MotionEvent.ACTION_UP) {
+                performClick();
+                getParent().requestDisallowInterceptTouchEvent(false);
+            } else if (masked == MotionEvent.ACTION_CANCEL) {
+                getParent().requestDisallowInterceptTouchEvent(false);
+            }
+            touchClient.sendMotion(ev, w, h);
+            return true;
+        }
     }
 
     // ---- Smooth sliding Agent / You segmented control switcher ----
@@ -827,194 +1292,6 @@ public final class LiveScreenActivity extends Activity {
                     getParent().requestDisallowInterceptTouchEvent(false);
                     dragging = false;
                     setUserInControl(targetUser, true);
-                    return true;
-                }
-                default -> { return false; }
-            }
-        }
-    }
-
-    // ---- Smooth rounded interactive live screen canvas ----
-
-    private final class LiveCanvasView extends View {
-        private final Paint bmpPaint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
-        private final Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint touchRingPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint touchFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint trailPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF dest = new RectF();
-        private final RectF borderRect = new RectF();
-        private final Path clipPath = new Path();
-        private final float touchSlop, cornerRadius, padX, padY;
-        private final int idleBorder = Color.parseColor("#222222");
-        private Bitmap frame;
-        private ValueAnimator borderAnim;
-        private float controlBlend; // 0f = Agent, 1f = You
-        private boolean controlTarget;
-        private float downX, downY, touchX, touchY;
-        private long downAt, releaseAt;
-        private boolean tracking;
-
-        LiveCanvasView(Context context) {
-            super(context);
-            touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
-            cornerRadius = k.dp(16);
-            padX = k.dp(8);
-            padY = k.dp(4);
-            borderPaint.setStyle(Paint.Style.STROKE);
-            borderPaint.setStrokeWidth(k.dp(1.5f));
-            touchRingPaint.setStyle(Paint.Style.STROKE);
-            touchRingPaint.setStrokeWidth(k.dp(2f));
-            touchFillPaint.setStyle(Paint.Style.FILL);
-            trailPaint.setStyle(Paint.Style.STROKE);
-            trailPaint.setStrokeCap(Paint.Cap.ROUND);
-            trailPaint.setStrokeWidth(k.dp(3f));
-        }
-
-        void setFrame(Bitmap next) {
-            frame = next;
-            invalidate();
-        }
-
-        void setActiveControl(boolean user, boolean animate) {
-            controlTarget = user;
-            float goal = user ? 1f : 0f;
-            if (!animate) {
-                if (borderAnim != null) borderAnim.cancel();
-                controlBlend = goal;
-                invalidate();
-                return;
-            }
-            if (Math.abs(controlBlend - goal) < 0.005f) return;
-            if (borderAnim != null) borderAnim.cancel();
-            borderAnim = ValueAnimator.ofFloat(controlBlend, goal);
-            borderAnim.setDuration(220L);
-            borderAnim.setInterpolator(new DecelerateInterpolator());
-            borderAnim.addUpdateListener(va -> {
-                controlBlend = (float) va.getAnimatedValue();
-                invalidate();
-            });
-            borderAnim.start();
-        }
-
-        @Override protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            int vw = getWidth(), vh = getHeight();
-            if (vw <= 0 || vh <= 0) return;
-            float availW = Math.max(1f, vw - padX * 2f);
-            float availH = Math.max(1f, vh - padY * 2f);
-            Bitmap bmp = frame;
-            float bw = bmp != null ? bmp.getWidth() : sourceWidth;
-            float bh = bmp != null ? bmp.getHeight() : sourceHeight;
-            if (bw <= 0 || bh <= 0) return;
-            float scale = Math.min(availW / bw, availH / bh);
-            float dw = bw * scale, dh = bh * scale;
-            float left = (vw - dw) * 0.5f, top = (vh - dh) * 0.5f;
-            dest.set(left, top, left + dw, top + dh);
-
-            if (bmp != null) {
-                clipPath.reset();
-                clipPath.addRoundRect(dest, cornerRadius, cornerRadius, Path.Direction.CW);
-                canvas.save();
-                canvas.clipPath(clipPath);
-                canvas.drawBitmap(bmp, null, dest, bmpPaint);
-                canvas.restore();
-            }
-
-            borderPaint.setColor(blendColor(idleBorder, k.amber, controlBlend));
-            float inset = borderPaint.getStrokeWidth() * 0.5f;
-            borderRect.set(dest.left + inset, dest.top + inset, dest.right - inset, dest.bottom - inset);
-            canvas.drawRoundRect(borderRect, cornerRadius, cornerRadius, borderPaint);
-
-            long now = SystemClock.uptimeMillis();
-            if (tracking) {
-                float dist = (float) Math.hypot(touchX - downX, touchY - downY);
-                if (dist > touchSlop) {
-                    trailPaint.setColor((k.amber & 0x00FFFFFF) | 0x55000000);
-                    canvas.drawLine(downX, downY, touchX, touchY, trailPaint);
-                }
-                touchFillPaint.setColor((k.amber & 0x00FFFFFF) | 0x33000000);
-                touchRingPaint.setColor((k.amber & 0x00FFFFFF) | 0xCC000000);
-                canvas.drawCircle(touchX, touchY, k.dp(15), touchFillPaint);
-                canvas.drawCircle(touchX, touchY, k.dp(15), touchRingPaint);
-            } else if (releaseAt > 0 && now - releaseAt < 240L) {
-                float p = (now - releaseAt) / 240f;
-                int alphaRing = Math.round((1f - p) * 204f);
-                int alphaFill = Math.round((1f - p) * 52f);
-                float radius = k.dp(13) + p * k.dp(14);
-                touchFillPaint.setColor((k.amber & 0x00FFFFFF) | (alphaFill << 24));
-                touchRingPaint.setColor((k.amber & 0x00FFFFFF) | (alphaRing << 24));
-                canvas.drawCircle(touchX, touchY, radius, touchFillPaint);
-                canvas.drawCircle(touchX, touchY, radius, touchRingPaint);
-                postInvalidateOnAnimation();
-            }
-        }
-
-        private int mapX(float x) {
-            if (dest.width() <= 0) return 0;
-            float fx = (x - dest.left) / dest.width();
-            return Math.max(0, Math.min(sourceWidth - 1, Math.round(fx * sourceWidth)));
-        }
-
-        private int mapY(float y) {
-            if (dest.height() <= 0) return 0;
-            float fy = (y - dest.top) / dest.height();
-            return Math.max(0, Math.min(sourceHeight - 1, Math.round(fy * sourceHeight)));
-        }
-
-        @Override public boolean performClick() {
-            return super.performClick();
-        }
-
-        @Override public boolean onTouchEvent(MotionEvent ev) {
-            if (dest.isEmpty()) return false;
-            switch (ev.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN -> {
-                    if (!dest.contains(ev.getX(), ev.getY())) return false;
-                    tracking = true;
-                    releaseAt = 0;
-                    downX = touchX = ev.getX();
-                    downY = touchY = ev.getY();
-                    downAt = SystemClock.uptimeMillis();
-                    ensureTakeoverBeforeInput();
-                    invalidate();
-                    return true;
-                }
-                case MotionEvent.ACTION_MOVE -> {
-                    if (!tracking) return false;
-                    touchX = Math.max(dest.left, Math.min(dest.right, ev.getX()));
-                    touchY = Math.max(dest.top, Math.min(dest.bottom, ev.getY()));
-                    invalidate();
-                    return true;
-                }
-                case MotionEvent.ACTION_UP -> {
-                    if (!tracking) return false;
-                    tracking = false;
-                    float upX = Math.max(dest.left, Math.min(dest.right, ev.getX()));
-                    float upY = Math.max(dest.top, Math.min(dest.bottom, ev.getY()));
-                    touchX = upX; touchY = upY;
-                    releaseAt = SystemClock.uptimeMillis();
-                    postInvalidateOnAnimation();
-                    float dist = (float) Math.hypot(upX - downX, upY - downY);
-                    long elapsed = Math.max(40L, releaseAt - downAt);
-                    if (dist > touchSlop) {
-                        int dur = (int) Math.max(120L, Math.min(600L, elapsed));
-                        sendInput(Json.mapOf(
-                                "action", "swipe",
-                                "x1", mapX(downX), "y1", mapY(downY),
-                                "x2", mapX(upX), "y2", mapY(upY),
-                                "durationMs", dur));
-                    } else if (elapsed >= 450L) {
-                        sendInput(Json.mapOf("action", "long_press", "x", mapX(upX), "y", mapY(upY), "durationMs", 650));
-                    } else {
-                        performClick();
-                        sendInput(Json.mapOf("action", "tap", "x", mapX(upX), "y", mapY(upY)));
-                    }
-                    return true;
-                }
-                case MotionEvent.ACTION_CANCEL -> {
-                    tracking = false;
-                    invalidate();
                     return true;
                 }
                 default -> { return false; }

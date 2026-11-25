@@ -32,8 +32,23 @@ final class DaemonClient {
     private final ExecutorService pool = Executors.newFixedThreadPool(4);
     private final ExecutorService previewPool = Executors.newSingleThreadExecutor();
     private final ExecutorService inputPool = Executors.newSingleThreadExecutor();
+    private volatile AgentConfig cachedConfig;
+    private volatile long cachedConfigAt;
 
     DaemonClient(Context context) { app = context.getApplicationContext(); }
+
+    AgentConfig currentConfig() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        AgentConfig c = cachedConfig;
+        if (c == null || now - cachedConfigAt > 3000L) {
+            c = AgentConfig.load(app);
+            cachedConfig = c;
+            cachedConfigAt = now;
+        }
+        return c;
+    }
+
+    private void invalidateConfig() { cachedConfigAt = 0L; }
 
     private String url(AgentConfig c, String path) { return "http://127.0.0.1:" + c.daemonPort + path; }
 
@@ -41,10 +56,10 @@ final class DaemonClient {
         pool.execute(() -> {
             Map<String, Object> value = null; Exception error = null;
             try {
-                AgentConfig c = AgentConfig.load(app);
+                AgentConfig c = currentConfig();
                 String auth = com.deviceagent.crypto.LocalAuth.requestHeader(c.localToken, "GET", path, "");
                 value = Json.object(SimpleHttp.requestOnceWithHeaders("GET", url(c, path), null, 2500, Map.of("X-Backstage-Auth", auth)));
-            } catch (Exception e) { error = e; }
+            } catch (Exception e) { invalidateConfig(); error = e; }
             post(result, value, error);
         });
     }
@@ -62,12 +77,12 @@ final class DaemonClient {
         exec.execute(() -> {
             Map<String, Object> value = null; Exception error = null;
             try {
-                AgentConfig c = AgentConfig.load(app);
+                AgentConfig c = currentConfig();
                 String payload = Json.stringify(body == null ? Map.of() : body);
                 String auth = com.deviceagent.crypto.LocalAuth.requestHeader(c.localToken, "POST", path, payload);
                 String raw = SimpleHttp.requestOnceWithHeaders("POST", url(c, path), payload, 6000, Map.of("X-Backstage-Auth", auth));
                 value = raw == null || raw.isBlank() ? Map.of() : Json.object(raw);
-            } catch (Exception e) { error = e; }
+            } catch (Exception e) { invalidateConfig(); error = e; }
             post(result, value, error);
         });
     }
@@ -77,7 +92,7 @@ final class DaemonClient {
             Bytes out = new Bytes(); Exception error = null;
             HttpURLConnection conn = null;
             try {
-                AgentConfig c = AgentConfig.load(app);
+                AgentConfig c = currentConfig();
                 conn = (HttpURLConnection) new URL(url(c, path)).openConnection();
                 conn.setConnectTimeout(1500); conn.setReadTimeout(3000);
                 conn.setRequestProperty("X-Backstage-Auth", com.deviceagent.crypto.LocalAuth.requestHeader(c.localToken, "GET", path, ""));

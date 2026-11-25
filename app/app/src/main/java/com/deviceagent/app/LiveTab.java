@@ -490,7 +490,7 @@ final class LiveTab extends TabPage {
             if (Boolean.TRUE.equals(previewLoading.get(id))) continue;
             previewLoading.put(id, true);
             long seq = previewSeq.getOrDefault(id, -1L);
-            String url = "/preview?displayId=" + display + "&scale=0.55&quality=75" + (seq > 0 ? "&sinceFrame=" + seq : "");
+            String url = "/preview?displayId=" + display + "&scale=0.55&quality=75&format=jpeg" + (seq > 0 ? "&sinceFrame=" + seq : "");
             a.daemon.bytes(url, (shot, error) -> {
                 previewLoading.remove(id);
                 ImageView thumb = thumbs.get(id); TextView note = thumbNotes.get(id);

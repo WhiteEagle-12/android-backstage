@@ -112,6 +112,9 @@
         <provider android:name="com.deviceagent.app.ScreenControlProvider"
             android:authorities="${applicationId}.screencontrol"
             android:exported="true" android:permission="android.permission.WRITE_SECURE_SETTINGS"/>
+        <provider android:name="com.deviceagent.app.LiveSurfaceProvider"
+            android:authorities="${applicationId}.livesurface"
+            android:exported="true" android:permission="android.permission.WRITE_SECURE_SETTINGS"/>
         <receiver android:name="com.deviceagent.app.ScreenControlProvider$StopReceiver" android:exported="false"/>
         <receiver android:name="com.deviceagent.app.AgentRequests$Receiver" android:exported="false"/>
         <receiver

@@ -3,14 +3,17 @@ package com.deviceagent.shell;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.media.Image;
 import android.media.ImageReader;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.IBinder;
 import android.os.PowerManager;
 import android.util.DisplayMetrics;
 import android.view.Display;
@@ -97,11 +100,36 @@ public final class VirtualDisplayHost {
         boolean decorations;
         String sessionId;
         volatile DisplayRecorder recorder;
+        volatile Surface liveSurface;
+        volatile String liveToken;
+        volatile IBinder liveAlive;
+        volatile IBinder.DeathRecipient liveDeath;
         final List<String> attempts = new ArrayList<>();
         final Runnable idleCheck = () -> checkIdle(this);
+        final Runnable liveGuardCheck = () -> checkLiveGuard(this);
 
         int id() { return display.getDisplay().getDisplayId(); }
         boolean valid() { return display != null && display.getDisplay() != null && display.getDisplay().isValid(); }
+
+        void detachLiveLocked() {
+            if (idleHandler != null) idleHandler.removeCallbacks(liveGuardCheck);
+            Surface oldSurface = liveSurface;
+            IBinder oldAlive = liveAlive;
+            IBinder.DeathRecipient oldDeath = liveDeath;
+            liveSurface = null;
+            liveToken = null;
+            liveAlive = null;
+            liveDeath = null;
+            if (oldAlive != null && oldDeath != null) {
+                try { oldAlive.unlinkToDeath(oldDeath, 0); } catch (RuntimeException ignored) { }
+            }
+            if (display != null && reader != null) {
+                try { display.setSurface(reader.getSurface()); } catch (RuntimeException ignored) { }
+            }
+            if (oldSurface != null) {
+                try { oldSurface.release(); } catch (RuntimeException ignored) { }
+            }
+        }
 
         void onFrame(ImageReader r) {
             synchronized (frameLock) {
@@ -121,6 +149,7 @@ public final class VirtualDisplayHost {
         }
 
         void release() {
+            detachLiveLocked();
             DisplayRecorder rec = recorder;
             recorder = null;
             if (rec != null) rec.stopAndWait();
@@ -189,6 +218,10 @@ public final class VirtualDisplayHost {
                 case "touch":
                     touch(safeArgs);
                     return status(safeArgs);
+                case "attach_surface":
+                    return attachSurface(safeArgs);
+                case "detach_surface":
+                    return detachSurface(safeArgs);
                 case "probe_power":
                     return probePower();
                 default:
@@ -436,44 +469,211 @@ public final class VirtualDisplayHost {
         return out;
     }
 
+    private Bundle attachSurface(Bundle args) throws Exception {
+        Integer id = requestedId(args);
+        String authority = args.getString("authority");
+        String token = args.getString("token");
+        if (id == null || id <= 0) return error("displayId is required");
+        if (authority == null || authority.isBlank() || token == null || token.isBlank()) {
+            return error("authority and token are required");
+        }
+        synchronized (lock) {
+            Slot slot = slots.get(id);
+            if (slot == null || !slot.valid()) return error("no active virtual display with that id");
+            if (slot.recorder != null && slot.recorder.isRunning()) {
+                return error("live surface unavailable while recording");
+            }
+        }
+        Context shell = shellContext();
+        Bundle reply = shell.getContentResolver().call(Uri.parse("content://" + authority), "take", token, null);
+        if (reply == null || !reply.getBoolean("ok", false)) {
+            return error("could not retrieve live surface");
+        }
+        Surface surface = extractSurface(reply);
+        IBinder alive = reply.getBinder("alive");
+        if (surface == null || !surface.isValid()) {
+            if (surface != null) {
+                try { surface.release(); } catch (RuntimeException ignored) { }
+            }
+            return error("live surface is invalid");
+        }
+        synchronized (lock) {
+            Slot slot = slots.get(id);
+            if (slot == null || !slot.valid() || (slot.recorder != null && slot.recorder.isRunning())) {
+                try { surface.release(); } catch (RuntimeException ignored) { }
+                return error("virtual display unavailable");
+            }
+            slot.detachLiveLocked();
+            try {
+                slot.display.setSurface(surface);
+            } catch (RuntimeException e) {
+                try { surface.release(); } catch (RuntimeException ignored) { }
+                if (slot.reader != null) {
+                    try { slot.display.setSurface(slot.reader.getSurface()); } catch (RuntimeException ignored) { }
+                }
+                return error("setSurface failed: " + e.getMessage());
+            }
+            slot.liveSurface = surface;
+            slot.liveToken = token;
+            slot.liveAlive = alive;
+            if (alive != null) {
+                IBinder.DeathRecipient death = () -> detachSurfaceByToken(id, token);
+                try {
+                    alive.linkToDeath(death, 0);
+                    slot.liveDeath = death;
+                } catch (Exception e) {
+                    slot.detachLiveLocked();
+                    return error("caller died before attach");
+                }
+            }
+            slot.lastUsedAt = System.currentTimeMillis();
+            wakeLocked(slot);
+            if (idleHandler != null) idleHandler.postDelayed(slot.liveGuardCheck, 350L);
+            Bundle out = new Bundle();
+            out.putBoolean("ok", true);
+            out.putInt("displayId", id);
+            out.putInt("width", slot.width);
+            out.putInt("height", slot.height);
+            return out;
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static Surface extractSurface(Bundle bundle) {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            return bundle.getParcelable("surface", Surface.class);
+        }
+        return bundle.getParcelable("surface");
+    }
+
+    private Bundle detachSurface(Bundle args) {
+        Integer id = requestedId(args);
+        String token = args.getString("token");
+        synchronized (lock) {
+            if (id != null && id > 0) {
+                Slot slot = slots.get(id);
+                if (slot != null && (token == null || token.isEmpty() || token.equals(slot.liveToken))) {
+                    slot.detachLiveLocked();
+                }
+            } else {
+                for (Slot slot : slots.values()) {
+                    if (token == null || token.isEmpty() || token.equals(slot.liveToken)) {
+                        slot.detachLiveLocked();
+                    }
+                }
+            }
+            Bundle out = new Bundle();
+            out.putBoolean("ok", true);
+            return out;
+        }
+    }
+
+    private void detachSurfaceByToken(int displayId, String token) {
+        synchronized (lock) {
+            Slot slot = slots.get(displayId);
+            if (slot != null && token != null && token.equals(slot.liveToken)) {
+                slot.detachLiveLocked();
+            }
+        }
+    }
+
+    private void checkLiveGuard(Slot slot) {
+        int displayId = -1;
+        synchronized (lock) {
+            if (slot.liveSurface == null || !slot.valid() || slots.get(slot.id()) != slot) return;
+            if (slot.recorder != null && slot.recorder.isRunning()) {
+                slot.detachLiveLocked();
+                return;
+            }
+            displayId = slot.id();
+        }
+        String top = SystemBinders.topActivityOnDisplay(displayId);
+        int slash = top.indexOf('/');
+        boolean blocked = slash > 0 && com.deviceagent.tools.PrivacyFence.isGloballyBlocked(top.substring(0, slash));
+        synchronized (lock) {
+            if (slot.liveSurface == null || !slot.valid() || slots.get(displayId) != slot) return;
+            if (blocked || !slot.liveSurface.isValid()) {
+                slot.detachLiveLocked();
+                return;
+            }
+            slot.lastUsedAt = System.currentTimeMillis();
+            if (idleHandler != null) idleHandler.postDelayed(slot.liveGuardCheck, 350L);
+        }
+    }
+
     private Bundle screenshot(Bundle args) {
         long started=System.nanoTime();
         float scale = args.getFloat("scale", 0.5f);
         if (scale <= 0f || scale > 1f) scale = 0.5f;
         int quality = Math.max(30, Math.min(100, args.getInt("quality", 85)));
+        String format = args.getString("format", "webp");
         long sinceFrame = args.getLong("sinceFrame", -1L);
-        Bitmap scaled;
+        Bitmap scaled = null;
         int displayId, sourceWidth, sourceHeight;
         long frameAt, frameSeq;
+        boolean liveAttached;
         touch(args);
         synchronized (lock) {
             Slot slot = slot(args);
             if (slot == null || slot.display == null) return error("no virtual display with that id; begin a task first");
             displayId = slot.id();
-            synchronized (slot.frameLock) {
-                if (slot.latest == null) return error("no frame rendered yet; launch an app on the virtual display first");
-                sourceWidth = slot.latest.getWidth();
-                sourceHeight = slot.latest.getHeight();
-                frameAt = slot.lastFrameAt;
-                frameSeq = slot.frames;
-                if (sinceFrame > 0 && frameSeq == sinceFrame) {
-                    Bundle unchanged = new Bundle();
-                    unchanged.putBoolean("ok", true);
-                    unchanged.putBoolean("unchanged", true);
-                    unchanged.putInt("displayId", displayId);
-                    unchanged.putInt("sourceWidth", sourceWidth);
-                    unchanged.putInt("sourceHeight", sourceHeight);
-                    unchanged.putLong("frameSeq", frameSeq);
-                    unchanged.putLong("frameAt", frameAt);
-                    return unchanged;
+            sourceWidth = slot.width;
+            sourceHeight = slot.height;
+            liveAttached = slot.liveSurface != null;
+            if (!liveAttached) {
+                synchronized (slot.frameLock) {
+                    if (slot.latest == null) return error("no frame rendered yet; launch an app on the virtual display first");
+                    sourceWidth = slot.latest.getWidth();
+                    sourceHeight = slot.latest.getHeight();
+                    frameAt = slot.lastFrameAt;
+                    frameSeq = slot.frames;
+                    if (sinceFrame > 0 && frameSeq == sinceFrame) {
+                        Bundle unchanged = new Bundle();
+                        unchanged.putBoolean("ok", true);
+                        unchanged.putBoolean("unchanged", true);
+                        unchanged.putInt("displayId", displayId);
+                        unchanged.putInt("sourceWidth", sourceWidth);
+                        unchanged.putInt("sourceHeight", sourceHeight);
+                        unchanged.putLong("frameSeq", frameSeq);
+                        unchanged.putLong("frameAt", frameAt);
+                        return unchanged;
+                    }
+                    scaled = toScaledBitmap(slot.latest, scale);
                 }
-                scaled = toScaledBitmap(slot.latest, scale);
+            } else {
+                frameAt = System.currentTimeMillis();
+                frameSeq = ++slot.frames;
+            }
+        }
+        if (liveAttached) {
+            try {
+                Bundle raw = LocalShell.run("screencap -d " + displayId + " -p", null, 3000);
+                byte[] pngBytes = raw.getByteArray("stdout");
+                if (pngBytes == null || pngBytes.length == 0) {
+                    return error("could not capture live virtual display");
+                }
+                Bitmap full = BitmapFactory.decodeByteArray(pngBytes, 0, pngBytes.length);
+                if (full == null) return error("could not decode live virtual display frame");
+                sourceWidth = full.getWidth();
+                sourceHeight = full.getHeight();
+                if (scale >= 1f) {
+                    scaled = full;
+                } else {
+                    int outW = Math.max(1, Math.round(sourceWidth * scale));
+                    int outH = Math.max(1, Math.round(sourceHeight * scale));
+                    scaled = Bitmap.createScaledBitmap(full, outW, outH, true);
+                    if (scaled != full) full.recycle();
+                }
+            } catch (Exception e) {
+                return error("live capture failed: " + e.getMessage());
             }
         }
         long encodingStarted=System.nanoTime();
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
         String mime;
-        if (android.os.Build.VERSION.SDK_INT >= 30
+        if ("jpeg".equalsIgnoreCase(format) && scaled.compress(Bitmap.CompressFormat.JPEG, quality, encoded)) {
+            mime = "image/jpeg";
+        } else if (android.os.Build.VERSION.SDK_INT >= 30
                 && scaled.compress(Bitmap.CompressFormat.WEBP_LOSSY, quality, encoded)) {
             mime = "image/webp";
         } else {
@@ -510,6 +710,7 @@ public final class VirtualDisplayHost {
         synchronized (lock) {
             Slot slot = slot(args);
             if (slot == null || !slot.valid()) return error("no virtual display with that id; begin a task first");
+            slot.detachLiveLocked();
             if (slot.recorder != null && slot.recorder.isRunning()) {
                 return Bundles.fromMap(slot.recorder.statusMap());
             }
@@ -589,6 +790,17 @@ public final class VirtualDisplayHost {
         }
         try {
             Context shell = base.createPackageContext(SHELL_PACKAGE, 0);
+            try {
+                java.lang.reflect.Field op = shell.getClass().getDeclaredField("mOpPackageName");
+                op.setAccessible(true);
+                op.set(shell, SHELL_PACKAGE);
+                if (android.os.Build.VERSION.SDK_INT >= 31) {
+                    java.lang.reflect.Field attr = shell.getClass().getDeclaredField("mAttributionSource");
+                    attr.setAccessible(true);
+                    attr.set(shell, new android.content.AttributionSource.Builder(android.os.Process.myUid()).setPackageName(SHELL_PACKAGE).build());
+                }
+            } catch (Throwable ignored) {
+            }
             contextPath += "+createPackageContext";
             return shell;
         } catch (Exception e) {
