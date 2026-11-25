@@ -41,5 +41,17 @@ public final class IntentCommand {
         }
         return out.toString();
     }
+    /**
+     * Read "am start" output. Null means Android accepted the launch. "Error:" means nothing
+     * started (open_failed); any other failure leaves the outcome unknown. Both carry the output.
+     */
+    public static Map<String,Object> launchFailure(boolean exitOk,String stdout,String stderr){
+        String output=(Objects.toString(stdout,"")+"\n"+Objects.toString(stderr,"")).strip();
+        boolean refused=output.lines().anyMatch(l->l.startsWith("Error:")||l.startsWith("Error type"));
+        if(exitOk&&!refused)return null;
+        if(output.length()>800)output=output.substring(0,800);
+        if(refused)return Json.mapOf("ok",false,"inputDelivered",false,"code","open_failed","error","Android did not start the activity. Read output for the reason.","output",output);
+        return Json.mapOf("ok",false,"inputDelivered",null,"code","input_outcome_unknown","error","Android did not confirm the launch. Inspect the session before opening it again.","output",output);
+    }
     private static void arg(StringBuilder out,String flag,Object value){out.append(' ').append(flag).append(' ').append(ShellCommand.quote(String.valueOf(value)));}
 }

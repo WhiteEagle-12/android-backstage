@@ -19,8 +19,8 @@ public final class PhoneToolsHostTest {
     }
     private static String code(Runnable r){try{r.run();return "";}catch(InputNotSentException e){return e.code+":"+e.getMessage();}}
     public static void run(){
-        stableIdentity();stableIds();selectors();defaultScroll();displayTurn();
-        System.out.println("PASS phone tools: stable target identity, stable ids in full and failure views, tolerant selectors, default scroll container, display turn recovery");
+        stableIdentity();stableIds();selectors();defaultScroll();displayTurn();launchOutcome();
+        System.out.println("PASS phone tools: stable target identity, stable ids in full and failure views, tolerant selectors, default scroll container, display turn recovery, launch outcomes");
     }
     private static void stableIdentity(){
         // The observation is taken while the activity slides in; the window then settles.
@@ -115,4 +115,12 @@ public final class PhoneToolsHostTest {
         waiter.start();waiter.join();
         check(!third[0],"the new holder still has the turn");
     }catch(InterruptedException e){throw new AssertionError(e);}}
+    private static void launchOutcome(){
+        check(IntentCommand.launchFailure(true,"Starting: Intent { act=android.intent.action.VIEW }\nStatus: ok\nLaunchState: COLD","")==null,"an accepted launch is not a failure");
+        check(IntentCommand.launchFailure(true,"Starting: Intent {}\nWarning: Activity not started, intent has been delivered to currently running top-most instance.","")==null,"a delivered intent is not a failure");
+        var refused=IntentCommand.launchFailure(true,"Starting: Intent { act=android.intent.action.SHOW_STOPWATCH pkg=com.google.android.deskclock }\nError: Activity not started, unable to resolve Intent { act=android.intent.action.SHOW_STOPWATCH }","");
+        check("open_failed".equals(refused.get("code"))&&Boolean.FALSE.equals(refused.get("inputDelivered"))&&String.valueOf(refused.get("output")).contains("unable to resolve"),"a refused launch is open_failed with the am output: "+refused);
+        var lost=IntentCommand.launchFailure(false,"","cmd: Failure calling service activity");
+        check("input_outcome_unknown".equals(lost.get("code"))&&lost.get("inputDelivered")==null&&String.valueOf(lost.get("output")).contains("Failure"),"an unclear failure stays unknown and keeps the output");
+    }
 }

@@ -624,7 +624,7 @@ public final class AndroidTools {
         if(args.containsKey("intent")){
             var intentMap=PrimitiveArguments.map(args.get("intent"));
             requireIntentTargetAllowed(Json.string(intentMap,"action"),Json.string(intentMap,"data"),Json.string(intentMap,"package"),Json.string(intentMap,"component"));
-            var launched=device.exec(IntentCommand.build(intentMap,display));if(!launched.ok()||launched.stdoutText().contains("Error:"))return Json.mapOf("ok",false,"inputDelivered",null,"code","input_outcome_unknown","error","Android did not confirm the launch. Inspect the session before opening it again.");return resultMap(launched);
+            var launched=device.exec(IntentCommand.build(intentMap,display));var failed=IntentCommand.launchFailure(launched.ok(),launched.stdoutText(),launched.stderrText());if(failed!=null)return failed;return resultMap(launched);
         }
         if(args.containsKey("url")){
             String u=Json.string(args,"url");
@@ -1605,7 +1605,7 @@ public final class AndroidTools {
         if (data != null && !data.isBlank()) cmd.append(" -d ").append(ShellCommand.quote(data));
         if (pkg != null && !pkg.isBlank()) cmd.append(pkg.contains("/") ? " -n " : " -p ").append(ShellCommand.quote(pkg));
         if (extra != null && !extra.isBlank()) cmd.append(' ').append(extra);
-        ProcessResult launched=device.exec(cmd.toString());if(!launched.ok()||launched.stdoutText().contains("Error:"))return Json.mapOf("ok",false,"inputDelivered",false,"code","open_failed","error","Android could not open this destination.");return resultMap(launched);
+        ProcessResult launched=device.exec(cmd.toString());var failed=IntentCommand.launchFailure(launched.ok(),launched.stdoutText(),launched.stderrText());if(failed!=null)return failed;return resultMap(launched);
     }
 
     public Map<String, Object> clipboard(String text) {
