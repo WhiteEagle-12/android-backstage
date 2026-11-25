@@ -78,6 +78,23 @@ public final class InteractionHost {
             if(op.equals("share"))return ShareHost.open(shellContext(),context.getPackageName(),com.deviceagent.tools.PrimitiveArguments.map(args.get("share")),((Number)args.get("display")).intValue(),()->{try(var guard=inputGuard(((Number)args.get("display")).intValue(),args)){guard.check();}catch(RuntimeException e){throw e;}catch(Exception e){throw new IllegalStateException("Screen control could not be checked");}});
             if(op.equals("device_summary"))return deviceSummary();
             if(op.equals("packages"))return packages(args);
+            if(op.equals("launch_conflict")){
+                // A single-task app has one task. Starting it on this display moves that task here from wherever it is.
+                var pm=shellContext().getPackageManager();String pkg=Json.string(args,"package");
+                android.content.Intent intent;
+                if(args.get("action") instanceof String action){
+                    intent=new android.content.Intent(action);
+                    if(args.get("data") instanceof String data)intent.setData(android.net.Uri.parse(data));
+                    if(pkg!=null)intent.setPackage(pkg);
+                    if(pkg!=null&&args.get("activity") instanceof String activity)intent.setClassName(pkg,activity.startsWith(".")?pkg+activity:activity);
+                }else intent=pkg==null?null:pm.getLaunchIntentForPackage(pkg);
+                var resolved=intent==null?null:pm.resolveActivity(intent,0);
+                if(resolved==null||resolved.activityInfo==null||resolved.activityInfo.launchMode<android.content.pm.ActivityInfo.LAUNCH_SINGLE_TASK)return Json.mapOf("ok",true,"conflict",false);
+                var displays=SystemBinders.taskDisplays(resolved.activityInfo.packageName);
+                int display=GesturePlan.integer(args,"display",-1,0,Integer.MAX_VALUE);
+                if(displays!=null)for(int d:displays)if(d!=display)return Json.mapOf("ok",true,"conflict",true,"package",resolved.activityInfo.packageName,"otherDisplay",d);
+                return Json.mapOf("ok",true,"conflict",false);
+            }
             if(op.equals("resolve_launcher")){
                 String pkg=Json.string(args,"package");
                 android.content.Intent intent=shellContext().getPackageManager().getLaunchIntentForPackage(pkg);

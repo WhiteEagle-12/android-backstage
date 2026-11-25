@@ -223,6 +223,28 @@ public final class SystemBinders {
      * matching {@link com.deviceagent.tools.TaskSnapshot#parse} schema. Returns {@code null}
      * if reflection cannot inspect child tasks so callers can fall back to {@code am stack list}.
      */
+    /** Displays that hold a task of this package, or null when Android does not say. */
+    public static java.util.Set<Integer> taskDisplays(String packageName) {
+        try {
+            Object atm = Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null);
+            if (atm == null) return null;
+            Object listObj = atm.getClass().getMethod("getAllRootTaskInfos").invoke(atm);
+            if (!(listObj instanceof java.util.List<?> list)) return null;
+            java.util.Set<Integer> out = new java.util.TreeSet<>();
+            for (Object info : list) {
+                if (info == null) continue;
+                Class<?> c = info.getClass();
+                int display = ((Number) c.getField("displayId").get(info)).intValue();
+                String[] names = (String[]) c.getField("childTaskNames").get(info);
+                if (names == null) continue;
+                for (String name : names) if (name != null && name.startsWith(packageName + "/")) out.add(display);
+            }
+            return out;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
+    }
+
     public static java.util.List<java.util.Map<String, Object>> tasksOnDisplay(int displayId) {
         try {
             Object atm = Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null);

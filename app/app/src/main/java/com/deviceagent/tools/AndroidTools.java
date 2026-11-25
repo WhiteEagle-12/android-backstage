@@ -605,8 +605,23 @@ public final class AndroidTools {
         default -> throw new IllegalArgumentException("Unknown tool: "+name);
     };}
     private Map<String,Object> installSource(Map<String,Object> source){return source.containsKey("url")?installUrl(Json.string(source,"url"),Json.string(source,"fileKey"),Json.string(source,"sha256")):install(Json.string(source,"path"));}
+    /** Refuse a launch that would move a single-task app off the main screen or out of another session. */
+    private void requireNoTaskMove(Map<String,Object> query,int display){
+        if(display==0)return;
+        Map<String,Object> reply;
+        try{var q=new LinkedHashMap<>(query);q.put("display",display);reply=device.interaction("launch_conflict",q);}catch(RuntimeException e){return;}
+        if(!Boolean.TRUE.equals(reply.get("conflict")))return;
+        boolean main=Integer.valueOf(0).equals(reply.get("otherDisplay"));
+        throw new InputNotSentException("app_open_elsewhere",main
+            ?"This app runs in one window, and it is open on the phone's screen. Opening it here would move it off the screen. Close it there, or begin a foreground session."
+            :"This app runs in one window, and another session shows it. Opening it here would take it from that session. Finish that session, or join it.",
+            Map.of("package",String.valueOf(reply.get("package"))));
+    }
     private Map<String,Object> openPrimitive(Map<String,Object> args){
         int display=((Number)args.get("display")).intValue();wakeIfNeeded(display);
+        if(args.get("intent") instanceof Map<?,?> im){var q=new LinkedHashMap<String,Object>();for(String k:List.of("action","data","package","activity"))if(im.get(k)!=null)q.put(k,im.get(k));requireNoTaskMove(q,display);}
+        else if(args.get("url") instanceof String u)requireNoTaskMove(Json.mapOf("action","android.intent.action.VIEW","data",u),display);
+        else if(args.get("package") instanceof String p&&!args.containsKey("share")&&!args.containsKey("activityTaskId"))requireNoTaskMove(args.containsKey("activity")?Json.mapOf("action","android.intent.action.MAIN","package",p,"activity",args.get("activity")):Json.mapOf("package",p),display);
         if(args.containsKey("package"))privacyFence.requireAllowed(Json.string(args,"package"));
         if(args.containsKey("activityTaskId")){
             int id=((Number)args.get("activityTaskId")).intValue();
