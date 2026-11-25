@@ -250,19 +250,20 @@ public final class Observations {
         int display=((Number)tree.get("display")).intValue();
         String scopeKey=display+":"+str(tree.get("windowId"));
         String effectiveSince=since;
-        Entry previous=null;
+        Entry previous=null,last=null;
+        String autoId=lastByScope.get(scopeKey);
+        if(autoId!=null){
+            Entry cand=entries.get(autoId);
+            if(cand!=null&&cand.display==display&&clock.getAsLong()-cand.at<=TTL_MS)last=cand;
+        }
         if(since!=null){
             previous=get(since,display);
-        }else if(!full&&!debug){
-            String autoId=lastByScope.get(scopeKey);
-            if(autoId!=null){
-                Entry cand=entries.get(autoId);
-                if(cand!=null&&cand.display==display&&clock.getAsLong()-cand.at<=TTL_MS){
-                    previous=cand;
-                    effectiveSince=autoId;
-                }
-            }
+        }else if(!full&&!debug&&last!=null){
+            previous=last;effectiveSince=autoId;
         }
+        // Target ids always carry over from the last observation of this scope, so an id an agent holds
+        // keeps naming the same control in failure and full responses. Only deltas depend on the mode.
+        Entry idSource=previous!=null?previous:last;
         List<Map<String,Object>> ns=appNodes(tree);
         Map<Object,Map<String,Object>> byIndex=new HashMap<>(ns.size()*2);
         Map<Object,List<Map<String,Object>>> children=new HashMap<>();
@@ -270,7 +271,7 @@ public final class Observations {
         long windowArea=0;for(var w:windows(tree))if(selectedWindow(tree,w)){int[] b=ObservationCondition.bounds(w.get("bounds"));if(b!=null)windowArea=(long)(b[2]-b[0])*(b[3]-b[1]);}
         var layout=new ObservationLayout(tree);
         Map<String,Map<String,Object>> targets=new LinkedHashMap<>();List<Map<String,Object>> controls=new ArrayList<>();int unlabeled=0;
-        Map<String,String> previousIds=new HashMap<>();if(previous!=null)previous.targets.forEach((id,n)->previousIds.put(identity(n),id));
+        Map<String,String> previousIds=new HashMap<>();if(idSource!=null)idSource.targets.forEach((id,n)->previousIds.put(identity(n),id));
         for(var presentation:layout.controls()){
             var n=presentation.node();String label=presentation.label();
             if(label.isEmpty()){if(Boolean.TRUE.equals(n.get("scrollable")))label="Scroll area";else{unlabeled++;continue;}}

@@ -313,10 +313,11 @@ public final class AndroidTools {
             default -> {}
         }
         try{
-            ToolCatalog.validate(name,args);
+            var checked=PrimitiveArguments.scrollForms(name,args);
+            ToolCatalog.validate(name,checked);
             requireScreenAllowed(name,args);
             if(name.equals("android.device")&&"audio".equals(args.get("operation"))){args.put("_owner",owner);args.put("_configPath",configPath);}
-            if(PrimitiveArguments.TOOLS.contains(name))PrimitiveArguments.validate(name,args);
+            if(PrimitiveArguments.TOOLS.contains(name))PrimitiveArguments.validate(name,checked);
             if(name.equals("android.sequence")){var check=new LinkedHashMap<>(args);check.putIfAbsent("display",0);LocalSequence.validate(check);}
             if(name.equals("android.install")||name.equals("android.maintenance")){var source=PrimitiveArguments.map(args.get("source"));if(source.containsKey("url"))PrimitiveArguments.url(Json.string(source,"url"));}
             try(var execution=device.executionScope()){

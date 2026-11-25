@@ -23,6 +23,21 @@ public final class PrimitiveArguments {
         try{URI u=URI.create(value);if(!Set.of("http","https").contains(u.getScheme())||u.getHost()==null||u.getUserInfo()!=null)throw new IllegalArgumentException();}
         catch(RuntimeException e){throw new IllegalArgumentException("Use an http or https URL without embedded credentials");}
     }
+    /**
+     * Accept the scroll forms agents send most: no container (the phone picks the largest scrollable),
+     * selector {role:"scroll"} alone, and until {selector, maxScrolls}. Returns the arguments to validate:
+     * with no container, a stand-in selector satisfies the schema and is never used.
+     */
+    public static Map<String,Object> scrollForms(String name,Map<String,Object> a){
+        if(!name.equals("android.scroll")&&!name.equals("android.scroll_until"))return a;
+        if(a.get("until") instanceof Map<?,?> until&&until.containsKey("selector")){
+            var nested=map(until);a.put("until",nested.get("selector"));
+            if(nested.containsKey("maxScrolls"))a.putIfAbsent("maxScrolls",nested.get("maxScrolls"));
+        }
+        if(a.get("selector") instanceof Map<?,?> sel&&sel.size()==1&&"scroll".equals(sel.get("role")))a.remove("selector");
+        if(a.containsKey("target")||a.containsKey("observation")||a.containsKey("selector"))return a;
+        var check=new java.util.LinkedHashMap<>(a);check.put("selector",Map.of("label","Scroll area"));return check;
+    }
     public static void selector(Object raw){var s=map(raw);if(!Set.of("label","role","context","resourceId").containsAll(s.keySet())||!s.containsKey("label")&&!s.containsKey("resourceId"))throw new IllegalArgumentException("A selector needs label or resourceId, with optional role and context");for(String k:s.keySet())text(s,k,false,1000);}
     public static void validate(String name,Map<String,Object> a){
         if(!TOOLS.contains(name))throw new IllegalArgumentException("Unsupported primitive: "+name);

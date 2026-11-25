@@ -49,7 +49,50 @@ public final class ObservationCondition {
         for(String group:List.of("conditions","all","any"))if(c.get(group) instanceof List<?> children){for(Object child:children)references(map(child),observations,display);return;}
         if(c.get("observation") instanceof String id)observations.get(id,display);
     }
-    public static boolean selects(Map<String,Object> selector,Map<String,Object> control){return selector.entrySet().stream().allMatch(e->Objects.equals(e.getValue(),control.get(e.getKey())));}
+    public static boolean selects(Map<String,Object> selector,Map<String,Object> control){return selector.entrySet().stream().allMatch(e->e.getKey().equals("resourceId")?resourceMatches(e.getValue(),control.get("resourceId")):Objects.equals(e.getValue(),control.get(e.getKey())));}
+    /** "#url_bar", "url_bar" and "id/url_bar" name "<any package>:id/url_bar". A full id must match exactly. */
+    static boolean resourceMatches(Object want,Object have){
+        String w=Observations.str(want),h=Observations.str(have);
+        if(w.equals(h))return true;
+        if(w.startsWith("#"))w=w.substring(1);
+        if(w.isEmpty()||w.contains(":"))return false;
+        return h.endsWith(w.contains("/")?":"+w:":id/"+w);
+    }
+    /**
+     * Controls a selector picks for an action. Exact matches win. With none, a label that matches one
+     * control case-insensitively, then by prefix, then by contained text is accepted; several at the
+     * first level that matches are returned so the caller reports them as ambiguous.
+     */
+    public static List<Map<String,Object>> pick(Map<String,Object> selector,List<Map<String,Object>> controls){
+        var exact=controls.stream().filter(c->selects(selector,c)).collect(java.util.stream.Collectors.toList());
+        if(!exact.isEmpty()||!(selector.get("label") instanceof String label))return exact;
+        var rest=new LinkedHashMap<>(selector);rest.remove("label");
+        String want=label.strip().toLowerCase(Locale.ROOT);
+        var pool=controls.stream().filter(c->selects(rest,c)).collect(java.util.stream.Collectors.toList());
+        List<java.util.function.Predicate<String>> levels=List.of(want::equals,l->l.startsWith(want),l->l.contains(want));
+        for(var level:levels){
+            var found=pool.stream().filter(c->level.test(Observations.str(c.get("label")).strip().toLowerCase(Locale.ROOT))).collect(java.util.stream.Collectors.toList());
+            if(!found.isEmpty())return found;
+        }
+        return List.of();
+    }
+    /** Up to five visible labels nearest to the label a selector asked for. */
+    public static List<String> closest(Map<String,Object> selector,List<Map<String,Object>> controls){
+        if(!(selector.get("label") instanceof String label))return List.of();
+        String want=label.toLowerCase(Locale.ROOT);
+        Map<String,Integer> score=new LinkedHashMap<>();
+        for(var c:controls){
+            String l=Observations.str(c.get("label"));if(l.isBlank()||score.containsKey(l))continue;
+            String low=l.toLowerCase(Locale.ROOT);
+            score.put(l,low.contains(want)||want.contains(low)?0:distance(want,low.length()>60?low.substring(0,60):low));
+        }
+        return score.entrySet().stream().sorted(Map.Entry.comparingByValue()).limit(5).map(Map.Entry::getKey).collect(java.util.stream.Collectors.toList());
+    }
+    private static int distance(String a,String b){
+        int[] row=new int[b.length()+1];for(int j=0;j<=b.length();j++)row[j]=j;
+        for(int i=1;i<=a.length();i++){int prev=row[0];row[0]=i;for(int j=1;j<=b.length();j++){int cur=row[j];row[j]=Math.min(Math.min(row[j]+1,row[j-1]+1),prev+(a.charAt(i-1)==b.charAt(j-1)?0:1));prev=cur;}}
+        return row[b.length()];
+    }
     @SuppressWarnings("unchecked") public static List<Map<String,Object>> controls(Map<String,Object> tree){return (List<Map<String,Object>>)new Observations(()->0).observe(tree,300,null).get("controls");}
     public static boolean matches(Map<String,Object> c,Map<String,Object> tree,Observations observations,int display){return matches(c,tree,observations,display,new HashMap<>(),System.nanoTime()/1_000_000);}
     public static boolean matches(Map<String,Object> c,Map<String,Object> tree,Observations observations,int display,Map<String,Object> state,long now){

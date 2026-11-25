@@ -36,8 +36,8 @@ public final class EvidenceFlow {
     /** Not device-wide synchronized: callers hold the target display's turn, so displays run independently. */
     public Map<String,Object> run(String name,Map<String,Object> supplied){
         long start=clock.getAsLong();Map<String,Object> result;
-        try{PrimitiveArguments.validate(name,supplied);result=execute(name,new LinkedHashMap<>(supplied));}
-        catch(InputNotSentException e){result=failure(e.code,e.getMessage(),false);if(e.details.get("observation") instanceof Map<?,?> view)for(var field:view.entrySet())result.put(field.getKey().toString(),field.getValue());}
+        try{var args=new LinkedHashMap<>(supplied);PrimitiveArguments.validate(name,PrimitiveArguments.scrollForms(name,args));result=execute(name,args);}
+        catch(InputNotSentException e){result=failure(e.code,e.getMessage(),false);for(var d:e.details.entrySet())if(!d.getKey().equals("observation"))result.put(d.getKey(),d.getValue());if(e.details.get("observation") instanceof Map<?,?> view)for(var field:view.entrySet())result.put(field.getKey().toString(),field.getValue());}
         catch(IllegalArgumentException e){result=failure("invalid_argument",e.getMessage(),false);}
         if(supplied.containsKey("verify")||!Set.of("android.observe","android.wait").contains(name)){
             var verification=new LinkedHashMap<String,Object>();
@@ -84,7 +84,7 @@ public final class EvidenceFlow {
             long tAction=clock.getAsLong();
             try{
                 ActionDeadline.check();
-                if(args.containsKey("target")||args.containsKey("selector"))result=targetAction(args,before,display,name.equals("android.type")?"type":name.equals("android.scroll")?"scroll":"tap");
+                if(args.containsKey("target")||args.containsKey("selector")||name.equals("android.scroll"))result=targetAction(args,before,display,name.equals("android.type")?"type":name.equals("android.scroll")?"scroll":"tap");
                 else result=new LinkedHashMap<>(backend.action(name,args));
             }catch(InputNotSentException e){return failure(e.code,e.getMessage(),false);}
             catch(IllegalArgumentException e){return failure("invalid_argument",e.getMessage(),false);}
@@ -200,7 +200,7 @@ public final class EvidenceFlow {
                 return result;
             }
             throw new IllegalStateException("Unreachable retry state");
-        }catch(InputNotSentException e){var result=failure(e.code,e.getMessage(),false);result.putAll(observations.observe(tree,40,null));return result;}
+        }catch(InputNotSentException e){var result=failure(e.code,e.getMessage(),false);e.details.forEach((k,v)->{if(!k.equals("observation"))result.put(k,v);});result.putAll(observations.observe(tree,40,null));return result;}
     }
     private Map<String,Object> recoverySnapshot(int display,String windowId){
         try{return snapshot(display,windowId);}catch(InputNotSentException e){throw e;}catch(RuntimeException e){throw new InputNotSentException("observation_failed","No input was sent. Observe the display before retrying.");}
@@ -228,9 +228,25 @@ public final class EvidenceFlow {
     @SuppressWarnings("unchecked") private Map<String,Object> resolve(Map<String,Object> args,Map<String,Object> tree,int display,String operation){
         if(args.containsKey("selector")){
             var view=observations.observe(tree,300,null);var controls=(List<Map<String,Object>>)view.get("controls");var selector=PrimitiveArguments.map(args.get("selector"));
-            var matches=controls.stream().filter(c->ObservationCondition.selects(selector,c)).collect(java.util.stream.Collectors.toList());
-            if(matches.size()!=1)throw new InputNotSentException(matches.isEmpty()?"target_not_found":"ambiguous_target","Choose a unique control from this observation.",Map.of("observation",view));
+            var matches=ObservationCondition.pick(selector,controls);
+            if(matches.isEmpty()){
+                var near=ObservationCondition.closest(selector,controls);
+                throw new InputNotSentException("target_not_found",near.isEmpty()?"No control matches this selector. Choose one from this observation.":"No control matches this selector. Closest labels: "+String.join(", ",near.stream().map(l->"\""+l+"\"").toList())+".",near.isEmpty()?Map.of("observation",view):Map.of("observation",view,"closest",near));
+            }
+            if(matches.size()>1)throw new InputNotSentException("ambiguous_target","Several controls match this selector. Add role, context or resourceId.",Map.of("observation",view,"matches",matches.stream().limit(5).map(c->c.get("id")).toList()));
             args.put("target",matches.get(0).get("id"));args.put("observation",view.get("observation"));
+        }else if(!args.containsKey("target")&&operation.equals("scroll")){
+            // No container named: use the largest scrollable area the display shows.
+            var view=observations.observe(tree,300,null);String observation=(String)view.get("observation");String best=null;long bestArea=-1;
+            for(var c:(List<Map<String,Object>>)view.get("controls")){
+                if(!"scroll".equals(c.get("role")))continue;
+                var ref=observations.target(observation,(String)c.get("id"),display,tree,"scroll");
+                var node=Observations.appNodes(tree).stream().filter(n->Objects.equals(n.get("nodeId"),ref.get("nodeId"))&&Observations.windowKey(n).equals(ref.get("windowKey"))).findFirst().orElse(null);
+                int[] b=node==null?null:ObservationCondition.bounds(node.get("bounds"));long area=b==null?0:(long)(b[2]-b[0])*(b[3]-b[1]);
+                if(area>bestArea){bestArea=area;best=(String)c.get("id");}
+            }
+            if(best==null)throw new InputNotSentException("target_not_found","Nothing on this display scrolls. Observe it and choose a target.",Map.of("observation",view));
+            args.put("target",best);args.put("observation",observation);
         }
         return observations.target(Json.string(args,"observation"),Json.string(args,"target"),display,tree,operation);
     }
@@ -242,7 +258,7 @@ public final class EvidenceFlow {
         catch(InputNotSentException e){if(!e.code.equals("stale_target"))throw e;recovered=true;tree=snapshot(display,window(args));container=observations.refreshTarget(Json.string(selection,"observation"),Json.string(selection,"target"),display,tree,"scroll");}
         Map<String,Object> result=Json.mapOf("ok",true,"outcome","succeeded");
         try{while(true){
-            var matches=ObservationCondition.controls(tree).stream().filter(c->ObservationCondition.selects(PrimitiveArguments.map(args.get("until")),c)).collect(java.util.stream.Collectors.toList());
+            var matches=ObservationCondition.pick(PrimitiveArguments.map(args.get("until")),ObservationCondition.controls(tree));
             if(matches.size()>1){result=failure("ambiguous_target","The destination matches several controls. Choose a more specific selector.",delivered);break;}
             if(matches.size()==1){found=true;break;}
             if(end||count>=max||clock.getAsLong()-started>=timeout)break;

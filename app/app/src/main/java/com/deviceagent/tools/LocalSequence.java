@@ -16,7 +16,7 @@ public final class LocalSequence {
             String name=Observations.str(step.get("tool"));var a=map(step.get("arguments"));
             if(a.containsKey("display")||a.containsKey("requestId")||a.containsKey("sessionId"))throw new IllegalArgumentException("Steps inherit display and request ownership");
             // References are deliberately limited to prior observation IDs. Values and actions remain literal.
-            validateReferences(a,index);var scoped=new LinkedHashMap<>(a);scoped.put("display",args.get("display"));PrimitiveArguments.validate(name,scoped);
+            validateReferences(a,index);var scoped=new LinkedHashMap<>(a);scoped.put("display",args.get("display"));PrimitiveArguments.validate(name,PrimitiveArguments.scrollForms(name,scoped));
             if(step.containsKey("before")){validateReferences(step.get("before"),index);ObservationCondition.validate(map(step.get("before")));}
             index++;
         }
