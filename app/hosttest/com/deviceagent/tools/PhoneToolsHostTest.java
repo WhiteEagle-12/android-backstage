@@ -19,8 +19,8 @@ public final class PhoneToolsHostTest {
     }
     private static String code(Runnable r){try{r.run();return "";}catch(InputNotSentException e){return e.code+":"+e.getMessage();}}
     public static void run(){
-        stableIdentity();stableIds();selectors();defaultScroll();displayTurn();launchOutcome();sessionFolders();
-        System.out.println("PASS phone tools: stable target identity, stable ids in full and failure views, tolerant selectors, default scroll container, display turn recovery, launch outcomes, session folder cleanup");
+        stableIdentity();stableIds();selectors();defaultScroll();displayTurn();launchOutcome();sessionFolders();slider();
+        System.out.println("PASS phone tools: stable target identity, stable ids in full and failure views, tolerant selectors, default scroll container, display turn recovery, launch outcomes, session folder cleanup, sliders");
     }
     private static void stableIdentity(){
         // The observation is taken while the activity slides in; the window then settles.
@@ -152,4 +152,16 @@ public final class PhoneToolsHostTest {
         check(java.nio.file.Files.exists(root.resolve(live))&&tasks.use(live,"a")==2,"an active session is never touched");
     }catch(java.io.IOException e){throw new AssertionError(e);}}
     private static long count(java.nio.file.Path root) throws java.io.IOException {try(var s=java.nio.file.Files.list(root)){return s.count();}}
+    private static void slider(){
+        var row=node(0,-1,"row","",false);row.put("bounds","[0,0][1000,300]");
+        var title=node(1,0,"title","Brightness level",false);title.put("bounds","[0,0][1000,100]");
+        var bar=node(2,0,"bar","",false);bar.putAll(Map.of("class","android.widget.SeekBar","contentDescription","Brightness level","bounds","[0,100][1000,300]","range",Json.mapOf("min",0.0,"max",255.0,"current",114.0)));
+        var tree=EvidenceHostTest.tree(new ArrayList<>(List.of(row,title,bar)));
+        var obs=new Observations(()->0);var view=obs.observe(tree,40,null);
+        var c=((List<?>)view.get("controls")).stream().map(PrimitiveArguments::map).filter(x->"slider".equals(x.get("role"))).findFirst().orElseThrow(()->new AssertionError("slider is a control: "+view));
+        check("Brightness level".equals(c.get("label"))&&Double.valueOf(114.0).equals(c.get("value"))&&Double.valueOf(255.0).equals(c.get("max")),"slider shows label, value and range: "+c);
+        var ref=obs.target((String)view.get("observation"),(String)c.get("id"),2,tree,"type");
+        check("bar".equals(ref.get("nodeId")),"a slider accepts a typed value");
+        check(code(()->obs.target((String)view.get("observation"),(String)c.get("id"),2,tree,"tap")).startsWith("target_unsupported"),"a slider that is not clickable is not tapped");
+    }
 }

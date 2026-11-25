@@ -511,6 +511,9 @@ public final class AccessibilityHost {
                 if (!label.isEmpty()) row.put("accessibilityLabel",label);
             }
             row.put("actions",node.getActionList().stream().map(AccessibilityNodeInfo.AccessibilityAction::getId).collect(java.util.stream.Collectors.toList()));
+            AccessibilityNodeInfo.RangeInfo range=node.getRangeInfo();
+            if (range!=null&&node.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS))
+                row.put("range",Json.mapOf("min",(double)range.getMin(),"max",(double)range.getMax(),"current",(double)range.getCurrent()));
             if (node.isEditable()) {
                 row.put("editable",true);
                 row.put("inputType",node.getInputType());
@@ -613,6 +616,21 @@ public final class AccessibilityHost {
             if(selectedWindow!=null)com.deviceagent.tools.TargetTap.point(tree,match);
             com.deviceagent.tools.ActionDeadline.check();
             Bundle out=new Bundle();out.putInt("display",display);
+            if(operation.equals("type")&&!target.isEditable()&&target.getRangeInfo()!=null){
+                AccessibilityNodeInfo.RangeInfo range=target.getRangeInfo();float wanted;
+                try{wanted=Float.parseFloat(args.getString("text","").strip());}catch(NumberFormatException e){throw new com.deviceagent.tools.InputNotSentException("invalid_argument","Type a number to set this slider.");}
+                if(Float.isNaN(wanted)||wanted<range.getMin()||wanted>range.getMax())throw new com.deviceagent.tools.InputNotSentException("invalid_argument","Type a number from "+range.getMin()+" to "+range.getMax()+".");
+                Bundle progress=new Bundle();progress.putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE,wanted);
+                dispatched=true;
+                if(!target.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_PROGRESS.getId(),progress))return textFailure("progress_rejected","The slider rejected the value. Observe it before trying again.",false,true);
+                out.putBoolean("inputDelivered",true);
+                float now=Float.NaN;
+                for(int attempt=0;attempt<5;attempt++){if(target.refresh()&&target.getRangeInfo()!=null){now=target.getRangeInfo().getCurrent();if(Math.abs(now-wanted)<0.5f)break;}Thread.sleep(50);}
+                boolean matched=Math.abs(now-wanted)<0.5f;
+                out.putBoolean("ok",matched);out.putBoolean("valueMatched",matched);out.putDouble("value",now);
+                if(!matched){out.putString("code","progress_verification_failed");out.putString("error","The value was sent, but the slider shows "+now+". Observe it before trying again.");}
+                return out;
+            }
             if(operation.equals("type")){
                 if(!target.isEditable()||!target.getActionList().contains(AccessibilityNodeInfo.AccessibilityAction.ACTION_SET_TEXT))throw new com.deviceagent.tools.InputNotSentException("text_input_unsupported","Choose a field that supports text input.");
                 String mode=args.getString("mode","replace");

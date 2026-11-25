@@ -17,7 +17,7 @@ public final class Observations {
     @SuppressWarnings("unchecked") public static List<Map<String,Object>> nodes(Map<String,Object> tree){return (List<Map<String,Object>>)tree.getOrDefault("nodes",List.of());}
     @SuppressWarnings("unchecked") public static List<Map<String,Object>> windows(Map<String,Object> tree){return (List<Map<String,Object>>)tree.getOrDefault("windows",List.of());}
     public static String str(Object x){return x==null?"":x.toString();}
-    public static boolean actionable(Map<String,Object> n){return Boolean.TRUE.equals(n.get("clickable"))||Boolean.TRUE.equals(n.get("editable"))||Boolean.TRUE.equals(n.get("scrollable"))||Boolean.TRUE.equals(n.get("longClickable"));}
+    public static boolean actionable(Map<String,Object> n){return Boolean.TRUE.equals(n.get("clickable"))||Boolean.TRUE.equals(n.get("editable"))||Boolean.TRUE.equals(n.get("scrollable"))||Boolean.TRUE.equals(n.get("longClickable"))||n.get("range") instanceof Map;}
     public static String windowKey(Map<String,Object> n){return str(n.getOrDefault("windowKey",n.get("window")));}
     public static String label(Map<String,Object> n){
         for(String key:Boolean.TRUE.equals(n.get("editable"))?List.of("accessibilityLabel","fieldLabel","hint","contentDescription","text","tooltip"):List.of("accessibilityLabel","contentDescription","text","tooltip","hint")){
@@ -32,6 +32,7 @@ public final class Observations {
     }
     public static String role(Map<String,Object> n){
         if(Boolean.TRUE.equals(n.get("editable")))return "field";
+        if(n.get("range") instanceof Map)return "slider";
         String c=str(n.get("class")).toLowerCase(Locale.ROOT),r=str(n.get("roleDescription")).toLowerCase(Locale.ROOT);
         if(c.contains("switch"))return "switch";if(c.contains("checkbox"))return "checkbox";if(c.contains("radio"))return "radio";
         if(r.matches("(?:link|visited link|link visited)")||c.contains("link"))return "link";
@@ -158,7 +159,7 @@ public final class Observations {
     public static Map<String,Object> validateTarget(Map<String,Object> current,Map<String,Object> ref){
         var n=locate(current,ref);
         String op=str(ref.get("operation"));
-        boolean supported=op.equals("type")?Boolean.TRUE.equals(n.get("editable")):op.equals("scroll")?Boolean.TRUE.equals(n.get("scrollable")):Boolean.TRUE.equals(n.get("clickable"))||Boolean.TRUE.equals(n.get("longClickable"));
+        boolean supported=op.equals("type")?Boolean.TRUE.equals(n.get("editable"))||n.get("range") instanceof Map:op.equals("scroll")?Boolean.TRUE.equals(n.get("scrollable")):Boolean.TRUE.equals(n.get("clickable"))||Boolean.TRUE.equals(n.get("longClickable"));
         if(!supported)throw new InputNotSentException("target_unsupported","Choose a control that supports this action.");
         if(Boolean.FALSE.equals(n.get("enabled")))throw new InputNotSentException("target_disabled","This control is disabled. Wait for it to become available.");
         return n;
@@ -283,6 +284,7 @@ public final class Observations {
             if(Boolean.TRUE.equals(n.get("editable"))&&!Boolean.TRUE.equals(n.get("password"))){
                 String value=Boolean.TRUE.equals(n.get("showingHintText"))?"":str(n.getOrDefault("fieldValue",n.get("text")));c.put("value",value.length()>400?value.substring(0,400):value);if(value.length()>400)c.put("valueTruncated",true);if(n.get("inputType") instanceof Number type&&(type.intValue()&15)==3)c.put("inputType","phone");
             }
+            if(n.get("range") instanceof Map<?,?> range){c.put("value",range.get("current"));c.put("min",range.get("min"));c.put("max",range.get("max"));}
             var stateNode=presentation.state()==null?n:presentation.state();
             for(String state:List.of("checked","selected","stateDescription"))if(stateNode.containsKey(state))c.put(state,stateNode.get(state));
             if(presentation.state()!=null&&!stateNode.containsKey("checked")&&!stateNode.containsKey("stateDescription"))c.put("state","unknown");
