@@ -23,7 +23,7 @@ public final class DeviceNode {
 
     private final String BOOT_ID = java.util.UUID.randomUUID().toString();
     private static final long KEEP_ALIVE_EVERY_MS = 90_000L;
-    private static final int NEXT_TIMEOUT_MS = 40_000;
+    private static final int NEXT_TIMEOUT_MS = 30_000; // the relay holds a poll at most 25 s
     private static final int HELLO_TIMEOUT_MS = 12_000;
     private static final int RESULT_TIMEOUT_MS = 15_000;
     private static final int ACK_TIMEOUT_MS = 5_000;
