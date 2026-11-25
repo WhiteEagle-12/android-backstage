@@ -111,6 +111,12 @@ export function invalidArguments(name,args,errors) {
   const issue={field:path||'arguments',message};
   if(!issues.some(i=>i.field===issue.field&&i.message===message))issues.push(issue);
  }
+ // With no target chosen, name the choices once instead of listing each one as required.
+ const top=choice(name,args);
+ if(top.groups.length&&!top.selected.length){
+  const members=new Set(top.groups.flat()),rest=issues.filter(i=>!(i.message==='is required'&&members.has(i.field)));
+  issues.length=0;issues.push({field:'arguments',message:'must include '+top.groups.map(g=>g.join(' and ')).join(', or ')},...rest);
+ }
  if(!issues.length)issues.push({field:'arguments',message:'must use one of the supported argument choices'});
  const shown=issues.slice(0,4);
  return {outcome:'failed',code:'invalid_argument',inputDelivered:false,

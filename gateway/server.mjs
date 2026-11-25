@@ -422,6 +422,8 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
     }
     const [wireTool,wireArgs]=toPhoneWire(engine,rest);
     const result=await send(wireTool,wireArgs);
+    // The phone stops a shell command after about 20 seconds and reports only "exit code -1".
+    if(engine==='android.shell'&&result.exitCode===-1&&result.stderr==='timeout')result.error='The command ran longer than about 20 seconds and was stopped. Start long commands in the background with nohup and write the output to a file, then read the file.';
     return result;
   }
 

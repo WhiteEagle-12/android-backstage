@@ -473,11 +473,17 @@ export function createConnections({directory,relayUrl,relayInternalUrl=null,rela
         const directUrl=await directUrlFor(target,config);
         routes.set(target.id,directUrl?'direct':'relay');
         // Host environment credentials must never be resolved into a user's link.
-        const result=await call({...config,...linkIoHooks(target),file:config,filePath,directUrl:null,transportRelayUrl:transportFor(config)},name,args,{
+        const send=()=>call({...config,...linkIoHooks(target),file:config,filePath,directUrl:null,transportRelayUrl:transportFor(config)},name,args,{
           authorize:()=>{if(!active(grantId))throw new ConnectionError('access_revoked','This assistant’s access was removed.');if(readGrant(grantId)?.paused)throw new ConnectionError('assistant_paused','The owner paused this assistant in Backstage. Ask them to resume it.');},
           subOwner:grantId,
           directUrl,
           onRoute:(route,why)=>{routes.set(target.id,route==='relay'&&directUrl?'relay_after_direct':route);if(route==='relay'&&directUrl){directRoutes?.failed(target.id);log(`${target.name}: ${name} fell back to the relay (${why})`);}}});
+        // A full relay queue sent nothing to the phone, so waiting and sending again is safe.
+        let result;
+        for(let wait=200,started=Date.now();;wait=Math.min(wait*2,2000)){
+          try{result=await send();break;}
+          catch(e){if(e?.code!=='relay_busy'||e?.inputDelivered!==false||Date.now()-started>30_000)throw e;await new Promise(r=>setTimeout(r,wait*(0.5+Math.random())));}
+        }
         if(target.id&&devices[target.id]?.needsReconnect)markLink(target.id,{needsReconnect:false,lastError:null});
         recordWork(grantId,target.id,name,args,result);
         return result;

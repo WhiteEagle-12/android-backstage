@@ -52,3 +52,11 @@ test('a link the phone really removed still asks for reconnect',async t=>{
   await assert.rejects(c.call('android.shell',{command:'true'},grantId),e=>e.code==='device_link_revoked');
   assert.equal(c.devices(ownerId)[0].needsReconnect,true);
 });
+
+test('a full relay queue is waited out, because nothing reached the phone',async t=>{
+  const dir=setup(t,String(Date.now()));let tries=0;
+  const c=createConnections({directory:dir,relayUrl:'https://relay.example.com',call:async()=>{if(++tries<3)throw Object.assign(new Error('device queue capacity reached'),{code:'relay_busy',inputDelivered:false});return {outcome:'succeeded'};}});
+  const grantId=c.authorize(ownerId,'client-1','Claude','all');
+  assert.equal((await c.call('android.shell',{command:'true'},grantId)).outcome,'succeeded');
+  assert.equal(tries,3);
+});
