@@ -19,8 +19,8 @@ public final class PhoneToolsHostTest {
     }
     private static String code(Runnable r){try{r.run();return "";}catch(InputNotSentException e){return e.code+":"+e.getMessage();}}
     public static void run(){
-        stableIdentity();stableIds();selectors();defaultScroll();
-        System.out.println("PASS phone tools: stable target identity, stable ids in full and failure views, tolerant selectors, default scroll container");
+        stableIdentity();stableIds();selectors();defaultScroll();displayTurn();
+        System.out.println("PASS phone tools: stable target identity, stable ids in full and failure views, tolerant selectors, default scroll container, display turn recovery");
     }
     private static void stableIdentity(){
         // The observation is taken while the activity slides in; the window then settles.
@@ -97,4 +97,22 @@ public final class PhoneToolsHostTest {
         out=new EvidenceFlow(b2).run("android.scroll",until);
         check(Boolean.TRUE.equals(out.get("found"))&&Integer.valueOf(1).equals(out.get("scrolls")),"scroll until finds the label after one scroll: "+out);
     }
+    private static void displayTurn(){try{
+        long[] now={0};List<String> log=new ArrayList<>();var turn=new DisplayTurn(()->now[0],log::add);
+        check(turn.acquire(0,1_000)&&turn.acquire(0,1_000),"the holder may take its turn again");
+        boolean[] got={false};
+        var waiter=new Thread(()->{try{got[0]=turn.acquire(0,5_000);}catch(InterruptedException e){throw new AssertionError(e);}});
+        waiter.start();waiter.join();
+        check(!got[0],"a live holder keeps the turn");
+        now[0]=1_000+DisplayTurn.STUCK_GRACE_MS+1;
+        waiter=new Thread(()->{try{got[0]=turn.acquire(0,60_000);}catch(InterruptedException e){throw new AssertionError(e);}});
+        waiter.start();waiter.join();
+        check(got[0]&&log.size()==1&&log.get(0).contains("stuck"),"a waiter takes the turn from a holder long past its deadline");
+        turn.release();turn.release();
+        check(!turn.heldByCurrentThread(),"the stuck holder's late release does not free the new holder's turn");
+        boolean[] third={true};
+        waiter=new Thread(()->{try{third[0]=turn.acquire(0,70_000);}catch(InterruptedException e){throw new AssertionError(e);}});
+        waiter.start();waiter.join();
+        check(!third[0],"the new holder still has the turn");
+    }catch(InterruptedException e){throw new AssertionError(e);}}
 }

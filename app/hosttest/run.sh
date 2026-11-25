@@ -42,6 +42,7 @@ mapfile -t SRC_FILES < <(
     echo "$SRC/com/deviceagent/tools/TaskResources.java"
     echo "$SRC/com/deviceagent/tools/ObservationCondition.java"
     echo "$SRC/com/deviceagent/tools/ActionDeadline.java"
+    echo "$SRC/com/deviceagent/tools/DisplayTurn.java"
     echo "$SRC/com/deviceagent/tools/LocationFix.java"
     echo "$SRC/com/deviceagent/tools/MediaState.java"
     echo "$SRC/com/deviceagent/tools/TaskSnapshot.java"

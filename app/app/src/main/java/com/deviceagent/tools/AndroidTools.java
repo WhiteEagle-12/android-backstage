@@ -42,8 +42,13 @@ public final class AndroidTools {
     private final Map<String,String> appLabels=new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<Integer,Long> lastUnfreezeAt=new java.util.concurrent.ConcurrentHashMap<>();
     /** Agents sharing a display take turns in arrival order; other displays and non-UI calls are not blocked. */
-    private final Map<Integer,java.util.concurrent.locks.ReentrantLock> displayLocks=new java.util.concurrent.ConcurrentHashMap<>();
-    private java.util.concurrent.locks.ReentrantLock displayLock(int display){return displayLocks.computeIfAbsent(display,d->new java.util.concurrent.locks.ReentrantLock(true));}
+    private final Map<Integer,DisplayTurn> displayLocks=new java.util.concurrent.ConcurrentHashMap<>();
+    private DisplayTurn displayLock(int display){return displayLocks.computeIfAbsent(display,d->new DisplayTurn(()->System.nanoTime()/1_000_000,com.deviceagent.daemon.DaemonLog::print));}
+    /** Take a display turn for the rest of this request. */
+    private static boolean takeTurn(DisplayTurn turn) throws InterruptedException {
+        long wait=Math.max(0,Math.min(ActionDeadline.remaining(),660000));
+        return turn.acquire(wait,System.nanoTime()/1_000_000+wait);
+    }
     private final EvidenceFlow evidence = new EvidenceFlow(new EvidenceFlow.Backend() {
         public Map<String,Object> action(String name,Map<String,Object> args) { return callRaw(name,args); }
         public Map<String,Object> tree(int display) {return tree(display,null);}
@@ -291,7 +296,7 @@ public final class AndroidTools {
     public Map<String, Object> catalog() { return ToolCatalog.catalog(); }
     public Map<String,Object> call(String name,Map<String,Object> args){return callOwned(name,args,"local");}
     public Map<String,Object> callOwned(String name,Map<String,Object> supplied,String owner){
-        long start=System.nanoTime();Map<String,Object> out;var args=new LinkedHashMap<>(supplied);
+        long start=System.nanoTime(),displayWaitMs=0;Map<String,Object> out;var args=new LinkedHashMap<>(supplied);
         // Normalize legacy tool names into the consolidated contract surface while keeping full backwards compatibility.
         switch(name){
             case "android.task_begin" -> {name="android.task";args.putIfAbsent("operation","begin");}
@@ -322,7 +327,7 @@ public final class AndroidTools {
             if(name.equals("android.install")||name.equals("android.maintenance")){var source=PrimitiveArguments.map(args.get("source"));if(source.containsKey("url"))PrimitiveArguments.url(Json.string(source,"url"));}
             try(var execution=device.executionScope()){
             if(name.equals("android.device")&&"control".equals(args.get("operation"))&&!"status".equals(args.get("action"))){int d=tasks().use(Json.string(args,"sessionId"),owner,null,false);if(d!=0)throw new InputNotSentException("foreground_required","Device changes require an authorized foreground session");args.put("display",0);}
-            java.util.concurrent.locks.ReentrantLock turn=null;
+            DisplayTurn turn=null;
             boolean needsDisplayLock=PrimitiveArguments.TOOLS.contains(name)||Set.of("android.sequence","android.confirm").contains(name)
                     ||name.equals("android.task")&&Set.of("handoff","record_start","record_stop","record_status").contains(args.get("operation"))
                     ||name.equals("android.notification")&&args.containsKey("sessionId");
@@ -334,7 +339,9 @@ public final class AndroidTools {
             // android.wait reads repeatedly; it takes the accessibility connection per read so
             // other agents' UI calls can run between its checks.
             boolean ui=(PrimitiveArguments.TOOLS.contains(name)||name.equals("android.sequence"))&&!name.equals("android.wait");
-            if(turn!=null&&!turn.tryLock(Math.max(0,Math.min(ActionDeadline.remaining(),660000)),java.util.concurrent.TimeUnit.MILLISECONDS))throw new InputNotSentException("display_busy","Another agent kept this display busy until the request expired. Try again.");
+            long waitStart=System.nanoTime();
+            if(turn!=null&&!takeTurn(turn))throw new InputNotSentException("display_busy","Another agent kept this display busy until the request expired. Try again.");
+            displayWaitMs=(System.nanoTime()-waitStart)/1_000_000;
             try(var scope=ui?device.accessibilityScope():((DeviceExecutor.AccessibilityScope)()->{})){
                 out=switch(name){
                     case "android.task" -> switch(Json.string(args,"operation")){
@@ -361,16 +368,17 @@ public final class AndroidTools {
                     case "android.events" -> eventSettings(args);
                     default -> EvidenceFlow.handles(name)?evidence.run(name,args):callRaw(name,args);
                 };
-            }finally{if(turn!=null&&turn.isHeldByCurrentThread())turn.unlock();}
+            }finally{if(turn!=null)turn.release();}
             }
         }catch(InputNotSentException e){out=Json.mapOf("ok",false,"code",e.code,"error",e.getMessage(),"inputDelivered",false);}
         catch(IllegalArgumentException e){out=Json.mapOf("ok",false,"code","invalid_argument","error",e.getMessage(),"inputDelivered",false);}
         catch(InterruptedException e){Thread.currentThread().interrupt();out=Json.mapOf("ok",false,"code","interrupted","error","The request was interrupted before it ran.","inputDelivered",false);}
         if(!Set.of("succeeded","failed","unknown").contains(Observations.str(out.get("outcome"))))out.put("outcome",Boolean.FALSE.equals(out.get("ok"))?out.containsKey("inputDelivered")&&out.get("inputDelivered")==null?"unknown":"failed":"succeeded");
-        if(Boolean.TRUE.equals(args.get("timing"))){
+        {
             Map<String,Object> timing=new LinkedHashMap<>();
             if(out.get("timing") instanceof Map<?,?> existing)existing.forEach((k,v)->timing.put(k.toString(),v));
             timing.put("deviceTotalMs",(System.nanoTime()-start)/1_000_000);
+            if(displayWaitMs>0)timing.put("displayWaitMs",displayWaitMs);
             out.put("timing",timing);
         }
         if(!"debug".equals(args.get("detail")))for(String k:List.of("command","hint","wokeDisplay","method","component","matched","expectedResultObserved","verified","elapsedMs","screenshotCaptureMs","screenshotEncodingMs"))out.remove(k);
@@ -433,9 +441,9 @@ public final class AndroidTools {
         if(!Boolean.TRUE.equals(begun.get("ok"))||(!args.containsKey("package")&&!args.containsKey("url")&&!args.containsKey("intent")))return begun;
         if(!(begun.get("display") instanceof Number d))return begun;
         int display=d.intValue();
-        java.util.concurrent.locks.ReentrantLock turn=displayLock(display);
+        DisplayTurn turn=displayLock(display);
         try{
-            if(!turn.tryLock(Math.max(0,Math.min(ActionDeadline.remaining(),660000)),java.util.concurrent.TimeUnit.MILLISECONDS))return begun;
+            if(!takeTurn(turn))return begun;
             try(var scope=device.accessibilityScope()){
                 var openArgs=new LinkedHashMap<String,Object>();
                 openArgs.put("display",display);openArgs.put("sessionId",begun.get("sessionId"));
@@ -450,7 +458,7 @@ public final class AndroidTools {
                 Map<String,Object> merged=new LinkedHashMap<>(opened);
                 for(String k:List.of("sessionId","mode","display","leaseExpiresAt","temporaryDirectory"))if(begun.containsKey(k))merged.put(k,begun.get(k));
                 return merged;
-            }finally{if(turn.isHeldByCurrentThread())turn.unlock();}
+            }finally{turn.release();}
         }catch(InterruptedException e){Thread.currentThread().interrupt();return begun;}
     }
     private Map<String,Object> recordDisplay(Map<String,Object> args){

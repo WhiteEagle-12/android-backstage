@@ -76,8 +76,50 @@ public final class EnvelopeCall {
         return false;
     }
 
+    private static final java.util.concurrent.ExecutorService WORKERS =
+            java.util.concurrent.Executors.newCachedThreadPool(r -> {
+                Thread t = new Thread(r, "backstage-call");
+                t.setDaemon(true);
+                return t;
+            });
+    /** How long past its deadline a call may run before the lane answers without it. */
+    static final long LATE_GRACE_MS = 2_000;
+
+    /**
+     * Run a tool on a worker so the poll lane answers when the deadline passes, even if the
+     * tool is stuck in a system call. The stuck worker's stack goes to the daemon log; its
+     * late result is dropped.
+     */
+    static Object runBounded(java.util.function.Supplier<Object> work, long expiry, String name, boolean readOnly) {
+        var runner = new java.util.concurrent.atomic.AtomicReference<Thread>();
+        var task = new java.util.concurrent.FutureTask<Object>(work::get);
+        WORKERS.execute(() -> { runner.set(Thread.currentThread()); try { task.run(); } finally { runner.set(null); Thread.interrupted(); } });
+        long wait = Math.max(0, expiry - System.currentTimeMillis()) + LATE_GRACE_MS;
+        try {
+            return task.get(wait, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException e) {
+            Thread stuck = runner.get();
+            StringBuilder trace = new StringBuilder("call ").append(name).append(" still running ").append(LATE_GRACE_MS).append(" ms past its deadline; answering without it");
+            if (stuck != null) for (var f : stuck.getStackTrace()) trace.append("\n  at ").append(f);
+            com.deviceagent.daemon.DaemonLog.print(trace.toString());
+            task.cancel(true);
+            return readOnly
+                    ? Json.mapOf("outcome", "failed", "code", "device_timeout", "retryable", true, "inputDelivered", false, "error", "The phone did not finish this read in time. Try again.")
+                    : Json.mapOf("outcome", "unknown", "code", "device_timeout", "retryable", true, "inputDelivered", null, "error", "The phone did not finish before the request expired. Read the current state before you retry.");
+        } catch (java.util.concurrent.ExecutionException e) {
+            if (e.getCause() instanceof RuntimeException r) throw r;
+            if (e.getCause() instanceof Error err) throw err;
+            throw new IllegalStateException(e.getCause());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            task.cancel(true);
+            throw new IllegalStateException("interrupted");
+        }
+    }
+
     public static Outcome handle(
             LinkStore store, String deviceId, Object envelopeObj, AndroidTools tools) {
+        long receivedAt = System.nanoTime();
         Envelope env;
         try {
             env = Envelope.parse(envelopeObj);
@@ -112,21 +154,23 @@ public final class EnvelopeCall {
         Map<String, Object> args = rawArgs instanceof Map ? (Map<String, Object>) rawArgs : Map.of();
         try {
             Map<String,Object> response;
-            long queuedAt=System.nanoTime();
             // Calls from different agents run concurrently. Tools order work on a
             // shared display themselves; there is no device-wide lock here.
             {
                 if (expiry <= System.currentTimeMillis()) return sealedError(store, env.from, deviceId, id, "call expired waiting for device lease");
                 store.permits.authorize(env.from, name, args);
-                long queueMs=(System.nanoTime()-queuedAt)/1_000_000;
-                java.util.function.Supplier<Object> runTool = () -> {
+                boolean readOnly = isReadOnlyCall(name, args);
+                java.util.function.Supplier<Object> runTool = () -> runBounded(() -> {
+                    long queueMs=(System.nanoTime()-receivedAt)/1_000_000;
                     try(var deadlineScope=com.deviceagent.tools.ActionDeadline.until(expiry)){
                     Map<String,Object> result=tools.callOwned(name,args,owner);
-                    if(Boolean.TRUE.equals(args.get("timing"))||Boolean.TRUE.equals(args.get("diagnostics"))){Map<String,Object> timing=new LinkedHashMap<>();if(result.get("timing") instanceof Map<?,?> m)m.forEach((k,v)->timing.put(k.toString(),v));timing.put("deviceQueueMs",queueMs);result.put("timing",timing);}
+                    Map<String,Object> timing=new LinkedHashMap<>();if(result.get("timing") instanceof Map<?,?> m)m.forEach((k,v)->timing.put(k.toString(),v));
+                    timing.put("deviceQueueMs",queueMs+(timing.get("displayWaitMs") instanceof Number w?w.longValue():0));
+                    result.put("timing",timing);
                     return result;
                     }
-                };
-                if (isReadOnlyCall(name, args)) {
+                }, expiry, name, readOnly);
+                if (readOnly) {
                     try { response = Json.mapOf("result", runTool.get()); }
                     catch (RuntimeException e) { response = Json.mapOf("error", Json.mapOf("message", e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage())); }
                 } else {

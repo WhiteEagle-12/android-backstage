@@ -57,7 +57,23 @@ public final class AccessibilityHost {
         }
     }
 
-    private final java.util.concurrent.locks.ReentrantLock lock = new java.util.concurrent.locks.ReentrantLock();
+    /** Shared by all displays. Waits are bounded so one stuck screen read cannot hang every display. */
+    private static final class UiLock extends java.util.concurrent.locks.ReentrantLock {
+        Thread holder(){return getOwner();}
+    }
+    private final UiLock lock = new UiLock();
+    private static final long UI_LOCK_MAX_WAIT_MS = 30_000;
+    private void acquire() throws InterruptedException {
+        long wait=Math.min(com.deviceagent.tools.ActionDeadline.remaining(),UI_LOCK_MAX_WAIT_MS);
+        if(lock.tryLock(wait,java.util.concurrent.TimeUnit.MILLISECONDS))return;
+        Thread holder=lock.holder();
+        if(holder!=null){
+            StringBuilder trace=new StringBuilder("UI lock busy for ").append(wait).append(" ms; held by ").append(holder.getName());
+            var frames=holder.getStackTrace();for(int i=0;i<Math.min(frames.length,16);i++)trace.append("\n  at ").append(frames[i]);
+            com.deviceagent.daemon.DaemonLog.print(trace.toString());
+        }
+        throw new com.deviceagent.tools.InputNotSentException("ui_busy","Another screen read on the phone is still running. No input was sent. Try again in a few seconds.");
+    }
     private HandlerThread thread;
     private android.os.Handler idleHandler;
     private UiAutomation pooledAutomation;
@@ -72,7 +88,8 @@ public final class AccessibilityHost {
 
     public com.deviceagent.transport.DeviceExecutor.AccessibilityScope openScope() {
         if(android.os.Build.VERSION.SDK_INT<34)return () -> {};
-        lock.lock();scopeDepth++;
+        try{acquire();}catch(InterruptedException e){Thread.currentThread().interrupt();throw new com.deviceagent.tools.InputNotSentException("interrupted","The request was interrupted before it ran.");}
+        scopeDepth++;
         return () -> {
             try {
                 if(--scopeDepth==0){
@@ -167,7 +184,7 @@ public final class AccessibilityHost {
 
     private Bundle probe() throws Exception {
         long start = System.currentTimeMillis();
-        lock.lockInterruptibly();
+        acquire();
         try {
             UiAutomation automation = connect();
             try {
@@ -206,7 +223,7 @@ public final class AccessibilityHost {
     }
 
     private Map<String, Object> treeMap(int displayId, boolean allNodes, String windowId) throws Exception {
-        lock.lockInterruptibly();
+        acquire();
         try {
             UiAutomation automation = connect();
             try {
@@ -552,7 +569,7 @@ public final class AccessibilityHost {
         try {
             int display=args.getInt("display",-1);
             if(display<0)throw new com.deviceagent.tools.InputNotSentException("invalid_arguments","A task display is required");
-            lock.lockInterruptibly();locked=true;automation=connect();
+            acquire();locked=true;automation=connect();
             String selectedWindow=args.getString("windowId");
             Map<String,Object> reference=Json.mapOf("nodeId",args.getString("nodeId"),"windowKey",args.getString("windowKey"),"identity",args.getString("identity"),"targetSignature",args.getString("targetSignature"),"operation",args.getString("operation"));
             Map<String,Object> tree=null,match=null;
