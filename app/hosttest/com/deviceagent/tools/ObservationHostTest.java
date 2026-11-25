@@ -11,7 +11,7 @@ public final class ObservationHostTest {
   var current=tree(List.of(parent,child,node(2,-1,"c","Different clock",false)));check(obs.target(id,target,2,current).get("nodeId").equals("b"),"actual labeled child target survives unrelated text");
   child.put("text","Save"); // wrapper label is part of action identity through its child
   parent.put("contentDescription","Save");rejects(()->obs.target(id,target,2,tree(List.of(parent,child))));parent.put("contentDescription","");child.put("text","Directions");
-  var changed=node(1,0,"b","Directions",true);changed.put("bounds","[1,1][101,101]");rejects(()->obs.target(id,target,2,tree(List.of(parent,changed))));
+  var changed=node(1,0,"b","Directions",true);changed.put("bounds","[1,1][101,101]");check("b".equals(obs.target(id,target,2,tree(List.of(parent,changed))).get("nodeId")),"moved control keeps its identity");
   rejects(()->obs.target(id,target,3,before));
   var delta=obs.observe(current,40,id);check(Boolean.TRUE.equals(delta.get("delta"))&&((List<?>)delta.get("controls")).isEmpty(),"delta omits stable controls");
   var appeared=Map.<String,Object>of("kind","appeared","selector",Map.of("label","Directions"),"observation",id);check(!ObservationCondition.matches(appeared,before,obs,2),"existing text does not prove appearance");

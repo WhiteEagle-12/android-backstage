@@ -554,7 +554,7 @@ public final class AccessibilityHost {
             if(display<0)throw new com.deviceagent.tools.InputNotSentException("invalid_arguments","A task display is required");
             lock.lockInterruptibly();locked=true;automation=connect();
             String selectedWindow=args.getString("windowId");
-            Map<String,Object> reference=Json.mapOf("nodeId",args.getString("nodeId"),"windowKey",args.getString("windowKey"),"targetSignature",args.getString("targetSignature"),"operation",args.getString("operation"));
+            Map<String,Object> reference=Json.mapOf("nodeId",args.getString("nodeId"),"windowKey",args.getString("windowKey"),"identity",args.getString("identity"),"targetSignature",args.getString("targetSignature"),"operation",args.getString("operation"));
             Map<String,Object> tree=null,match=null;
             AccessibilityNodeInfo target=null;
             // Fast path: reuse the live node from the just-completed readTree() inside the same
@@ -565,7 +565,7 @@ public final class AccessibilityHost {
                     && android.os.SystemClock.elapsedRealtime() - lastTreeAt <= FAST_TARGET_MS) {
                 try {
                     Map<String, Object> cachedMatch = com.deviceagent.tools.Observations.validateTarget(lastTreeMap, reference);
-                    AccessibilityNodeInfo cachedTarget = liveNodes.get(cachedMatch.get("window") + ":" + args.getString("nodeId"));
+                    AccessibilityNodeInfo cachedTarget = liveNodes.get(cachedMatch.get("window") + ":" + cachedMatch.get("nodeId"));
                     if (cachedTarget != null && cachedTarget.refresh() && cachedTarget.isEnabled() && cachedTarget.isVisibleToUser()) {
                         tree = lastTreeMap;
                         match = cachedMatch;
@@ -581,11 +581,12 @@ public final class AccessibilityHost {
                 tree = Json.mapOf("nodes", read.get("nodes"), "windows", read.get("windows"));
                 if (selectedWindow != null) tree.put("windowId", selectedWindow);
                 match = com.deviceagent.tools.Observations.validateTarget(tree, reference);
-                target = liveNodes.get(match.get("window") + ":" + args.getString("nodeId"));
+                target = liveNodes.get(match.get("window") + ":" + match.get("nodeId"));
                 if (target == null || !target.refresh() || !target.isEnabled() || !target.isVisibleToUser())
                     throw new com.deviceagent.tools.InputNotSentException("stale_target", "The control is no longer available. Observe the screen again.");
             }
             String operation=args.getString("operation","tap");
+            final String boundNode=com.deviceagent.tools.Observations.str(match.get("nodeId")),boundWindow=com.deviceagent.tools.Observations.windowKey(match);
             Rect bounds=new Rect();target.getBoundsInScreen(bounds);
             if(!str(target.getText()).equals(match.get("text"))||!str(target.getContentDescription()).equals(match.get("contentDescription"))||!rect(bounds).equals(match.get("bounds")))throw new com.deviceagent.tools.InputNotSentException("stale_target","The control changed. Observe the screen again.");
             boolean focused=false;
@@ -657,7 +658,7 @@ public final class AccessibilityHost {
                     Map<String, Object> after = readTreeMap(automation, display, true, SETTLE_ATTEMPTS, selectedWindow);
                     Map<String, Object> afterTree = Json.mapOf("nodes", after.get("nodes"), "windows", after.get("windows"));
                     if (selectedWindow != null) afterTree.put("windowId", selectedWindow);
-                    Map<String, Object> afterNode = com.deviceagent.tools.Observations.appNodes(afterTree).stream().filter(n -> args.getString("nodeId").equals(n.get("nodeId")) && args.getString("windowKey").equals(n.get("windowKey"))).findFirst().orElse(null);
+                    Map<String, Object> afterNode = com.deviceagent.tools.Observations.appNodes(afterTree).stream().filter(n -> boundNode.equals(n.get("nodeId")) && boundWindow.equals(n.get("windowKey"))).findFirst().orElse(null);
                     boolean moved = afterNode != null && !baseline.equals(scrollContent(afterTree, afterNode));
                     out.putBoolean("ok", true);
                     out.putBoolean("inputDelivered", true);
@@ -676,7 +677,7 @@ public final class AccessibilityHost {
                 Map<String, Object> after = readTreeMap(automation, display, true, SETTLE_ATTEMPTS, selectedWindow);
                 Map<String, Object> afterTree = Json.mapOf("nodes", after.get("nodes"), "windows", after.get("windows"));
                 if(selectedWindow!=null)afterTree.put("windowId",selectedWindow);
-                Map<String,Object> afterNode=com.deviceagent.tools.Observations.appNodes(afterTree).stream().filter(n->args.getString("nodeId").equals(n.get("nodeId"))&&args.getString("windowKey").equals(n.get("windowKey"))).findFirst().orElse(null);
+                Map<String,Object> afterNode=com.deviceagent.tools.Observations.appNodes(afterTree).stream().filter(n->boundNode.equals(n.get("nodeId"))&&boundWindow.equals(n.get("windowKey"))).findFirst().orElse(null);
                 out.putBoolean("ok",true);out.putBoolean("inputDelivered",accepted);out.putBoolean("endReached",end);
                 if(afterNode!=null)out.putBoolean("moved",!baseline.equals(scrollContent(afterTree,afterNode)));
                 return out;

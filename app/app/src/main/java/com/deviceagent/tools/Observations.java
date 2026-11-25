@@ -73,24 +73,23 @@ public final class Observations {
     public synchronized Map<String,Object> target(String id,String target,int display,Map<String,Object> current,String operation){
         Entry e=get(id,display);Map<String,Object> n=e.targets.get(target);
         if(n==null)throw new InputNotSentException("target_not_found","This target is not in the observation. Observe the display again.");
-        String token=targetSignature(e.tree,n);
-        var resolved=Json.mapOf("display",display,"nodeId",n.get("nodeId"),"windowKey",windowKey(n),"targetSignature",token,"operation",operation);if(e.tree.containsKey("windowId"))resolved.put("windowId",e.tree.get("windowId"));
-        validateTarget(current,resolved);
-        return resolved;
+        return refreshTarget(current,reference(e,n,display,operation));
     }
     public synchronized Map<String,Object> refreshTarget(String id,String target,int display,Map<String,Object> tree,String operation){
         Entry e=get(id,display);var n=e.targets.get(target);
         if(n==null)throw new InputNotSentException("target_not_found","Observe this display again before choosing a target.");
-        var ref=Json.mapOf("display",display,"nodeId",n.get("nodeId"),"windowKey",windowKey(n),"targetSignature",targetSignature(e.tree,n),"operation",operation);if(e.tree.containsKey("windowId"))ref.put("windowId",e.tree.get("windowId"));return refreshTarget(tree,ref);
+        return refreshTarget(tree,reference(e,n,display,operation));
     }
-    // Refresh geometry only. Identity, label, context, ancestry, window and control
-    // state must still agree. A different control never inherits an old target.
+    private static Map<String,Object> reference(Entry e,Map<String,Object> n,int display,String operation){
+        var ref=Json.mapOf("display",display,"nodeId",n.get("nodeId"),"windowKey",windowKey(n),"identity",Json.stringify(identity(e.tree,n)),"targetSignature",targetSignature(e.tree,n),"operation",operation);
+        if(e.tree.containsKey("windowId"))ref.put("windowId",e.tree.get("windowId"));
+        return ref;
+    }
+    /** Bind a reference to the control that now carries its identity. Geometry is never part of identity. */
     public static Map<String,Object> refreshTarget(Map<String,Object> tree,Map<String,Object> ref){
-        var matches=appNodes(tree).stream().filter(n->Objects.equals(n.get("nodeId"),ref.get("nodeId"))&&windowKey(n).equals(ref.get("windowKey"))).collect(java.util.stream.Collectors.toList());
-        if(matches.size()!=1)throw new InputNotSentException("stale_target","The control changed. Choose a target from the new observation.");
-        String signature=targetSignature(tree,matches.get(0));
-        if(!withoutGeometry(signature).equals(withoutGeometry(str(ref.get("targetSignature"))))){traceTarget(str(ref.get("targetSignature")),signature);throw new InputNotSentException("stale_target","The control changed. Choose a target from the new observation.");}
-        var fresh=new LinkedHashMap<>(ref);fresh.put("targetSignature",signature);validateTarget(tree,fresh);return fresh;
+        var n=validateTarget(tree,ref);
+        var fresh=new LinkedHashMap<>(ref);fresh.put("nodeId",n.get("nodeId"));fresh.put("windowKey",windowKey(n));fresh.put("targetSignature",targetSignature(tree,n));
+        return fresh;
     }
     /**
      * Refresh a scroll container between scroll_until steps: scrolling legitimately updates
@@ -109,16 +108,55 @@ public final class Observations {
         }
         var fresh=new LinkedHashMap<>(ref);fresh.put("targetSignature",targetSignature(tree,n));return fresh;
     }
-    private static Map<String,Object> withoutGeometry(String signature){
-        var parsed=Json.object(signature);
-        for(String key:List.of("control","state"))if(parsed.get(key) instanceof Map<?,?>){var node=new LinkedHashMap<>(PrimitiveArguments.map(parsed.get(key)));node.remove("bounds");parsed.put(key,node);}
-        return parsed;
+    /** Stable identity of a control: what it is and where it lives, never where it is drawn. */
+    public static Map<String,Object> identity(Map<String,Object> tree,Map<String,Object> n){return identity(tree,new ObservationLayout(tree),n,true);}
+    private static Map<String,Object> identity(Map<String,Object> tree,ObservationLayout layout,Map<String,Object> n,boolean withContext){
+        var c=layout.control(n);
+        // A scroll container often takes its name from the rows it shows, so scrolling must not change its identity.
+        String label=Boolean.TRUE.equals(n.get("scrollable"))?"":c==null?layout.label(n):c.label();
+        var state=c==null||c.state()==null?n:c.state();
+        Map<String,Object> out=Json.mapOf("label",label,"role",c==null?role(n):c.role(),"resourceId",str(n.get("resourceId")),"class",str(n.get("class")),"package",str(n.get("package")),"windowKey",windowKey(n));
+        if(state.containsKey("checked"))out.put("checked",state.get("checked"));
+        if(withContext)out.put("context",controlContext(tree,n));
+        return out;
+    }
+    private static final List<String> IDENTITY_FIELDS=List.of("label","role","resourceId","class","package","windowKey","checked");
+    private static boolean sameIdentity(Map<String,Object> want,Map<String,Object> have,boolean withContext){
+        for(String k:IDENTITY_FIELDS)if(!Objects.equals(want.get(k),have.get(k)))return false;
+        return !withContext||Objects.equals(want.get("context"),have.get("context"));
+    }
+    private static String changedFields(Map<String,Object> want,Map<String,Object> have){
+        List<String> out=new ArrayList<>();for(String k:IDENTITY_FIELDS)if(!Objects.equals(want.get(k),have.get(k)))out.add(k.equals("checked")?"state":k);
+        if(!Objects.equals(want.get("context"),have.get("context")))out.add("context");
+        return String.join(", ",out);
+    }
+    /**
+     * Find the control a reference names. The same node must keep its identity; otherwise
+     * exactly one control in the same window must match label, resource, role and context.
+     */
+    private static Map<String,Object> locate(Map<String,Object> current,Map<String,Object> ref){
+        String raw=str(ref.get("identity"));
+        if(raw.isBlank())throw new InputNotSentException("stale_target","The control changed. Choose a target from the new observation.");
+        var want=Json.object(raw);var layout=new ObservationLayout(current);
+        var same=appNodes(current).stream().filter(n->!str(n.get("nodeId")).isBlank()&&Objects.equals(n.get("nodeId"),ref.get("nodeId"))&&windowKey(n).equals(ref.get("windowKey"))).collect(java.util.stream.Collectors.toList());
+        String changed="";
+        if(same.size()==1){
+            var have=identity(current,layout,same.get(0),true);
+            if(sameIdentity(want,have,true))return same.get(0);
+            changed=changedFields(want,have);traceTarget(raw,Json.stringify(have));
+        }
+        List<Map<String,Object>> found=new ArrayList<>();
+        for(var c:layout.controls()){
+            var n=c.node();
+            if(!sameIdentity(want,identity(current,layout,n,false),false))continue;
+            if(sameIdentity(want,identity(current,layout,n,true),true))found.add(n);
+        }
+        if(found.size()==1)return found.get(0);
+        if(found.isEmpty())throw new InputNotSentException("stale_target",changed.isEmpty()?"The control is gone. Choose a target from the new observation.":"The control's "+changed+" changed. Choose a target from the new observation.",changed.isEmpty()?Map.of():Map.of("changed",changed));
+        throw new InputNotSentException("ambiguous_target","Several controls now match this target. Choose a target from the new observation.");
     }
     public static Map<String,Object> validateTarget(Map<String,Object> current,Map<String,Object> ref){
-        var matches=appNodes(current).stream().filter(n->Objects.equals(n.get("nodeId"),ref.get("nodeId"))&&windowKey(n).equals(ref.get("windowKey"))).collect(java.util.stream.Collectors.toList());
-        if(matches.size()!=1)throw new InputNotSentException(matches.isEmpty()?"stale_target":"ambiguous_target","The control is no longer unique and available. Observe this display again.");
-        var n=matches.get(0);
-        if(str(n.get("nodeId")).isBlank()||!targetSignature(current,n).equals(ref.get("targetSignature"))){traceTarget(str(ref.get("targetSignature")),targetSignature(current,n));throw new InputNotSentException("stale_target","The control or its window changed. Observe this display again.");}
+        var n=locate(current,ref);
         String op=str(ref.get("operation"));
         boolean supported=op.equals("type")?Boolean.TRUE.equals(n.get("editable")):op.equals("scroll")?Boolean.TRUE.equals(n.get("scrollable")):Boolean.TRUE.equals(n.get("clickable"))||Boolean.TRUE.equals(n.get("longClickable"));
         if(!supported)throw new InputNotSentException("target_unsupported","Choose a control that supports this action.");

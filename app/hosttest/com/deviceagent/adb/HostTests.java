@@ -22,6 +22,7 @@ public final class HostTests {
         com.deviceagent.tools.SemanticHostTest.run();
         com.deviceagent.tools.UsabilityHostTest.run();
         com.deviceagent.tools.ReliabilityHostTest.run();
+        com.deviceagent.tools.PhoneToolsHostTest.run();
         com.deviceagent.app.SetupHostTest.run();
         com.deviceagent.shell.WifiTrustHostTest.run();
         com.deviceagent.crypto.HardeningHostTest.run();
