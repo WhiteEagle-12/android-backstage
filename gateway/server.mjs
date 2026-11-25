@@ -509,5 +509,8 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   });
   listener.keepAliveTimeout=65000;listener.headersTimeout=70000;
   listener.on('error',()=>{process.exitCode=1;});
-  for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{connections.flushSync?.();r2?.close?.();listener.close(()=>process.exit(0));setTimeout(()=>process.exit(0),3000).unref();});
+  // Let running calls finish; the front proxy holds new ones until the next process listens.
+  // Calls that finish during the wait take new counters, so save again on the way out.
+  const exit=()=>{connections.flushSync?.();process.exit(0);};
+  for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{connections.flushSync?.();r2?.close?.();listener.close(exit);listener.closeIdleConnections?.();setTimeout(exit,12_000).unref();});
 }

@@ -32,14 +32,30 @@ const front = http.createServer((req,res)=>{
   // Cloudflare overwrites this header; the front listener is loopback-only.
   // Never trust an arbitrary client-supplied forwarding chain.
   headers['x-forwarded-for']=net.isIP(req.headers['cf-connecting-ip']||'')?req.headers['cf-connecting-ip']:req.socket.remoteAddress;
-  const upstream=http.request({host:work?workHost:relayUpstreamHost,port:work?workPort:relay.port,agent:work?workAgent:relayAgent,method:req.method,path:req.url,headers},reply=>{
-    // Browser-facing hardening for every response, whichever service answered.
-    const out={...reply.headers,'strict-transport-security':'max-age=31536000','x-content-type-options':'nosniff','referrer-policy':'no-referrer','x-frame-options':'DENY','permissions-policy':'camera=(), microphone=(), geolocation=(), payment=()','cross-origin-opener-policy':'same-origin','cache-control':reply.headers['cache-control']||'no-store'};
-    res.writeHead(reply.statusCode,out);reply.pipe(res);
-  });
-  upstream.setTimeout(660000,()=>upstream.destroy());
-  upstream.on('error',()=>{if(!res.headersSent){res.writeHead(502,{'content-type':'application/json'});res.end('{"error":"service_unavailable"}');}else if(!res.writableEnded){res.end();}});
-  req.on('aborted',()=>upstream.destroy());res.on('close',()=>upstream.destroy());req.pipe(upstream);
+  // A Work restart refuses connections for a few seconds. Small requests are held and sent again,
+  // because a refused connection never reached the service. Large uploads stream once.
+  const size=Number(req.headers['content-length']||0);
+  const replayable=work&&(['GET','HEAD'].includes(req.method)||req.headers['content-length']!=null&&size<=1<<20);
+  let current=null,closed=false;
+  req.on('aborted',()=>{closed=true;current?.destroy();});res.on('close',()=>{closed=true;current?.destroy();});
+  const forward=(body,started)=>{
+    const sentAt=Date.now();
+    const upstream=current=http.request({host:work?workHost:relayUpstreamHost,port:work?workPort:relay.port,agent:work?workAgent:relayAgent,method:req.method,path:req.url,headers},reply=>{
+      // Browser-facing hardening for every response, whichever service answered.
+      const out={...reply.headers,'strict-transport-security':'max-age=31536000','x-content-type-options':'nosniff','referrer-policy':'no-referrer','x-frame-options':'DENY','permissions-policy':'camera=(), microphone=(), geolocation=(), payment=()','cross-origin-opener-policy':'same-origin','cache-control':reply.headers['cache-control']||'no-store'};
+      res.writeHead(reply.statusCode,out);reply.pipe(res);
+    });
+    upstream.setTimeout(660000,()=>upstream.destroy());
+    upstream.on('error',e=>{
+      // Refused: the service is down. Reset at once on a kept-alive socket: the service closed it while idle.
+      const unsent=e.code==='ECONNREFUSED'||e.code==='ECONNRESET'&&upstream.reusedSocket&&Date.now()-sentAt<1000;
+      if(body&&unsent&&!closed&&!res.headersSent&&Date.now()-started<45_000){setTimeout(()=>{if(!closed)forward(body,started);},e.code==='ECONNREFUSED'?500:0);return;}
+      if(!res.headersSent){res.writeHead(502,{'content-type':'application/json'});res.end('{"error":"service_unavailable"}');}else if(!res.writableEnded){res.end();}
+    });
+    if(body)upstream.end(body);else req.pipe(upstream);
+  };
+  if(!replayable)return forward(null,Date.now());
+  const parts=[];req.on('data',c=>parts.push(c));req.on('end',()=>forward(Buffer.concat(parts),Date.now()));
 });
 front.keepAliveTimeout=65000;front.headersTimeout=70000;
 front.listen(publicPort,process.env.HOST || '127.0.0.1',()=>console.log('Backstage HTTPS services ready on loopback'));
