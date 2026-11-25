@@ -30,7 +30,7 @@ final class RecoveryNotifier {
 
     static void showReconnect(Context context, String reason) {
         Intent reconnect = new Intent(context, AgentService.class).setAction(AgentService.ACTION_RECONNECT);
-        show(context, "Phone access is offline", reason + " Tap to reconnect now.",
+        show(context, "Phone access is offline", reason + " Tap this notification to reconnect.",
                 PendingIntent.getForegroundService(context, ID, reconnect, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE));
     }
 

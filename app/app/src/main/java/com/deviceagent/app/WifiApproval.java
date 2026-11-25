@@ -25,9 +25,22 @@ final class WifiApproval {
     /** Null when Wireless debugging can turn on silently; otherwise why not, for the owner. */
     static String blockedReason(Context context) {
         String bssid = currentBssid(context);
-        if (bssid == null) return "Backstage reconnects automatically on an approved Wi-Fi network.";
+        // Without background location, Android hides the network's identity from a service started at boot.
+        if (bssid == null) return onWifi(context)
+                ? "Android hides which Wi-Fi this is until you open Backstage."
+                : "Backstage reconnects automatically on an approved Wi-Fi network.";
         if (trusted(context).contains(bssid)) return null;
         return "This Wi-Fi network isn’t approved for automatic reconnect yet.";
+    }
+
+    private static boolean onWifi(Context context) {
+        try {
+            var cm = context.getSystemService(android.net.ConnectivityManager.class);
+            var caps = cm == null ? null : cm.getNetworkCapabilities(cm.getActiveNetwork());
+            return caps != null && caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI);
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     @SuppressWarnings("deprecation")
