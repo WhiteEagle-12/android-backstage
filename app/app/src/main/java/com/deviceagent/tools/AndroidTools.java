@@ -1386,9 +1386,15 @@ public final class AndroidTools {
             privacyFence.requireAllowed(packageName);
         }
         int clampedLines = Math.max(1, Math.min(maxLines <= 0 ? 80 : maxLines, 2000));
-        StringBuilder cmd = new StringBuilder("logcat -d -v threadtime -t ").append(clampedLines);
-        if (packageName != null && !packageName.isBlank()) cmd.append(" | grep -- ").append(ShellCommand.quote(packageName));
-        ProcessResult result = device.exec(cmd.toString());
+        // A running app's lines carry its process ID, not its name. Search the whole buffer before
+        // keeping the last lines; an empty match is a normal answer, not a failed command.
+        String cmd = "logcat -d -v threadtime -t " + clampedLines;
+        if (packageName != null && !packageName.isBlank()) {
+            String q = ShellCommand.quote(packageName);
+            cmd = "p=$(pidof -s " + q + "); if [ -n \"$p\" ]; then logcat -d -v threadtime --pid=\"$p\" | tail -n " + clampedLines
+                + "; else logcat -d -v threadtime | grep -F -- " + q + " | tail -n " + clampedLines + "; fi";
+        }
+        ProcessResult result = device.exec(cmd);
         String[] raw = result.stdoutText().isEmpty() ? new String[0] : result.stdoutText().split("\\R");
         List<String> filtered;
         if (privacyFence.isEnforced()) {

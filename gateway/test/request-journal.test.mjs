@@ -97,3 +97,9 @@ test('expired completed receipts are dropped on the next write',async t=>{
  await journal('o','android_tap',{requestId:'old'},()=>({outcome:'succeeded'}));clock+=86400001;
  await journal('o','android_tap',{requestId:'new'},()=>({outcome:'succeeded'}));assert.equal(fs.readdirSync(directory).length,1);
 });
+
+test('a write the phone refused keeps the phone\'s reason, still marked unknown',async t=>{
+ const directory=fs.mkdtempSync(path.join(os.tmpdir(),'bs-receipts-'));t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));const journal=createRequestJournal({directory});
+ const r=await journal('a','android_install',{requestId:'self'},()=>{const e=new Error('Refusing self-update: APK signing certificate does not match the installed app.');e.code='tool_failed';throw e;});
+ assert.equal(r.outcome,'unknown');assert.match(r.error,/^The phone reported: Refusing self-update: APK signing certificate does not match the installed app\. Check/);
+});

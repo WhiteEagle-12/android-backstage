@@ -11,7 +11,7 @@ import android.os.Binder;
 import android.os.Bundle;
 import com.deviceagent.shell.LocationHost;
 import com.deviceagent.tools.Json;
-import com.deviceagent.tools.ToolCatalog;
+import com.deviceagent.tools.LocationFix;
 import java.util.Map;
 
 /** A shell-only bridge; location runs with the app's granted identity and foreground service. */
@@ -26,7 +26,7 @@ public final class LocationProvider extends ContentProvider {
   long identity=Binder.clearCallingIdentity();
   try{
    Map<String,Object> args=Json.object(argument==null?"{}":argument);
-   ToolCatalog.validate("android.location",args);
+   LocationFix.limits(args);
    Context context=getContext();AgentService service=AgentService.locationService();
    String error=LocationAccess.error(AgentConfig.load(context).accessEnabled,service!=null,
     granted(context,Manifest.permission.ACCESS_COARSE_LOCATION),granted(context,Manifest.permission.ACCESS_FINE_LOCATION));

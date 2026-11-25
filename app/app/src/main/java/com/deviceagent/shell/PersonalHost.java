@@ -109,55 +109,38 @@ public final class PersonalHost {
         return Json.mapOf("ok", true, "count", photos.size(), "photos", photos);
     }
 
+    private static final java.util.regex.Pattern CONTACT_ROW =
+            java.util.regex.Pattern.compile("^Row: \\d+ contact_id=(.*?), display_name=(.*), data1=(.*)$");
+
+    /** contact_id, display_name and value rows from content://com.android.contacts/data/{kind}, sorted by name. */
+    private static List<String[]> contactRows(String kind) {
+        android.os.Bundle r = LocalShell.run("content query --uri content://com.android.contacts/data/" + kind
+                + " --projection contact_id:display_name:data1 --sort 'display_name ASC'", null, 15000);
+        byte[] out = r.getByteArray("stdout");
+        if (r.getInt("exit") != 0) throw new IllegalStateException(r.getString("error", "content query exited " + r.getInt("exit")));
+        List<String[]> rows = new ArrayList<>();
+        for (String line : new String(out == null ? new byte[0] : out, java.nio.charset.StandardCharsets.UTF_8).split("\\R")) {
+            var m = CONTACT_ROW.matcher(line);
+            if (!m.matches() || m.group(1).equals("NULL")) continue;
+            rows.add(new String[]{m.group(1), m.group(2).equals("NULL") ? "" : m.group(2), m.group(3).equals("NULL") ? "" : m.group(3)});
+        }
+        return rows;
+    }
+
     private static Map<String, Object> searchContacts(Context shell, String query, int limit) {
         String needle = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
         Map<String, ContactEntry> byId = new LinkedHashMap<>();
         try {
-            Uri phoneUri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI;
-            String[] phoneCols = {
-                    ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
-                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                    ContactsContract.CommonDataKinds.Phone.NUMBER
-            };
-            String sel = needle.isEmpty() ? null
-                    : "LOWER(" + ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + ") LIKE ? OR "
-                    + ContactsContract.CommonDataKinds.Phone.NUMBER + " LIKE ?";
-            String[] selArgs = needle.isEmpty() ? null : new String[]{"%" + needle + "%", "%" + needle + "%"};
-            try (Cursor c = shell.getContentResolver().query(phoneUri, phoneCols, sel, selArgs,
-                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " ASC")) {
-                if (c != null) {
-                    while (c.moveToNext()) {
-                        String id = c.getString(0);
-                        String name = c.getString(1);
-                        String num = c.getString(2);
-                        if (id == null) continue;
-                        if (byId.size() >= limit && !byId.containsKey(id)) continue;
-                        ContactEntry entry = byId.computeIfAbsent(id, k -> new ContactEntry(name == null ? "" : name));
-                        if (num != null && !num.isBlank()) entry.phones.add(num.trim());
-                    }
-                }
-            }
-            Uri emailUri = ContactsContract.CommonDataKinds.Email.CONTENT_URI;
-            String[] emailCols = {
-                    ContactsContract.CommonDataKinds.Email.CONTACT_ID,
-                    ContactsContract.CommonDataKinds.Email.DISPLAY_NAME,
-                    ContactsContract.CommonDataKinds.Email.ADDRESS
-            };
-            String emailSel = needle.isEmpty() ? null
-                    : "LOWER(" + ContactsContract.CommonDataKinds.Email.DISPLAY_NAME + ") LIKE ? OR LOWER("
-                    + ContactsContract.CommonDataKinds.Email.ADDRESS + ") LIKE ?";
-            String[] emailArgs = needle.isEmpty() ? null : new String[]{"%" + needle + "%", "%" + needle + "%"};
-            try (Cursor c = shell.getContentResolver().query(emailUri, emailCols, emailSel, emailArgs, null)) {
-                if (c != null) {
-                    while (c.moveToNext()) {
-                        String id = c.getString(0);
-                        String name = c.getString(1);
-                        String addr = c.getString(2);
-                        if (id == null) continue;
-                        if (byId.size() >= limit && !byId.containsKey(id)) continue;
-                        ContactEntry entry = byId.computeIfAbsent(id, k -> new ContactEntry(name == null ? "" : name));
-                        if (addr != null && !addr.isBlank()) entry.emails.add(addr.trim());
-                    }
+            // The helper is not a registered app, so the contacts provider refuses its resolver.
+            // The content command gets a provider handle for the shell user, as location does.
+            for (String kind : new String[]{"phones", "emails"}) {
+                for (String[] row : contactRows(kind)) {
+                    String id = row[0], name = row[1], value = row[2];
+                    if (!needle.isEmpty() && !name.toLowerCase(Locale.ROOT).contains(needle)
+                            && !value.toLowerCase(Locale.ROOT).contains(needle)) continue;
+                    if (byId.size() >= limit && !byId.containsKey(id)) continue;
+                    ContactEntry entry = byId.computeIfAbsent(id, k -> new ContactEntry(name));
+                    if (!value.isBlank()) (kind.equals("phones") ? entry.phones : entry.emails).add(value.trim());
                 }
             }
         } catch (Throwable t) {
