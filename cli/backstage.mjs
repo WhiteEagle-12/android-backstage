@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import {wireArguments} from './wire-arguments.mjs';
+import {normalizeArguments} from './tool-aliases.mjs';
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Spake2, ALICE_NAME, BOB_NAME, randomCodeChars } from "./spake2.mjs";
 import {
@@ -278,7 +279,12 @@ async function encryptedCall(cfg, tool, args, options = {}) {
     return {pending:await submitCall(cfg, tool, args, options),queueMs,started};
   }, { diskLock: !cfg.inProcessLockOnly });
   const result = submitted.done ?? (submitted.direct ? await directThenRelay(cfg, tool, args, options, submitted.direct) : await finishCall(cfg, submitted.pending));
-  if(args?.timing){const timing=result?.timing||{};result.timing={...timing,hostQueueMs:Math.round(submitted.queueMs),hostRoundTripMs:Math.round(performance.now()-submitted.started),responseDeliveryMs:null,screenshotUploadMs:null};}
+  // Always report the link queue and relay round trip; the phone adds deviceTotalMs.
+  if(result&&typeof result==='object'){
+    const queueMs=Math.round(submitted.queueMs),roundTripMs=Math.round(performance.now()-submitted.started);
+    result.timing={...(result.timing&&typeof result.timing==='object'?result.timing:{}),linkQueueMs:queueMs,relayRoundTripMs:roundTripMs,
+      ...(args?.timing?{hostQueueMs:queueMs,hostRoundTripMs:roundTripMs,responseDeliveryMs:null,screenshotUploadMs:null}:{})};
+  }
   return result;
 }
 
@@ -995,6 +1001,7 @@ async function cmdMcp(cfg) {
   await runMcpStdio({
     deviceName,
     callTool: async (name, args) => {
+      args = normalizeArguments(name, args);
       if ((name === "android.file" && args?.operation === "push" || name === "android.push") && args?.local && args?.remote) {
         const uploaded = await encryptAndUpload({ ...cfg, device: deviceName }, args.local);
         return encryptedCall(cfg, "android.file", {

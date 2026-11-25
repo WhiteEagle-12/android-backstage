@@ -48,7 +48,9 @@ test('file ranges validate strictly in native and hosted contracts',()=>{
 });
 test('validation errors provide field paths and valid examples without echoing rejected values',()=>{
  const ajv=new Ajv({strict:false,allErrors:true});
- for(const tool of catalogue){const v=ajv.compile(tool.inputSchema);assert.ok(v(exampleArguments(tool.name)),tool.name+JSON.stringify(v.errors));}
+ // The gateway adds requestId to writes, so an example is valid with or without it.
+ const valid=(v,example)=>v({...example,requestId:'auto_test'})||v(example);
+ for(const tool of catalogue){const v=ajv.compile(tool.inputSchema);assert.ok(valid(v,exampleArguments(tool.name)),tool.name+JSON.stringify(v.errors));}
  for(const [name,args,field] of [
   ['android_tap',{selector:{label:'secret user value'},requestId},'sessionId'],
   ['android_gesture',{sessionId,requestId,preset:'pinch'},'centerX'],
@@ -57,10 +59,10 @@ test('validation errors provide field paths and valid examples without echoing r
   const validate=ajv.compile(catalogue.find(t=>t.name===name).inputSchema);assert.equal(validate(args),false);
   const failure=invalidArguments(name,args,validate.errors);
   assert.ok(failure.issues.some(i=>i.field===field),JSON.stringify(failure));
-  assert.equal(failure.inputDelivered,false);assert.ok(validate(failure.example));assert.ok(!JSON.stringify(failure).includes('secret user value'));
+  assert.equal(failure.inputDelivered,false);assert.ok(valid(validate,failure.example));assert.ok(!JSON.stringify(failure).includes('secret user value'));
  }
  const gesture=ajv.compile(catalogue.find(t=>t.name==='android_gesture').inputSchema);
- for(const preset of ['__proto__','constructor','unknown'])assert.ok(gesture(exampleArguments('android_gesture',{preset})));
+ for(const preset of ['__proto__','constructor','unknown'])assert.ok(valid(gesture,exampleArguments('android_gesture',{preset})));
 });
 test('consolidated tool surface preserves capabilities and removes redundant entry points',()=>{
  const names=new Set(catalogue.map(t=>t.name));assert.equal(names.size,catalogue.length);assert.equal(catalogue.length,23);assert.ok(names.has('android_artifact'));assert.ok(names.has('android_shell'));
@@ -117,7 +119,7 @@ test('selected formats produce relevant errors and matching examples',()=>{
   const error=invalidArguments('android_'+name,args,validate.errors);
   assert.ok(error.issues.some(i=>i.field===expected),JSON.stringify(error));
   assert.ok(!error.issues.some(i=>excluded.includes(i.field)),JSON.stringify(error));
-  assert.ok(validate(error.example));assert.ok(!JSON.stringify(error).includes('private'));
+  assert.ok(validate({...error.example,requestId:'auto_test'})||validate(error.example),JSON.stringify(error.example));assert.ok(!JSON.stringify(error).includes('private'));
  }
  const validate=ajv.compile(catalogue.find(t=>t.name==='android_tap').inputSchema);
  const args={sessionId,requestId,x:1,y:1,selector:{label:'x'}};validate(args);
