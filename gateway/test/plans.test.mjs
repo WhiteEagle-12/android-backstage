@@ -40,7 +40,29 @@ test('Free plan enforces 1 Android device, 1 assistant, 1 backstage screen, reco
   await owners.startSignUp('free@example.com', 'supersecret123');
   const code = /\b(\d{6})\b/.exec(sent[0].body)[1];
   const ownerId = owners.verifySignUp('free@example.com', code);
+  // New accounts begin on a 7-day Pro free trial with no credit card needed.
+  assert.equal(owners.planOf(ownerId), 'pro');
+  assert.equal(owners.trialOf(ownerId).active, true);
+  assert.equal(owners.trialOf(ownerId).daysLeft, 7);
+
+  // Reminders fire exactly once each at 3 days left, 1 day left, and day of expiration.
+  clock += 4 * 86400_000 + 60_000; // <3 days left
+  assert.equal((await owners.processTrialReminders()).sent, 1);
+  assert.equal((await owners.processTrialReminders()).sent, 0);
+  assert.match(sent[sent.length - 1].sub, /3 days left/i);
+  assert.match(sent[sent.length - 1].body, /\$4\.50\/mo/);
+
+  clock += 2 * 86400_000; // <1 day left
+  assert.equal((await owners.processTrialReminders()).sent, 1);
+  assert.match(sent[sent.length - 1].sub, /1 day left/i);
+
+  clock += 86400_000; // Trial expired -> automatically switches to Personal (free)
   assert.equal(owners.planOf(ownerId), 'free');
+  assert.equal(owners.trialOf(ownerId).active, false);
+  assert.equal(owners.trialOf(ownerId).expired, true);
+  assert.equal((await owners.processTrialReminders()).sent, 1);
+  assert.match(sent[sent.length - 1].sub, /ends today/i);
+  assert.equal((await owners.processTrialReminders()).sent, 0);
 
   let sessionSeq = 0;
   const connections = createConnections({

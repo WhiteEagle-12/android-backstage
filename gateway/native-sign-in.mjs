@@ -79,7 +79,15 @@ export function nativeSignInRoutes(app,{owners,connections,now=Date.now}) {
   });
   app.post('/work/native/login',async(req,res)=>{
     if(hitLimit(emailAttempts,'login:'+req.ip,20,600000))return res.status(429).json({message:'Too many attempts. Wait a few minutes.'});
-    try{if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');const ownerId=await owners.verifyPassword(req.body?.email,req.body?.password);res.json(await enrol(ownerId,req.body.installation,req.body?.deviceName));}
+    try{
+      if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');
+      const ownerId=await owners.verifyPassword(req.body?.email,req.body?.password);
+      if(owners.mfaEnabled?.(ownerId)){
+        if(!req.body?.mfaCode)return res.status(401).json({error:'mfa_required',mfaRequired:true,message:'Enter the 6-digit code from your authenticator app.'});
+        owners.verifyMfa(ownerId,req.body.mfaCode);
+      }
+      res.json(await enrol(ownerId,req.body.installation,req.body?.deviceName));
+    }
     catch(e){res.status(400).json({message:e.message});}
   });
   app.post('/work/native/password/reset/start',async(req,res)=>{
@@ -88,7 +96,15 @@ export function nativeSignInRoutes(app,{owners,connections,now=Date.now}) {
     catch(e){res.status(400).json({message:e.message});}
   });
   app.post('/work/native/password/reset/verify',async(req,res)=>{
-    try{if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');const ownerId=await owners.verifyPasswordReset(req.body?.email,req.body?.code,req.body?.password);res.json(await enrol(ownerId,req.body.installation,req.body?.deviceName));}
+    try{
+      if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');
+      const ownerId=await owners.verifyPasswordReset(req.body?.email,req.body?.code,req.body?.password);
+      if(owners.mfaEnabled?.(ownerId)){
+        if(!req.body?.mfaCode)return res.status(401).json({error:'mfa_required',mfaRequired:true,message:'Password updated. Enter your 6-digit authenticator code to sign in.'});
+        owners.verifyMfa(ownerId,req.body.mfaCode);
+      }
+      res.json(await enrol(ownerId,req.body.installation,req.body?.deviceName));
+    }
     catch(e){res.status(400).json({message:e.message});}
   });
   app.post('/work/native/email/start',async(req,res)=>{
@@ -97,7 +113,15 @@ export function nativeSignInRoutes(app,{owners,connections,now=Date.now}) {
     catch(e){res.status(400).json({message:e.message});}
   });
   app.post('/work/native/email/verify',async(req,res)=>{
-    try{if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');const ownerId=owners.verifyEmail(req.body?.email,req.body?.code);res.json(await enrol(ownerId,req.body.installation,req.body?.deviceName));}
+    try{
+      if(!installationOk(req.body?.installation))throw Error('Update Backstage and try again.');
+      const ownerId=owners.verifyEmail(req.body?.email,req.body?.code);
+      if(owners.mfaEnabled?.(ownerId)){
+        if(!req.body?.mfaCode)return res.status(401).json({error:'mfa_required',mfaRequired:true,message:'Enter the 6-digit code from your authenticator app.'});
+        owners.verifyMfa(ownerId,req.body.mfaCode);
+      }
+      res.json(await enrol(ownerId,req.body.installation,req.body?.deviceName));
+    }
     catch(e){res.status(400).json({message:e.message});}
   });
   app.post('/work/native/recovery',async(req,res)=>{

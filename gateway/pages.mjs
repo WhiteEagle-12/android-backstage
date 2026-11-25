@@ -82,8 +82,24 @@ pre{background:#060606;border:1px solid var(--border);border-radius:10px;padding
 code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace}
 .qr-frame{background:#fff;padding:16px;border-radius:16px;width:fit-content;margin:18px auto}
 .qr-frame svg{display:block;width:220px;max-width:100%;height:auto}
+.qr-frame.sm{padding:12px;margin:12px auto}
+.qr-frame.sm svg{width:176px}
+.pw-wrap{position:relative;display:flex;align-items:center}
+.pw-wrap input{padding-right:64px}
+.pw-toggle{position:absolute;right:8px;top:50%;transform:translateY(-46%);width:auto;margin:0;padding:4px 8px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:12.5px;font-weight:550;cursor:pointer}
+.pw-toggle:hover{background:var(--surface-2);color:var(--fg)}
+.promo-banner{padding:14px 16px;margin:14px 0 18px;border-radius:12px;background:linear-gradient(135deg,rgba(143,220,78,.11),rgba(143,220,78,.03));border:1px solid rgba(143,220,78,.32)}
+.promo-banner>strong{display:block;font-size:14.5px;color:var(--fg);margin-bottom:3px}
+.promo-banner p strong{color:var(--fg);font-weight:600}
+.promo-banner p{margin:0;font-size:13.5px;color:var(--muted)}
+.promo-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px 10px;margin-bottom:6px}
+.promo-price{font-size:24px;font-weight:700;color:var(--fg);letter-spacing:-.02em}
+.promo-price small{font-size:14px;font-weight:500;color:var(--muted)}
+.strike{text-decoration:line-through;color:var(--dim);font-size:15px;font-weight:500}
+.secret-key{display:block;padding:10px 12px;margin:10px 0;border-radius:8px;background:#060606;border:1px solid var(--border);font:600 13.5px/1.4 ui-monospace,"SF Mono",Menlo,Consolas,monospace;letter-spacing:1.4px;text-align:center;color:var(--fg);overflow-wrap:anywhere}
 .big-code{display:block;font:700 28px/1.2 ui-monospace,"SF Mono",Menlo,Consolas,monospace;letter-spacing:2.5px;text-align:center;padding:14px;margin:14px 0;background:#070707;border:1px solid var(--border);border-radius:12px;color:var(--fg)}
 #status{min-height:1.4em;font-size:14px;color:var(--fg);margin-top:12px}
+#status[data-tone=error]{color:#ffb4b4}
 #status.toast{position:fixed;top:16px;right:16px;z-index:100;margin:0;min-height:0;max-width:min(400px,calc(100vw - 32px));padding:12px 16px;border-radius:12px;background:#161b14;border:1px solid rgba(143,220,78,.35);color:var(--fg);box-shadow:0 12px 32px rgba(0,0,0,.6)}
 #status.toast[data-tone=error]{background:#1f1212;border-color:rgba(242,124,124,.45);color:#ffd6d6}
 #status.toast:empty{display:none}

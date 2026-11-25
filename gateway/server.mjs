@@ -20,6 +20,7 @@ import {jsonKeepAlive} from './json-keepalive.mjs';
 import { createAuth } from './auth.mjs';
 import {createOwners} from './owners.mjs';
 import {planLimits} from './plans.mjs';
+import {createBilling} from './billing.mjs';
 import {createMailer} from './mail.mjs';
 import {createAppReleases} from './app-releases.mjs';
 import {ownerRoutes} from './owner-routes.mjs';
@@ -132,7 +133,7 @@ const failure=(e)=>{
   return asToolResult({ok:false,code:'tool_failed',error:'The phone action did not finish. The phone may be offline, paused, or this connection may no longer have access. Do not retry a write unless its outcome is known.'},true);
 };
 
-export function createWorkApp({base,stateFile,approvalFile,connections,owners,artifacts,metadataReader,callTool,directFilesUrl=null,keepAlive,allowTestRedirect=false,zeroRetention=false,allowShell=process.env.BACKSTAGE_ALLOW_HOSTED_SHELL!=='0',enforcePlans=process.env.BACKSTAGE_ENFORCE_PLANS!=='0',internalToken=process.env.RELAY_INTERNAL_TOKEN||process.env.RELAY_ADMIN_TOKEN||null,audit=()=>{},now=Date.now}) {
+export function createWorkApp({base,stateFile,approvalFile,connections,owners,artifacts,billing=null,metadataReader,callTool,directFilesUrl=null,keepAlive,allowTestRedirect=false,zeroRetention=false,allowShell=process.env.BACKSTAGE_ALLOW_HOSTED_SHELL!=='0',enforcePlans=process.env.BACKSTAGE_ENFORCE_PLANS!=='0',internalToken=process.env.RELAY_INTERNAL_TOKEN||process.env.RELAY_ADMIN_TOKEN||null,audit=()=>{},now=Date.now}) {
   if(enforcePlans&&connections&&owners&&typeof owners.planOf==='function')connections.setPlanResolver?.(ownerId=>owners.planOf(ownerId));
   const dailyUsage=new Map();
   const ownerLimits=grantId=>{
@@ -201,11 +202,19 @@ export function createWorkApp({base,stateFile,approvalFile,connections,owners,ar
       stream.pipe(res);
     } catch(e){res.status(e.code==='unknown_artifact'?404:400).json({error:e.code||'invalid_request',message:e.message});}
   });
+  if(billing&&owners){
+    app.post('/work/billing/webhook',express.raw({type:'application/json',limit:'256kb'}),(req,res)=>{
+      try{
+        const event=billing.verifyWebhookSignature(req.body,req.headers['stripe-signature']);
+        res.json({received:true,...billing.handleWebhookEvent(event,owners)});
+      }catch(e){res.status(400).json({error:e.message});}
+    });
+  }
   app.use(express.json({limit:'128kb'})); app.use(express.urlencoded({extended:false,limit:'8kb'}));
   auth.routes(app);
   const nativeSignIn = (connections&&owners) ? nativeSignInRoutes(app,{connections,owners,now}) : null;
   const phoneApi = (connections&&owners) ? phoneRoutes(app,{connections,auth,owners,now,base,artifacts,nativeSignIn,appReleases:createAppReleases()}) : null;
-  if(owners)ownerRoutes(app,{base,connections,owners,auth,artifacts,nativeSignIn,phoneApi,now});
+  if(owners)ownerRoutes(app,{base,connections,owners,auth,artifacts,nativeSignIn,phoneApi,billing,now});
 
   // Loopback-only internal admin routes (blocked by gateway/front.mjs externally; requires x-backstage-internal-key).
   if (owners && internalToken) {
@@ -484,10 +493,13 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   });
   const artifacts = createArtifacts({directory:process.env.BACKSTAGE_ARTIFACTS_DIR||path.join(dir,'artifacts'),zeroRetention,r2});
   const base=process.env.BACKSTAGE_WORK_BASE || 'https://relay.android-backstage.com/work';
-  const owners=createOwners({stateFile:path.join(dir,'owners.json'),origin:new URL(base).origin,androidOrigins,mailer:createMailer()});
+  const owners=createOwners({stateFile:path.join(dir,'owners.json'),origin:new URL(base).origin,androidOrigins,mailer:createMailer(),vault,accountUrl:base+'/account#billing'});
+  const billing=createBilling();
   const auditEnabled = process.env.BACKSTAGE_AUDIT_LOG === '1';
-  const app = createWorkApp({connections,owners,artifacts,base,zeroRetention,directFilesUrl:process.env.BACKSTAGE_DIRECT_FILES_URL||null,stateFile:path.join(dir,'oauth.json'),approvalFile:path.join(dir,'approval.json'),
+  const app = createWorkApp({connections,owners,artifacts,billing,base,zeroRetention,directFilesUrl:process.env.BACKSTAGE_DIRECT_FILES_URL||null,stateFile:path.join(dir,'oauth.json'),approvalFile:path.join(dir,'approval.json'),
     audit:auditEnabled ? (row=>fs.appendFileSync(path.join(dir,'calls.jsonl'),JSON.stringify(row)+'\n',{mode:0o600})) : (()=>{})});
+  const reminderStart=setTimeout(()=>{owners.processTrialReminders().catch(()=>{});},30_000);reminderStart.unref();
+  const reminderTick=setInterval(()=>{owners.processTrialReminders().catch(()=>{});},15*60_000);reminderTick.unref();
   const bindHost = process.env.HOST || '127.0.0.1';
   const listener = app.listen(Number(process.env.PORT || 18424),bindHost,error=>{
     if(error){console.error('Cannot bind Work listener:',error.code);process.exitCode=1;}
