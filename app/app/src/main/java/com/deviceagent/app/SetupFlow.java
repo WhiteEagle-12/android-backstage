@@ -284,13 +284,12 @@ final class SetupFlow {
                 a::openBlockedPickerFromTour);
 
         String locState = a.locationState();
-        boolean locOn = LocationProvider.allowed(a);
         optionalCard(
                 AppCopy.ACTION_ALLOW_LOCATION,
                 locState,
-                locOn,
+                "done".equals(LocationProvider.next(a)),
                 AppCopy.TOUR_LOCATION_DESC,
-                locOn ? AppCopy.ACTION_MANAGE_LOCATION : AppCopy.ACTION_ALLOW_LOCATION,
+                a.locationAction(),
                 a::locationAccess);
 
         boolean shellOn = a.config.allowShell;

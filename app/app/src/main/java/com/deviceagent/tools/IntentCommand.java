@@ -6,11 +6,13 @@ import com.deviceagent.protocol.ShellCommand;
 /** Typed activity intents; every value remains a shell argument, never command text. */
 public final class IntentCommand {
     private IntentCommand() {}
-    public static String build(Map<String,Object> a,int display){
+    public static String build(Map<String,Object> a,int display){return build(a,display,false);}
+    /** sameTask delivers the intent to the app's existing task instead of starting another. */
+    public static String build(Map<String,Object> a,int display,boolean sameTask){
         if(display<0)throw new IllegalArgumentException("A session display is required");
         if(!Set.of("action","data","mimeType","package","activity","categories","extras").containsAll(a.keySet()))throw new IllegalArgumentException("Unknown intent field");
         PrimitiveArguments.text(a,"action",false,2048);
-        StringBuilder out=new StringBuilder("am start -W --activity-multiple-task --display ").append(display);
+        StringBuilder out=new StringBuilder(sameTask?"am start -W --display ":"am start -W --activity-multiple-task --display ").append(display);
         arg(out,"-a",a.get("action"));
         for(String k:List.of("data","mimeType","package","activity"))if(a.containsKey(k))PrimitiveArguments.text(a,k,false,10000);
         if(a.containsKey("data"))arg(out,"-d",a.get("data"));

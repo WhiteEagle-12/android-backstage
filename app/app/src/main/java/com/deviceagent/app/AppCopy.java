@@ -58,6 +58,7 @@ public final class AppCopy {
     // Live tab — Prepare & Confirm prompts
     public static final String SECTION_CONFIRMATIONS = "Needs your input";
     public static final String ACTION_APPROVE = "Approve";
+    public static final String ACTION_NOT_NOW = "Not now";
     public static final String ACTION_TAKE_OVER = "Take over";
     public static final String ACTION_TAKE_CONTROL = "Take control";
     public static final String ACTION_OPEN_SCREEN = "Open screen";
@@ -158,6 +159,8 @@ public final class AppCopy {
     public static final String LOCATION_OFF = "Off";
     public static final String ACTION_ALLOW_LOCATION = "Share location";
     public static final String ACTION_MANAGE_LOCATION = "Location access";
+    public static final String ACTION_LOCATION_ALL_THE_TIME = "Allow all the time";
+    public static final String LOCATION_WHILE_OPEN = "Only while open";
     public static final String SUB_LOCATION = "Optional. Lets agents check your location only when a task asks for it.";
 
     public static final String SECTION_CONNECTION = "Advanced";
@@ -189,7 +192,7 @@ public final class AppCopy {
     public static final String TOUR_SCREEN_OFF_DESC = "Lets agents use apps on the hidden virtual display while your phone is locked or in your pocket.\n\nWhy it’s useful: Run tasks from your laptop without keeping your screen awake.\n\nWhy it’s optional: Off by default so nothing runs unless your phone is unlocked.";
     public static final String TOUR_MOBILE_DATA_DESC = "Keeps Backstage connected over 5G or LTE when you leave Wi-Fi.\n\nWhy it’s useful: Control your phone from anywhere, not just on home or work Wi-Fi.\n\nWhy it’s optional: Leaves Android’s USB debugging on while Backstage is active (turned back off whenever you pause).";
     public static final String TOUR_BLOCKED_APPS_DESC = "Choose apps agents can never open, see, or read notifications from.\n\nWhy it’s useful: Keeps banking, password managers, and private chats off-limits on-device.\n\nWhy it’s optional: No apps are blocked until you pick them. Backstage itself is always protected.";
-    public static final String TOUR_LOCATION_DESC = "Lets agents check your current location only when a task asks for it.\n\nWhy it’s useful: Helps with nearby places, transit, and local searches.\n\nWhy it’s optional: Off until you grant Android’s location permission; never tracked in the background.";
+    public static final String TOUR_LOCATION_DESC = "Lets agents check your current location only when a task asks for it.\n\nWhy it’s useful: Helps with nearby places, transit, and local searches. With “Allow all the time”, Backstage also reconnects on your Wi-Fi after the phone restarts.\n\nWhy it’s optional: Off until you allow it. Backstage never tracks where you go.";
     public static final String TOUR_SHELL_DESC = "Lets coding agents run system terminal commands on this phone.\n\nWhy it’s useful: Needed for developer builds, diagnostics, and scripts.\n\nWhy it’s optional: Developer setting — terminal commands can bypass Blocked apps, so keep it off unless you need it.";
     public static final String STATE_ON = "On";
     public static final String STATE_OFF = "Off";
@@ -509,7 +512,7 @@ public final class AppCopy {
     public static final String PORT_SAVED = "Local connection port saved";
     public static final String LOCATION_BODY = "Optional. Lets your agents check your location when a task asks for it (like finding nearby places). Location is only checked when requested and stops as soon as the request finishes.";
     public static final String LOCATION_BACKGROUND_TITLE = "Allow location in the background";
-    public static final String LOCATION_BACKGROUND_FMT = "Open Permissions, then Location. Choose “%s” so requests work while you use other apps.";
+    public static final String LOCATION_BACKGROUND_FMT = "Choose “%s” so Backstage can reconnect on your Wi-Fi after the phone restarts.";
     public static final String ACTION_CONTINUE = "Continue";
     public static final String AUTOSTART_OPEN_FAILED = "Could not open auto-start settings";
 

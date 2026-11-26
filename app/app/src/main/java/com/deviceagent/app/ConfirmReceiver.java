@@ -62,6 +62,25 @@ public final class ConfirmReceiver extends BroadcastReceiver {
         NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "Agent approvals & handoffs", NotificationManager.IMPORTANCE_HIGH);
         nm.createNotificationChannel(ch);
 
+        if ("launch".equals(kind)) {
+            // An agent wants a single-task app that is open on the owner's screen.
+            Intent open = new Intent(ctx, AgentActivity.class);
+            open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            open.putExtra("confirmId", confirmId);
+            String text = summary == null ? "" : summary;
+            Notification.Builder b = new Notification.Builder(ctx, CHANNEL_ID)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setContentIntent(PendingIntent.getActivity(ctx, confirmId.hashCode(), open,
+                            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE))
+                    .setTimeoutAfter(30_000)
+                    .setAutoCancel(false)
+                    .addAction(actionBtn(ctx, confirmId, "approved", AppCopy.ACTION_ALLOW, 1))
+                    .addAction(actionBtn(ctx, confirmId, "cancelled", AppCopy.ACTION_NOT_NOW, 3));
+            nm.notify(confirmId.hashCode(), b.build());
+            return;
+        }
         boolean handoff = "handoff".equals(kind);
         String resolvedTitle = title == null || title.isBlank()
                 ? (handoff ? "Agent needs your help" : "Confirm action")

@@ -49,6 +49,7 @@ mapfile -t SRC_FILES < <(
     echo "$SRC/com/deviceagent/tools/PrivacyFence.java"
     echo "$SRC/com/deviceagent/tools/ActivityTimeline.java"
     echo "$SRC/com/deviceagent/tools/PendingConfirmations.java"
+    echo "$SRC/com/deviceagent/tools/LaunchApproval.java"
     echo "$SRC/com/deviceagent/tools/SharedInbox.java"
     echo "$SRC/com/deviceagent/tools/DevDiagnostics.java"
     echo "$SRC/com/deviceagent/app/BuildInfo.java"

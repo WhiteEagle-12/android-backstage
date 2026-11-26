@@ -136,7 +136,8 @@ final class LiveTab extends TabPage {
         for (Map<String, Object> c : confirmations) {
             String id = DaemonClient.str(c, "confirmId");
             String sid = DaemonClient.str(c, "sessionId");
-            String kind = "handoff".equals(DaemonClient.str(c, "kind")) ? "handoff" : "confirm";
+            String rawKind = DaemonClient.str(c, "kind");
+            String kind = "handoff".equals(rawKind) || "launch".equals(rawKind) ? rawKind : "confirm";
             String title = DaemonClient.str(c, "title");
             String summary = DaemonClient.str(c, "summary");
             String pkg = DaemonClient.str(c, "package");
@@ -165,7 +166,10 @@ final class LiveTab extends TabPage {
             k.title(card, title);
             if (!summary.isEmpty()) k.body(card, summary);
             LinearLayout row = k.buttonRow(card);
-            if ("handoff".equals(kind)) {
+            if ("launch".equals(kind)) {
+                k.rowButton(row, AppCopy.ACTION_ALLOW, UiKit.PRIMARY, () -> decide(id, "approved"));
+                k.rowButton(row, AppCopy.ACTION_NOT_NOW, UiKit.SECONDARY, () -> decide(id, "cancelled"));
+            } else if ("handoff".equals(kind)) {
                 k.rowButton(row, AppCopy.ACTION_TAKE_OVER, UiKit.PRIMARY, () -> {
                     if (display > 0 && !sid.isEmpty()) openLive(sid, display, pkg, false, id, kind, title, summary, true);
                     else decide(id, "handoff");

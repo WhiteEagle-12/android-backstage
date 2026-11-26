@@ -94,6 +94,12 @@ public final class EvidenceFlow {
             result.put("outcome",Boolean.TRUE.equals(result.get("ok"))?"succeeded":result.get("inputDelivered")==null?"unknown":"failed");
             if(name.equals("android.open")){result.put("launchAccepted",Boolean.TRUE.equals(result.get("ok")));result.put("readiness","unverified");}
             if(!Boolean.TRUE.equals(result.get("ok"))&&!Boolean.TRUE.equals(result.get("inputDelivered"))){if(phases!=null)result.put("timing",phases);return result;}
+            if(name.equals("android.open")&&(args.containsKey("url")||args.containsKey("intent"))&&Boolean.TRUE.equals(result.get("ok"))&&Observations.str(result.get("stdout")).contains("LaunchState: COLD")){
+                long tRedeliver=clock.getAsLong();
+                var recovery=redeliverIfBlank(name,args,display);
+                if(recovery!=null)result.put("recovery",recovery);
+                if(phases!=null)phases.put("coldCheckMs",clock.getAsLong()-tRedeliver);
+            }
         }
         String image=Observations.str(args.getOrDefault("image","never"));
         if(image.equals("only")){
@@ -190,17 +196,69 @@ public final class EvidenceFlow {
                 }else throw e;
             }
             for(String k:List.of("text","mode","holdMs","direction","amount"))if(args.containsKey(k))ref.put(k,args.get(k));
-            for(int attempt=0;attempt<2;attempt++){
+            // A selector names what to tap, not one node, so a list that is still moving is read again
+            // and the selector resolved again. A target id names one node: it gets one geometry refresh.
+            boolean bySelector=args.containsKey("selector");
+            int retries=refreshed?1:0,maxRetries=bySelector?3:1;
+            while(true){
                 ActionDeadline.check();Map<String,Object> result;
                 try{result=new LinkedHashMap<>(backend.action("target",ref));}
                 catch(InputNotSentException e){result=failure(e.code,e.getMessage(),false);}
-                if(!refreshed&&"stale_target".equals(result.get("code"))&&Boolean.FALSE.equals(result.get("inputDelivered"))){tree=recoverySnapshot(display,window(args));ref=Observations.refreshTarget(tree,ref);refreshed=true;continue;}
-                if(refreshed)result.put("recovery",Map.of("observationRefreshed",true,"retries",1));
+                if(retries<maxRetries&&"stale_target".equals(result.get("code"))&&Boolean.FALSE.equals(result.get("inputDelivered"))){
+                    retries++;
+                    if(bySelector){
+                        tree=settledSnapshot(display,window(args));
+                        var again=new LinkedHashMap<>(args);again.remove("target");again.remove("observation");
+                        ref=resolve(again,tree,display,operation);
+                        for(String k:List.of("text","mode","holdMs","direction","amount"))if(args.containsKey(k))ref.put(k,args.get(k));
+                    }else{tree=recoverySnapshot(display,window(args));ref=Observations.refreshTarget(tree,ref);}
+                    continue;
+                }
+                if(retries>0)result.put("recovery",Map.of("observationRefreshed",true,"retries",retries));
                 if("stale_target".equals(result.get("code")))result.putAll(observations.observe(tree,40,null));
                 return result;
             }
-            throw new IllegalStateException("Unreachable retry state");
         }catch(InputNotSentException e){var result=failure(e.code,e.getMessage(),false);e.details.forEach((k,v)->{if(!k.equals("observation"))result.put(k,v);});result.putAll(observations.observe(tree,40,null));return result;}
+    }
+    /**
+     * Some apps started cold by a VIEW intent on a private display never draw (Google Maps stays white).
+     * The same intent delivered again to that instance draws it at once. Wait up to 3 s for any content;
+     * if none, deliver the intent once more to the existing task.
+     */
+    private Map<String,Object> redeliverIfBlank(String name,Map<String,Object> args,int display){
+        if(waitForContent(display,window(args),COLD_CONTENT_WAIT_MS))return null;
+        if(ActionDeadline.remaining()==0)return null;
+        var again=new LinkedHashMap<>(args);again.put("redeliver",true);
+        Map<String,Object> out;
+        try{out=backend.action(name,again);}catch(RuntimeException e){return Json.mapOf("redelivered",false);}
+        boolean ok=Boolean.TRUE.equals(out.get("ok"));
+        // On Redmagic, Maps shows its controls 4 to 8 s after the second delivery.
+        if(ok)waitForContent(display,window(args),REDELIVERED_CONTENT_WAIT_MS);
+        return Json.mapOf("redelivered",ok);
+    }
+    /** True once the display shows any labeled node, within limitMs. */
+    private boolean waitForContent(int display,String windowId,long limitMs){
+        long start=clock.getAsLong();
+        while(true){
+            Map<String,Object> tree;
+            try{tree=snapshot(display,windowId);}catch(RuntimeException e){tree=null;}
+            if(tree!=null&&ready(tree)&&Observations.appNodes(tree).stream().anyMatch(n->!Observations.label(n).isBlank()))return true;
+            long remaining=Math.min(limitMs-(clock.getAsLong()-start),ActionDeadline.remaining());
+            if(remaining<=0)return false;
+            pause(Math.min(150,remaining));
+        }
+    }
+    static final long COLD_CONTENT_WAIT_MS=3000,REDELIVERED_CONTENT_WAIT_MS=8000;
+    /** Read until two reads match (a list stops moving), for at most 600 ms. */
+    private Map<String,Object> settledSnapshot(int display,String windowId){
+        var tree=recoverySnapshot(display,windowId);long start=clock.getAsLong();
+        while(clock.getAsLong()-start<600&&ActionDeadline.remaining()>0){
+            pause(Math.min(80,ActionDeadline.remaining()));
+            var next=recoverySnapshot(display,windowId);
+            if(Observations.fingerprint(next).equals(Observations.fingerprint(tree)))return next;
+            tree=next;
+        }
+        return tree;
     }
     private Map<String,Object> recoverySnapshot(int display,String windowId){
         try{return snapshot(display,windowId);}catch(InputNotSentException e){throw e;}catch(RuntimeException e){throw new InputNotSentException("observation_failed","No input was sent. Observe the display before retrying.");}

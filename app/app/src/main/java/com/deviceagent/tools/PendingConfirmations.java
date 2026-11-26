@@ -38,7 +38,7 @@ public final class PendingConfirmations {
             this.sessionId = sessionId;
             this.displayId = displayId;
             this.agentId = agentId;
-            this.kind = "handoff".equals(kind) ? "handoff" : "confirm";
+            this.kind = "handoff".equals(kind) || "launch".equals(kind) ? kind : "confirm";
             this.title = title;
             this.summary = summary;
             this.appPackage = appPackage;

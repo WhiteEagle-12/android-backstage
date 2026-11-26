@@ -27,7 +27,7 @@ final class WifiApproval {
         String bssid = currentBssid(context);
         // Without background location, Android hides the network's identity from a service started at boot.
         if (bssid == null) return onWifi(context)
-                ? "Android hides which Wi-Fi this is until you open Backstage."
+                ? "Android hides which Wi-Fi this is. Open Backstage, or set Location to “Allow all the time”."
                 : "Backstage reconnects automatically on an approved Wi-Fi network.";
         if (trusted(context).contains(bssid)) return null;
         return "This Wi-Fi network isn’t approved for automatic reconnect yet.";

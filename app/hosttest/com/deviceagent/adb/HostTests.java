@@ -18,6 +18,7 @@ public final class HostTests {
         com.deviceagent.tools.FileChunksHostTest.run();
         com.deviceagent.tools.InputGuardHostTest.run();
         com.deviceagent.tools.EvidenceHostTest.run();
+        com.deviceagent.tools.LaunchApprovalHostTest.run();
         com.deviceagent.tools.ObservationHostTest.run();
         com.deviceagent.tools.SemanticHostTest.run();
         com.deviceagent.tools.UsabilityHostTest.run();

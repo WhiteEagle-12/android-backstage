@@ -8,6 +8,7 @@ public final class ControlsHostTest {
     public static void run() {
         var intent=Map.<String,Object>of("action","example.OPEN","data","sample://item/1","extras",List.of(Map.of("name","text","type","string","value","café; $(touch /tmp/not-run)"),Map.of("name","count","type","integer","value","7")));
         String command=IntentCommand.build(intent,9);check(command.contains("--display 9")&&command.contains("--es text 'café; $(touch /tmp/not-run)'")&&command.contains("--ei count 7"));
+        check(IntentCommand.build(intent,9).contains("--activity-multiple-task")&&!IntentCommand.build(intent,9,true).contains("--activity-multiple-task"));
         rejects(()->IntentCommand.build(Map.of("action","x","activity",".Main"),1));
         rejects(()->IntentCommand.build(Map.of("action","x","extras",List.of(Map.of("name","n","type","integer","value","1.5"))),1));
         rejects(()->IntentCommand.build(Map.of("action","x","extras",List.of(Map.of("name","n","type","boolean","value","yes"))),1));
@@ -22,6 +23,7 @@ public final class ControlsHostTest {
         check("location_permission_required".equals(com.deviceagent.app.LocationAccess.error(true,true,false,false)));
         check("location_service_unavailable".equals(com.deviceagent.app.LocationAccess.error(true,false,true,true)));
         check("access_paused".equals(com.deviceagent.app.LocationAccess.error(false,true,true,true)));
+        check("ask".equals(com.deviceagent.app.LocationAccess.next(false,false,false))&&"background".equals(com.deviceagent.app.LocationAccess.next(true,true,false))&&"background".equals(com.deviceagent.app.LocationAccess.next(true,false,false))&&"done".equals(com.deviceagent.app.LocationAccess.next(false,true,true)));
         check(LocationFix.limits(Map.of()).get("timeoutMs").equals(20000));
         check(LocationFix.limits(Map.of("timeoutMs",0)).get("timeoutMs").equals(0));
         rejects(()->LocationFix.limits(Map.of("timeoutMs",20001)));

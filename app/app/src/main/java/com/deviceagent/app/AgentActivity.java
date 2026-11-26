@@ -488,6 +488,7 @@ public final class AgentActivity extends Activity {
 
     String locationState() {
         if (!LocationProvider.allowed(this)) return AppCopy.LOCATION_OFF;
+        if (!LocationProvider.background(this)) return AppCopy.LOCATION_WHILE_OPEN;
         return LocationProvider.granted(this, android.Manifest.permission.ACCESS_FINE_LOCATION) ? AppCopy.LOCATION_PRECISE : AppCopy.LOCATION_APPROX;
     }
 
@@ -1623,10 +1624,34 @@ public final class AgentActivity extends Activity {
             renderNow();
             return;
         }
+        if (request == 4212 && "background".equals(LocationProvider.next(this))) { renderNow(); backgroundLocationDialog(); return; }
         if (request == 4212 || request == 4213) renderNow();
     }
+    /** The label for the location button: what tapping it does next. */
+    String locationAction() {
+        switch (LocationProvider.next(this)) {
+            case "ask": return AppCopy.ACTION_ALLOW_LOCATION;
+            case "background": return AppCopy.ACTION_LOCATION_ALL_THE_TIME;
+            default: return AppCopy.ACTION_MANAGE_LOCATION;
+        }
+    }
+    /** Android 11+ sends the owner to the app's location page to choose "Allow all the time". */
+    private void backgroundLocationDialog() {
+        CharSequence option = getPackageManager().getBackgroundPermissionOptionLabel();
+        new AlertDialog.Builder(this).setTitle(AppCopy.LOCATION_BACKGROUND_TITLE)
+                .setMessage(String.format(AppCopy.LOCATION_BACKGROUND_FMT, option))
+                .setPositiveButton(AppCopy.ACTION_CONTINUE, (d, w) -> {
+                    boolean asked = getPreferences(MODE_PRIVATE).getBoolean("backgroundLocationAsked", false);
+                    if (asked && !shouldShowRequestPermissionRationale(android.Manifest.permission.ACCESS_BACKGROUND_LOCATION)) { openAppSettings(); return; }
+                    getPreferences(MODE_PRIVATE).edit().putBoolean("backgroundLocationAsked", true).apply();
+                    requestPermissions(new String[]{android.Manifest.permission.ACCESS_BACKGROUND_LOCATION}, 4213);
+                })
+                .setNegativeButton(AppCopy.CANCEL, null).show();
+    }
     void locationAccess() {
-        if (LocationProvider.allowed(this)) { openAppSettings(); return; }
+        String next = LocationProvider.next(this);
+        if ("background".equals(next)) { backgroundLocationDialog(); return; }
+        if ("done".equals(next)) { openAppSettings(); return; }
         if (getPreferences(MODE_PRIVATE).getBoolean("locationAsked", false) && !shouldShowRequestPermissionRationale(android.Manifest.permission.ACCESS_COARSE_LOCATION)) { openAppSettings(); return; }
         new AlertDialog.Builder(this).setTitle(AppCopy.ACTION_ALLOW_LOCATION)
                 .setMessage(AppCopy.LOCATION_BODY)

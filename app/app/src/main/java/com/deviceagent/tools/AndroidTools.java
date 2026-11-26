@@ -32,6 +32,7 @@ public final class AndroidTools {
     private final PrivacyFence privacyFence;
     private final ActivityTimeline timeline;
     private final PendingConfirmations confirmations = new PendingConfirmations();
+    private final LaunchApproval launchApproval = new LaunchApproval();
     private final SharedInbox inbox;
     private volatile boolean allowShell;
     private volatile boolean allowScreenOff;
@@ -356,11 +357,13 @@ public final class AndroidTools {
             long waitStart=System.nanoTime();
             if(turn!=null&&!takeTurn(turn))throw new InputNotSentException("display_busy","Another agent kept this display busy until the request expired. Try again.");
             displayWaitMs=(System.nanoTime()-waitStart)/1_000_000;
-            try(var scope=ui?device.accessibilityScope():((DeviceExecutor.AccessibilityScope)()->{})){
-                out=switch(name){
+            // Ask the owner before taking the accessibility connection: the answer can take 25 s.
+            Map<String,Object> moveRefused=name.equals("android.open")?askBeforeOpen(args):null;
+            try(var scope=ui&&moveRefused==null?device.accessibilityScope():((DeviceExecutor.AccessibilityScope)()->{})){
+                out=moveRefused!=null?moveRefused:switch(name){
                     case "android.task" -> switch(Json.string(args,"operation")){
                         case "begin" -> taskBegin(args,owner);
-                        case "finish" -> tasks().finish(args,owner);
+                        case "finish" -> {launchApproval.forget(Json.string(args,"sessionId"));yield tasks().finish(args,owner);}
                         case "share" -> tasks().share(args,owner);
                         case "list" -> tasks().list(owner);
                         case "inspect" -> tasks().inspect(Json.string(args,"sessionId"),owner);
@@ -459,13 +462,20 @@ public final class AndroidTools {
         boolean refused=false;
         try{
             if(!takeTurn(turn))return begun;
+            var openArgs=new LinkedHashMap<String,Object>();
+            openArgs.put("display",display);openArgs.put("sessionId",begun.get("sessionId"));
+            if(args.containsKey("package"))openArgs.put("package",args.get("package"));
+            if(args.containsKey("url"))openArgs.put("url",args.get("url"));
+            if(args.containsKey("intent"))openArgs.put("intent",args.get("intent"));
+            if(Boolean.TRUE.equals(args.get("timing")))openArgs.put("timing",true);
+            Map<String,Object> moveRefused=askBeforeOpen(openArgs);
+            if(moveRefused!=null){
+                var merged=new LinkedHashMap<>(moveRefused);
+                if("app_open_elsewhere".equals(merged.get("code"))&&!args.containsKey("join")){merged.put("sessionFinished",true);refused=true;}
+                else for(String k:List.of("sessionId","mode","display","leaseExpiresAt","temporaryDirectory"))if(begun.containsKey(k))merged.put(k,begun.get(k));
+                turn.release();return merged;
+            }
             try(var scope=device.accessibilityScope()){
-                var openArgs=new LinkedHashMap<String,Object>();
-                openArgs.put("display",display);openArgs.put("sessionId",begun.get("sessionId"));
-                if(args.containsKey("package"))openArgs.put("package",args.get("package"));
-                if(args.containsKey("url"))openArgs.put("url",args.get("url"));
-                if(args.containsKey("intent"))openArgs.put("intent",args.get("intent"));
-                if(Boolean.TRUE.equals(args.get("timing")))openArgs.put("timing",true);
                 Map<String,Object> opened=evidence.run("android.open",openArgs);
                 if(Boolean.TRUE.equals(opened.get("inputDelivered"))){
                     try{opened.put("activityTasks",tasksOnDisplay(display));}catch(RuntimeException ignored){}
@@ -623,23 +633,60 @@ public final class AndroidTools {
         default -> throw new IllegalArgumentException("Unknown tool: "+name);
     };}
     private Map<String,Object> installSource(Map<String,Object> source){return source.containsKey("url")?installUrl(Json.string(source,"url"),Json.string(source,"fileKey"),Json.string(source,"sha256")):install(Json.string(source,"path"));}
-    /** Refuse a launch that would move a single-task app off the main screen or out of another session. */
-    private void requireNoTaskMove(Map<String,Object> query,int display){
+    /** What a launch would start, for the single-task check. Null when the launch starts nothing new. */
+    private static Map<String,Object> taskMoveQuery(Map<String,Object> args){
+        if(args.get("intent") instanceof Map<?,?> im){var q=new LinkedHashMap<String,Object>();for(String k:List.of("action","data","package","activity"))if(im.get(k)!=null)q.put(k,im.get(k));return q;}
+        if(args.get("url") instanceof String u)return Json.mapOf("action","android.intent.action.VIEW","data",u);
+        if(args.get("package") instanceof String p&&!args.containsKey("share")&&!args.containsKey("activityTaskId"))return args.containsKey("activity")?Json.mapOf("action","android.intent.action.MAIN","package",p,"activity",args.get("activity")):Json.mapOf("package",p);
+        return null;
+    }
+    /**
+     * A launch that would move a single-task app off the owner's screen asks the owner first.
+     * A launch that would take it from another session is refused.
+     */
+    private void requireNoTaskMove(Map<String,Object> query,int display,String sessionId){
         if(display==0)return;
         Map<String,Object> reply;
         try{var q=new LinkedHashMap<>(query);q.put("display",display);reply=device.interaction("launch_conflict",q);}catch(RuntimeException e){return;}
-        if(!Boolean.TRUE.equals(reply.get("conflict")))return;
-        boolean main=Integer.valueOf(0).equals(reply.get("otherDisplay"));
-        throw new InputNotSentException("app_open_elsewhere",main
-            ?"This app runs in one window, and it is open on the phone's screen. Opening it here would move it off the screen. Close it there, or begin a foreground session."
-            :"This app runs in one window, and another session shows it. Opening it here would take it from that session. Finish that session, or join it.",
-            Map.of("package",String.valueOf(reply.get("package"))));
+        if(Boolean.TRUE.equals(reply.get("conflict"))&&reply.get("package") instanceof String p)privacyFence.requireAllowed(p);
+        launchApproval.require(reply,sessionId==null?"display:"+display:sessionId,ActionDeadline.remaining(),(pkg,waitMs)->askToMove(pkg,display,sessionId,waitMs));
+    }
+    /** The single-task check for android.open, run before the accessibility connection is taken. Null lets the open go ahead. */
+    private Map<String,Object> askBeforeOpen(Map<String,Object> args){
+        if(!(args.get("display") instanceof Number d))return null;
+        var query=taskMoveQuery(args);
+        if(query==null)return null;
+        try{requireNoTaskMove(query,d.intValue(),Json.string(args,"sessionId"));return null;}
+        catch(InputNotSentException e){
+            var out=Json.mapOf("ok",false,"outcome","failed","inputDelivered",false,"code",e.code,"error",e.getMessage());
+            e.details.forEach((k,v)->{if(!k.equals("observation"))out.put(k,v);});
+            return out;
+        }
+    }
+    /** Notification with Allow and Not now. Returns approved, cancelled or timeout. */
+    private String askToMove(String pkg,int display,String sessionId,long waitMs){
+        String label=pkg;
+        try{if(device.interaction("app_label",Map.of("package",pkg)).get("label") instanceof String l&&!l.isBlank())label=l;}catch(RuntimeException ignored){}
+        String title="An agent wants to use "+label;
+        String summary="It will leave your screen.";
+        PendingConfirmations.Item item=confirmations.create(sessionId,display,null,"launch",title,summary,pkg,"","",waitMs);
+        try{
+            device.exec("am broadcast -a com.androidbackstage.app.CONFIRM_REQUEST -p "+ShellCommand.quote(selfPackage)
+                    +" --es confirmId "+ShellCommand.quote(item.confirmId)
+                    +" --es kind launch"
+                    +" --es title "+ShellCommand.quote(title)
+                    +" --es summary "+ShellCommand.quote(summary),3000);
+        }catch(RuntimeException ignored){}
+        String decision=confirmations.awaitDecision(item.confirmId,waitMs);
+        if(!"approved".equals(decision)){
+            try{device.exec("am broadcast -a com.androidbackstage.app.CONFIRM_DECIDE -p "+ShellCommand.quote(selfPackage)+" --es confirmId "+ShellCommand.quote(item.confirmId),3000);}catch(RuntimeException ignored){}
+        }
+        return "approved".equals(decision)?"approved":"timeout".equals(decision)?"timeout":"cancelled";
     }
     private Map<String,Object> openPrimitive(Map<String,Object> args){
         int display=((Number)args.get("display")).intValue();wakeIfNeeded(display);
-        if(args.get("intent") instanceof Map<?,?> im){var q=new LinkedHashMap<String,Object>();for(String k:List.of("action","data","package","activity"))if(im.get(k)!=null)q.put(k,im.get(k));requireNoTaskMove(q,display);}
-        else if(args.get("url") instanceof String u)requireNoTaskMove(Json.mapOf("action","android.intent.action.VIEW","data",u),display);
-        else if(args.get("package") instanceof String p&&!args.containsKey("share")&&!args.containsKey("activityTaskId"))requireNoTaskMove(args.containsKey("activity")?Json.mapOf("action","android.intent.action.MAIN","package",p,"activity",args.get("activity")):Json.mapOf("package",p),display);
+        var moveQuery=taskMoveQuery(args);
+        if(moveQuery!=null&&!Boolean.TRUE.equals(args.get("redeliver")))requireNoTaskMove(moveQuery,display,Json.string(args,"sessionId"));
         if(args.containsKey("package"))privacyFence.requireAllowed(Json.string(args,"package"));
         if(args.containsKey("activityTaskId")){
             int id=((Number)args.get("activityTaskId")).intValue();
@@ -657,12 +704,12 @@ public final class AndroidTools {
         if(args.containsKey("intent")){
             var intentMap=PrimitiveArguments.map(args.get("intent"));
             requireIntentTargetAllowed(Json.string(intentMap,"action"),Json.string(intentMap,"data"),Json.string(intentMap,"package"),Json.string(intentMap,"component"));
-            var launched=device.exec(IntentCommand.build(intentMap,display));var failed=IntentCommand.launchFailure(launched.ok(),launched.stdoutText(),launched.stderrText());if(failed!=null)return failed;return resultMap(launched);
+            var launched=device.exec(IntentCommand.build(intentMap,display,Boolean.TRUE.equals(args.get("redeliver"))));var failed=IntentCommand.launchFailure(launched.ok(),launched.stdoutText(),launched.stderrText());if(failed!=null)return failed;return resultMap(launched);
         }
         if(args.containsKey("url")){
             String u=Json.string(args,"url");
             requireIntentTargetAllowed("android.intent.action.VIEW",u,null,null);
-            return intent(Json.mapOf("action","android.intent.action.VIEW","data",u,"display",display));
+            return intent(Json.mapOf("action","android.intent.action.VIEW","data",u,"display",display,"redeliver",Boolean.TRUE.equals(args.get("redeliver"))));
         }
         if(args.containsKey("settingsAction")){
             String sa=Json.string(args,"settingsAction");
@@ -1639,7 +1686,7 @@ public final class AndroidTools {
         String data = Json.string(args, "data");
         String pkg = Json.string(args, "package");
         String extra = Json.string(args, "extra");
-        StringBuilder cmd = new StringBuilder("am start -W --activity-multiple-task").append(ShellCommand.displayOption(display(args)));
+        StringBuilder cmd = new StringBuilder(Boolean.TRUE.equals(args.get("redeliver")) ? "am start -W" : "am start -W --activity-multiple-task").append(ShellCommand.displayOption(display(args)));
         if (action != null && !action.isBlank()) cmd.append(" -a ").append(ShellCommand.quote(action));
         if (data != null && !data.isBlank()) cmd.append(" -d ").append(ShellCommand.quote(data));
         if (pkg != null && !pkg.isBlank()) cmd.append(pkg.contains("/") ? " -n " : " -p ").append(ShellCommand.quote(pkg));

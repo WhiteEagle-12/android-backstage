@@ -5,7 +5,7 @@ public final class EvidenceHostTest {
  static Map<String,Object> node(int index,int parent,String id,String text,boolean click){return Json.mapOf("index",index,"parent",parent,"nodeId",id,"text",text,"contentDescription","","resourceId","p:id/"+id,"class",click?"Button":"TextView","clickable",click,"visible",true,"enabled",true,"package","p","window",1,"windowKey","window-p","bounds","[0,0][100,100]");}
  static Map<String,Object> tree(List<Map<String,Object>> ns){return Json.mapOf("ok",true,"display",2,"focusedActivity","p/.Main","nodes",ns,"windows",List.of(Json.mapOf("id",1,"key","window-p","focused",true,"title","Page","type","application")));}
  static Map<String,Object> exists(String label){return Map.of("kind","exists","selector",Map.of("label",label));}
- static final class Fake implements EvidenceFlow.Backend {
+ static class Fake implements EvidenceFlow.Backend {
   Map<String,Object> screenControl=Json.mapOf("active",false,"displayId",0);
   int writes,reads,screenFailures,screens;String last;Map<String,Object> arguments;boolean done,failRead,unknown,uncertainReceipt;int stale;boolean changeLabel;String focus="p/.Main";List<Map<String,Object>> nodes=new ArrayList<>(List.of(node(0,-1,"1","Directions",true)));
   public Map<String,Object> action(String n,Map<String,Object> a){writes++;if(stale>0){stale--;nodes.get(0).put(changeLabel?"text":"bounds",changeLabel?"Different":"[5,5][105,105]");throw new InputNotSentException("stale_target","Changed before input");}if(uncertainReceipt)return Json.mapOf("ok",false,"inputDelivered",null,"pointersReleased",true);last=n;arguments=new LinkedHashMap<>(a);if(unknown)throw new IllegalStateException("lost receipt");done=true;return Json.mapOf("ok",true,"inputDelivered",true,"display",2);}
@@ -131,12 +131,61 @@ public final class EvidenceHostTest {
   var opened=f.run("android.open",Map.of("display",2,"package","com.example.fixture","image","only"));
   check(Boolean.TRUE.equals(opened.get("ok"))&&b.writes==1&&b.screens==2&&b.reads==0,"frame readiness retries capture without relaunch or accessibility");
  }
+ /** Chrome tab switcher: closing one tab moves the next row up while the tap is on its way. */
+ static void reflowCheck(){
+  Fake b=new Fake(){
+   int calls;
+   @Override public Map<String,Object> action(String n,Map<String,Object> a){
+    if(calls++==0){writes++;nodes.remove(0);nodes.get(0).put("bounds","[0,0][100,100]");nodes.get(0).put("index",0);throw new InputNotSentException("stale_target","The control changed. Observe the screen again.");}
+    return super.action(n,a);
+   }
+  };
+  b.nodes=new ArrayList<>(List.of(node(0,-1,"1","Close Alpha tab",true),node(1,-1,"2","Close Beta tab",true)));b.nodes.get(1).put("bounds","[0,100][100,200]");
+  var out=new EvidenceFlow(b).run("android.tap",Map.of("display",2,"selector",Map.of("label","Close Beta tab")));
+  check(Boolean.TRUE.equals(out.get("ok"))&&b.writes==2&&"2".equals(b.arguments.get("nodeId"))&&out.containsKey("recovery"),"selector tap survives a list reflow: "+out);
+  b=new Fake(){
+   @Override public Map<String,Object> action(String n,Map<String,Object> a){
+    if(writes==0){writes++;nodes.clear();nodes.add(node(0,-1,"3","Something else",true));throw new InputNotSentException("stale_target","The control changed. Observe the screen again.");}
+    return super.action(n,a);
+   }
+  };
+  out=new EvidenceFlow(b).run("android.tap",Map.of("display",2,"selector",Map.of("label","Directions")));
+  check(b.writes==1&&"target_not_found".equals(out.get("code"))&&Boolean.FALSE.equals(out.get("inputDelivered")),"selector that is gone fails as not found");
+ }
+ /** Maps started cold by a VIEW intent stays white until the intent arrives again. */
+ static void coldBlankCheck(){
+  Fake b=new Fake(){
+   int opens;
+   @Override public Map<String,Object> action(String n,Map<String,Object> a){writes++;last=n;arguments=new LinkedHashMap<>(a);if(opens++>0)nodes.get(0).put("text","Coffee near you");return Json.mapOf("ok",true,"inputDelivered",true,"stdout","Status: ok\nLaunchState: COLD\n");}
+  };
+  b.nodes.get(0).put("text","");
+  var out=new EvidenceFlow(b).run("android.open",Map.of("display",2,"url","https://maps.example.com/?q=coffee"));
+  check(b.writes==2&&Boolean.TRUE.equals(b.arguments.get("redeliver"))&&out.get("recovery") instanceof Map<?,?> r&&Boolean.TRUE.equals(r.get("redelivered"))&&!((List<?>)out.get("controls")).isEmpty(),"blank cold VIEW launch gets the intent again: "+out);
+  Fake drawn=new Fake(){
+   @Override public Map<String,Object> action(String n,Map<String,Object> a){writes++;return Json.mapOf("ok",true,"inputDelivered",true,"stdout","LaunchState: COLD\n");}
+  };
+  out=new EvidenceFlow(drawn).run("android.open",Map.of("display",2,"url","https://maps.example.com/?q=coffee"));
+  check(drawn.writes==1&&!out.containsKey("recovery"),"cold launch that draws is not sent again");
+  Fake blankPackage=new Fake(){
+   @Override public Map<String,Object> action(String n,Map<String,Object> a){writes++;return Json.mapOf("ok",true,"inputDelivered",true,"stdout","LaunchState: COLD\n");}
+  };
+  blankPackage.nodes.get(0).put("text","");
+  new EvidenceFlow(blankPackage).run("android.open",Map.of("display",2,"package","com.example.fixture"));
+  check(blankPackage.writes==1,"package launch is never sent again");
+ }
  static void recoveryChecks(){
   Fake b=new Fake();EvidenceFlow f=new EvidenceFlow(b);b.stale=1;
   var out=f.run("android.tap",Map.of("display",2,"selector",Map.of("label","Directions")));
   check(Boolean.TRUE.equals(out.get("ok"))&&b.writes==2&&out.containsKey("recovery"),"one retry after proven no input and geometry refresh");
   b=new Fake();f=new EvidenceFlow(b);b.stale=2;out=f.run("android.tap",Map.of("display",2,"selector",Map.of("label","Directions")));
-  check(Boolean.FALSE.equals(out.get("inputDelivered"))&&b.writes==2&&out.containsKey("observation"),"stale retries bounded and recovery observation returned");
+  check(Boolean.TRUE.equals(out.get("ok"))&&b.writes==3&&Integer.valueOf(2).equals(((Map<?,?>)out.get("recovery")).get("retries")),"selector tap resolves again while the list keeps moving");
+  b=new Fake();f=new EvidenceFlow(b);b.stale=9;out=f.run("android.tap",Map.of("display",2,"selector",Map.of("label","Directions")));
+  check(Boolean.FALSE.equals(out.get("inputDelivered"))&&b.writes==4&&out.containsKey("observation"),"stale retries bounded and recovery observation returned");
+  b=new Fake();f=new EvidenceFlow(b);var seenId=f.run("android.observe",Map.of("display",2));var boundId=PrimitiveArguments.map(((List<?>)seenId.get("controls")).get(0)).get("id");b.stale=2;
+  out=f.run("android.tap",Map.of("display",2,"target",boundId,"observation",seenId.get("observation")));
+  check(Boolean.FALSE.equals(out.get("inputDelivered"))&&b.writes==2&&"stale_target".equals(out.get("code")),"target id gets one refresh only");
+  reflowCheck();
+  coldBlankCheck();
   b=new Fake();f=new EvidenceFlow(b);b.stale=1;b.changeLabel=true;out=f.run("android.tap",Map.of("display",2,"selector",Map.of("label","Directions")));
   check(b.writes==1&&Boolean.FALSE.equals(out.get("inputDelivered")),"changed semantic target never retried");
   b=new Fake();f=new EvidenceFlow(b);var seen=f.run("android.observe",Map.of("display",2));var id=PrimitiveArguments.map(((List<?>)seen.get("controls")).get(0)).get("id");b.nodes.get(0).put("bounds","[2,2][102,102]");

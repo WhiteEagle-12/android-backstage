@@ -26,7 +26,7 @@ final class SettingsTab extends TabPage {
             LinearLayout card = group(box);
             row(card, AppCopy.ACTION_ALLOW_SCREEN_OFF, AppCopy.SUB_ALLOW_SCREEN_OFF,
                     a.config.allowScreenOff ? AppCopy.STATE_ON : AppCopy.STATE_OFF, this::screenOffDialog, true);
-            row(card, LocationProvider.allowed(a) ? AppCopy.ACTION_MANAGE_LOCATION : AppCopy.ACTION_ALLOW_LOCATION,
+            row(card, a.locationAction(),
                     AppCopy.SUB_LOCATION, location, a::locationAccess, true);
             row(card, AppCopy.ACTION_STAY_ONLINE_OFF_WIFI, AppCopy.SUB_STAY_ONLINE_OFF_WIFI,
                     a.config.keepUsbDebugging ? AppCopy.STATE_ON : AppCopy.STATE_OFF, this::offWifiDialog, true);

@@ -17,6 +17,8 @@ import java.util.Map;
 /** A shell-only bridge; location runs with the app's granted identity and foreground service. */
 public final class LocationProvider extends ContentProvider {
  public static boolean granted(Context context,String permission){return context.checkSelfPermission(permission)==PackageManager.PERMISSION_GRANTED;}
+ public static boolean background(Context context){return granted(context,Manifest.permission.ACCESS_BACKGROUND_LOCATION);}
+ public static String next(Context context){return LocationAccess.next(granted(context,Manifest.permission.ACCESS_COARSE_LOCATION),granted(context,Manifest.permission.ACCESS_FINE_LOCATION),background(context));}
  public static boolean allowed(Context context){return LocationAccess.allowed(granted(context,Manifest.permission.ACCESS_COARSE_LOCATION),granted(context,Manifest.permission.ACCESS_FINE_LOCATION));}
  @Override public boolean onCreate(){return true;}
  @Override public synchronized Bundle call(String method,String argument,Bundle extras){
