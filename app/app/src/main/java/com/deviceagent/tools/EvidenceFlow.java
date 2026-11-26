@@ -94,7 +94,7 @@ public final class EvidenceFlow {
             result.put("outcome",Boolean.TRUE.equals(result.get("ok"))?"succeeded":result.get("inputDelivered")==null?"unknown":"failed");
             if(name.equals("android.open")){result.put("launchAccepted",Boolean.TRUE.equals(result.get("ok")));result.put("readiness","unverified");}
             if(!Boolean.TRUE.equals(result.get("ok"))&&!Boolean.TRUE.equals(result.get("inputDelivered"))){if(phases!=null)result.put("timing",phases);return result;}
-            if(name.equals("android.open")&&(args.containsKey("url")||args.containsKey("intent"))&&Boolean.TRUE.equals(result.get("ok"))&&Observations.str(result.get("stdout")).contains("LaunchState: COLD")){
+            if(name.equals("android.open")&&viewLaunch(args)&&Boolean.TRUE.equals(result.get("ok"))&&Observations.str(result.get("stdout")).contains("LaunchState: COLD")){
                 long tRedeliver=clock.getAsLong();
                 var recovery=redeliverIfBlank(name,args,display);
                 if(recovery!=null)result.put("recovery",recovery);
@@ -225,6 +225,11 @@ public final class EvidenceFlow {
      * The same intent delivered again to that instance draws it at once. Wait up to 3 s for any content;
      * if none, deliver the intent once more to the existing task.
      */
+    /** Only a VIEW launch is safe to deliver twice; another action (send, call, delete) could run again. */
+    static boolean viewLaunch(Map<String,Object> args){
+        if(args.containsKey("url"))return true;
+        return args.get("intent") instanceof Map<?,?> im&&"android.intent.action.VIEW".equals(im.get("action"));
+    }
     private Map<String,Object> redeliverIfBlank(String name,Map<String,Object> args,int display){
         if(waitForContent(display,window(args),COLD_CONTENT_WAIT_MS))return null;
         if(ActionDeadline.remaining()==0)return null;

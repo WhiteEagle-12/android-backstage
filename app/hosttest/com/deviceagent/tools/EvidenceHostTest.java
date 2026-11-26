@@ -172,6 +172,12 @@ public final class EvidenceHostTest {
   blankPackage.nodes.get(0).put("text","");
   new EvidenceFlow(blankPackage).run("android.open",Map.of("display",2,"package","com.example.fixture"));
   check(blankPackage.writes==1,"package launch is never sent again");
+  Fake blankSend=new Fake(){
+   @Override public Map<String,Object> action(String n,Map<String,Object> a){writes++;return Json.mapOf("ok",true,"inputDelivered",true,"stdout","LaunchState: COLD\n");}
+  };
+  blankSend.nodes.get(0).put("text","");
+  new EvidenceFlow(blankSend).run("android.open",Map.of("display",2,"intent",Map.of("action","android.intent.action.SENDTO","data","smsto:5550100")));
+  check(blankSend.writes==1,"an intent that is not VIEW is never sent again");
  }
  static void recoveryChecks(){
   Fake b=new Fake();EvidenceFlow f=new EvidenceFlow(b);b.stale=1;
