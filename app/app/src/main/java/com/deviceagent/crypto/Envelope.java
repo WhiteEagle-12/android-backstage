@@ -78,11 +78,21 @@ public final class Envelope {
     public static byte[] open(byte[] key, Envelope env) {
         if (env == null) throw new SecurityException("missing envelope");
         if (env.v == 2) {
+            if (env.from == null || env.from.isEmpty() || env.n == null || env.ct == null) {
+                throw new SecurityException("malformed envelope");
+            }
             if (env.r == null || !env.r.matches("[A-Za-z0-9_-]{16}")) throw new SecurityException("bad nonce");
-            parseN(env.n);
-            return aesGcm(Cipher.DECRYPT_MODE, v2Key(key), LinkPairing.unb64url(env.r),
+            byte[] nonce, ctAndTag;
+            try {
+                parseN(env.n);
+                nonce = LinkPairing.unb64url(env.r);
+                ctAndTag = LinkPairing.unb64url(env.ct);
+            } catch (RuntimeException e) {
+                throw new SecurityException("malformed envelope");
+            }
+            return aesGcm(Cipher.DECRYPT_MODE, v2Key(key), nonce,
                     ("2:" + env.from + ":" + env.n + ":" + env.r).getBytes(StandardCharsets.UTF_8),
-                    LinkPairing.unb64url(env.ct));
+                    ctAndTag);
         }
         if (env.v != VERSION) throw new SecurityException("unsupported envelope version");
         if (env.from == null || env.from.isEmpty() || env.n == null || env.ct == null) {

@@ -1752,15 +1752,19 @@ public final class AndroidTools {
         } catch (java.io.IOException e) {
             device.exec("mkdir -p " + ShellCommand.quote(destPath.getParent() == null ? Starter.DIR : destPath.getParent().toString()));
         }
+        Path stageDir = destPath.getParent() != null ? destPath.getParent() : java.nio.file.Paths.get(Starter.DIR);
+        Path tmpPath = stageDir.resolve(".backstage-tmp-" + Long.toHexString(System.nanoTime()));
         if (fileKey == null || fileKey.isBlank()) {
             try {
-                downloadToFile(url, destPath, requireHttps);
+                downloadToFile(url, tmpPath, requireHttps);
                 if (sha256 != null && !sha256.isBlank()) {
-                    com.deviceagent.crypto.FileCipher.verifySha256(destPath, sha256);
+                    com.deviceagent.crypto.FileCipher.verifySha256(tmpPath, sha256);
                 }
+                Files.move(tmpPath, destPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             } catch (java.io.IOException | SecurityException e) {
-                try { Files.deleteIfExists(destPath); } catch (java.io.IOException ignored) {}
                 throw new IllegalStateException("Download failed: " + e.getMessage(), e);
+            } finally {
+                try { Files.deleteIfExists(tmpPath); } catch (java.io.IOException ignored) {}
             }
             return;
         }
@@ -1781,12 +1785,13 @@ public final class AndroidTools {
         Path encPath = encDir.resolve("dl-" + Long.toHexString(System.nanoTime()) + ".bsf1");
         try {
             downloadToFile(url, encPath, requireHttps);
-            com.deviceagent.crypto.FileCipher.decryptFile(encPath, destPath, key);
-            com.deviceagent.crypto.FileCipher.verifySha256(destPath, sha256);
+            com.deviceagent.crypto.FileCipher.decryptFile(encPath, tmpPath, key);
+            com.deviceagent.crypto.FileCipher.verifySha256(tmpPath, sha256);
+            Files.move(tmpPath, destPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         } catch (java.io.IOException | SecurityException e) {
-            try { Files.deleteIfExists(destPath); } catch (java.io.IOException ignored) {}
             throw new IllegalStateException("file decrypt failed: " + e.getMessage(), e);
         } finally {
+            try { Files.deleteIfExists(tmpPath); } catch (java.io.IOException ignored) {}
             try { Files.deleteIfExists(encPath); } catch (java.io.IOException ignored) {}
         }
     }

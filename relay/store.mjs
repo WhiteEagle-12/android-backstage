@@ -162,11 +162,11 @@ export function createStore(dataDir, { log = console, flushMs = 150 } = {}) {
     let changed = false;
     for (const [id, session] of Object.entries(state.sessions)) {
       if (!session?.expiresAt || Date.parse(session.expiresAt) <= now) {
-        if (session.connectionId && !session.agentConfirm && session.deviceId && !session.existingDevice) {
+        if (!session.agentConfirm && session.deviceId && !session.existingDevice) {
           const dev = state.devices[session.deviceId];
           if (dev?.tokenHash) devicesByHash.delete(dev.tokenHash);
           delete state.devices[session.deviceId];
-          if (!Object.values(state.devices).some(d => d.accountId === session.accountId)) {
+          if (session.connectionId && !Object.values(state.devices).some(d => d.accountId === session.accountId)) {
             const acct = state.accounts[session.accountId];
             if (acct?.keyHash) accountsByHash.delete(acct.keyHash);
             delete state.accounts[session.accountId];
@@ -306,6 +306,7 @@ export function createStore(dataDir, { log = console, flushMs = 150 } = {}) {
   }
 
   function devicesForAccount(accountId) {
+    sweepSessions();
     return Object.values(state.devices).filter((d) => d.accountId === accountId);
   }
 
@@ -452,6 +453,7 @@ export function createStore(dataDir, { log = console, flushMs = 150 } = {}) {
 
   function deviceByToken(token) {
     if (!token || !String(token).startsWith("bsd_")) return null;
+    sweepSessions();
     const hashed = hashToken(token);
     const id = devicesByHash.get(hashed);
     const device = id ? state.devices[id] : null;

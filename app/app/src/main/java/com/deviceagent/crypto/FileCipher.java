@@ -138,6 +138,9 @@ public final class FileCipher {
             remaining -= pt.length;
             index++;
         }
+        if (in.read() != -1) {
+            throw new SecurityException("trailing data in BSF1 blob");
+        }
     }
 
     public static void verifySha256(Path plaintext, String expectedHex) throws IOException {

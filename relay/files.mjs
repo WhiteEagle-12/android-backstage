@@ -197,14 +197,14 @@ export function createFiles({
     }
   }
 
-  function publishLocal(localPath, { owner = null, ttl, singleUse } = {}) {
+  function publishLocal(localPath, { owner = null, name: customName = null, ttl, singleUse } = {}) {
     if (!isLocalFile(localPath)) throw new Error(`not a readable local file: ${localPath}`);
     sweep();
     const bytes = fs.statSync(localPath).size;
     if(bytes>maxBytes)throw Object.assign(new Error("file too large"),{status:413});
     capacity(bytes, owner);
     const id = newId();
-    const name = sanitizeName(localPath);
+    const name = sanitizeName(customName || localPath);
     const dest = dataPath(id);
     fs.copyFileSync(localPath, dest);
     fs.chmodSync(dest,0o600);

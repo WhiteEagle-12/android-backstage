@@ -81,6 +81,26 @@ public final class EnvelopeHostTest {
         }
         check(unknownFailed, "unknown agent should fail");
 
+        Envelope badV2N = new Envelope(2, from, "not-a-number", sealed.ct);
+        badV2N.r = "AAAAAAAAAAAAAAAA";
+        boolean badV2NRejected = false;
+        try {
+            store.openCall(badV2N);
+        } catch (LinkStore.Unauthorized e) {
+            badV2NRejected = true;
+        }
+        check(badV2NRejected, "malformed v2 n should fail with Unauthorized");
+
+        Envelope badV2Ct = new Envelope(2, from, "1", "!!!invalid!!!");
+        badV2Ct.r = "AAAAAAAAAAAAAAAA";
+        boolean badV2CtRejected = false;
+        try {
+            store.openCall(badV2Ct);
+        } catch (LinkStore.Unauthorized e) {
+            badV2CtRejected = true;
+        }
+        check(badV2CtRejected, "malformed v2 ct should fail with Unauthorized");
+
         out.println("callKey=" + Bytes.toHex(callKey));
         out.println("resultKey=" + Bytes.toHex(resultKey));
         out.println("envelope=" + sealed.toJson());

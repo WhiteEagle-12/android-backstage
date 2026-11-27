@@ -36,7 +36,7 @@ export function createUploads(dataDir, {uploadsDir=null, maxBytes=512*1024*1024,
   function get(id,owner){if(!/^[a-f0-9]{32}$/.test(id))throw fail('unknown upload',404); let u;try{u=JSON.parse(fs.readFileSync(meta(id),'utf8'));}catch(e){if(e.code==='ENOENT')throw fail('unknown upload',404);throw e;}if(u.owner!==owner||u.expiresAt<Date.now())throw fail('unknown upload',404);return u;}
   function begin(owner,name,size){
     sweep();if(!Number.isSafeInteger(size)||size<=0||size>maxBytes)throw fail('invalid upload size',413);
-    const current=list();
+    const current=list().filter(u=>!u.file);
     const own=current.filter(u=>u.owner===owner);
     const ownBytes=own.reduce((n,u)=>n+u.size,0);
     if(current.length>=128||current.reduce((n,u)=>n+u.size,0)+size>quotaBytes||own.length>=8||ownBytes+size>maxAccountBytes)throw fail('upload quota exceeded',429);
@@ -65,7 +65,7 @@ export function createUploads(dataDir, {uploadsDir=null, maxBytes=512*1024*1024,
       shredSync(blob(id),shred);
       return u.file;
     }
-    const file=files.publishLocal(blob(id),{owner,ttl:ttlMs,singleUse:false});
+    const file=files.publishLocal(blob(id),{owner,name:u.name,ttl:ttlMs,singleUse:false});
     shredSync(blob(id),shred);
     u.file={id:file.id,expiresAt:file.expiresAt};writePrivateJson(meta(id),u);return u.file;
   }

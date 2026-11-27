@@ -119,3 +119,36 @@ test('an undelivered job is queued again for the next poll',async()=>{
   assert.equal((await q.waitForJob('d',1)).id,'lost');
  }finally{q.close();}
 });
+test('completed uploads do not exhaust the 8-upload account quota and keep original filename',async()=>{
+ await withRelay(async({url,apiKey})=>{
+  let lastUrl=null;
+  for(let i=0;i<9;i++){
+   const u=await httpJson(url+'/v1/uploads',{method:'POST',headers:apiHeaders(apiKey),body:{name:`release-${i}.apk`,size:4}});
+   assert.equal(u.status,201,`upload ${i} should succeed`);
+   const put=await httpJson(url+'/v1/uploads/'+u.body.id,{method:'PUT',headers:apiHeaders(apiKey,{'x-upload-offset':'0'}),body:'test'});
+   assert.equal(put.status,200);
+   const done=await httpJson(url+'/v1/uploads/'+u.body.id+'/complete',{method:'POST',headers:apiHeaders(apiKey),body:{}});
+   assert.equal(done.status,200);
+   lastUrl=done.body.url;
+  }
+  const res=await fetch(lastUrl);
+  assert.equal(res.status,200);
+  assert.match(res.headers.get('content-disposition')||'',/release-8\.apk/);
+  assert.equal(await res.text(),'test');
+ });
+});
+test('expired unconfirmed standard pairing session deletes orphaned device without deleting account',async()=>{
+ await withRelay(async({relay,url,apiKey})=>{
+  const created=await httpJson(url+'/v1/pair/session',{method:'POST',headers:apiHeaders(apiKey),body:{name:'orphan'}});
+  assert.equal(created.status,200);
+  const base=url+'/v1/pair/session/'+created.body.sessionId;
+  await httpJson(base+'/agent',{method:'PUT',headers:apiHeaders(apiKey),body:{agentId:'agt_0123456789abcdef',msg:'YWxpY2Vtc2c'}});
+  const claim=await httpJson(base+'/device',{method:'POST',body:{msg:'Ym9ibXNn'}});
+  assert.equal(claim.status,200);
+  assert.equal(relay.store.devicesForAccount('default').length,1);
+  relay.store.updateSession(created.body.sessionId,{expiresAt:new Date(Date.now()-1000).toISOString()});
+  assert.equal((await httpJson(url+'/v1/device/hello',{method:'POST',headers:deviceHeaders(claim.body.deviceToken),body:{}})).status,401);
+  assert.equal(relay.store.devicesForAccount('default').length,0);
+  assert.equal((await httpJson(url+'/v1/me',{headers:apiHeaders(apiKey)})).status,200);
+ });
+});

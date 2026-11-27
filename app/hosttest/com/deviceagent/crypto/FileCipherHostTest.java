@@ -41,6 +41,16 @@ public final class FileCipherHostTest {
         byte[] helloBlob = FileCipher.encrypt(hello, fileKey);
         byte[] helloBack = FileCipher.decrypt(helloBlob, fileKey);
         check(Arrays.equals(hello, helloBack), "hello round trip");
+
+        byte[] zeroLenHeader = Arrays.copyOf(helloBlob, helloBlob.length);
+        Arrays.fill(zeroLenHeader, 8, 16, (byte) 0);
+        boolean trailingRejected = false;
+        try {
+            FileCipher.decrypt(zeroLenHeader, fileKey);
+        } catch (SecurityException e) {
+            trailingRejected = true;
+        }
+        check(trailingRejected, "forged plaintextLen=0 with trailing ciphertext should fail");
         String blobHex = Bytes.toHex(helloBlob);
         out.println("fileKey=" + Bytes.toHex(fileKey));
         out.println("helloBlobHex=" + blobHex);
